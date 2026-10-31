@@ -1667,6 +1667,11 @@ class Api(object):
 
     def load_locale(self, indices, target):
         import locale_pack
+        # 与 load_mod / load_resource 保持一致：机翻在跑的时候不能换表格。
+        # 这条路径直接替换 self.rows，正在跑的 _run_translate 会按旧索引读到
+        # 新表，轻则 IndexError，重则把上一批译文写到别的行上。
+        if self._busy:
+            return {"ok": False, "error": "busy"}
         root = self.root or ""
         files = locale_pack.detect(root)
         picked = [files[int(i)] for i in indices if 0 <= int(i) < len(files)]
@@ -1733,17 +1738,21 @@ class Api(object):
         return {"ok": True, "total": len(targets)}
 
     def _trans_report(self, targets, reasons=None, stopped=False, memory=0,
-                      official=0, dedup=0):
+                      official=0, dedup=0, rows=None):
         """机翻结束后统一报一次账：翻了多少、还剩多少、为什么剩、去重省了多少。
 
         「还剩」不只看异常：模型偶尔会返回空串，那种也算没翻出来。
         前端据此弹最上层的提示窗，给「继续 / 确认」两个选择。
+
+        rows 用调用方那一份快照：机翻期间 self.rows 万一被别的路径换掉，
+        结算也必须对着当初发出去的那批行算。
         """
+        rows = self.rows if rows is None else rows
         ok = 0
         left = []
         for i in targets:
             try:
-                filled = bool((self.rows[i]["trans"] or "").strip())
+                filled = bool((rows[i]["trans"] or "").strip())
             except Exception:
                 filled = False
             if filled:
@@ -1767,25 +1776,29 @@ class Api(object):
         # 报 NameError: name 'mt_client' is not defined，表现为每次机翻都失败。
         import mt_client
 
+        # 整轮只认这一份快照。机翻要跑几分钟，期间哪怕有路径换掉了 self.rows，
+        # 后果也只会是"这一轮白跑"，而不是把 A 句的译文写进 B 行。
+        rows = self.rows
+
         # 1) 先过基线：手改 > 官方译文 > 翻译记忆。
         #
         # 以前这里只查翻译记忆，官方语料只出现在提示词里。整句命中官方译法
         # 的那部分（实测某个模组的界面词有 30%）本来可以一条都不发给模型。
         before = {}
         for i in targets:
-            before[i] = str(self.rows[i].get("trans") or "").strip()
-        bstat = self._baseline_fill([self.rows[i] for i in targets])
+            before[i] = str(rows[i].get("trans") or "").strip()
+        bstat = self._baseline_fill([rows[i] for i in targets])
         # 官方给的都算 official：稳的 + 待核的都省掉了模型调用
         official_n = (int(bstat.get("official", 0) or 0)
                       + int(bstat.get("officialWeak", 0) or 0))
         hits = []
         misses = []
         for i in targets:
-            now = str(self.rows[i].get("trans") or "").strip()
+            now = str(rows[i].get("trans") or "").strip()
             if now and not before[i]:
                 # 带上来源，前端才能画色条、导出才能写对「译文来源」。
                 hits.append({"i": i, "trans": now,
-                             "src": self.rows[i].get("transSrc") or ""})
+                             "src": rows[i].get("transSrc") or ""})
             elif not now:
                 misses.append(i)
         mem_n = max(0, len(hits) - official_n)
@@ -1796,7 +1809,8 @@ class Api(object):
         if not misses:
             self._emit({"type": "done", "translated": len(hits),
                         "memory": len(hits), "stopped": False})
-            self._trans_report(targets, memory=mem_n, official=official_n)
+            self._trans_report(targets, memory=mem_n, official=official_n,
+                               rows=rows)
             return
 
         try:
@@ -1805,7 +1819,7 @@ class Api(object):
             self._emit({"type": "error", "message": str(ex)})
             self._trans_report(
                 targets, memory=mem_n, official=official_n,
-                reasons=[self._tr("本地模型接口连不上：%s") % ex])
+                reasons=[self._tr("本地模型接口连不上：%s") % ex], rows=rows)
             return
 
         done = len(hits)
@@ -1822,7 +1836,7 @@ class Api(object):
         rep_text = {}
         order = []
         for i in misses:
-            raw = str(self.rows[i].get("orig") or "")
+            raw = str(rows[i].get("orig") or "")
             key = raw.strip()
             if key not in groups:
                 groups[key] = []
@@ -1854,7 +1868,8 @@ class Api(object):
                 self._trans_report(
                     targets, memory=len(hits) - official_n, official=official_n,
                     stopped=True, dedup=dedup_saved,
-                    reasons=[self._tr("已手动停止，剩下的还没有翻译")])
+                    reasons=[self._tr("已手动停止，剩下的还没有翻译")],
+                    rows=rows)
                 return
             keys = order[k:k + batch]
             texts = [rep_text[c] for c in keys]
@@ -1893,7 +1908,8 @@ class Api(object):
                     self._trans_report(
                         targets, memory=len(hits) - official_n, official=official_n,
                         stopped=True, dedup=dedup_saved,
-                        reasons=[self._tr("调用本地模型失败：%s") % ex])
+                        reasons=[self._tr("调用本地模型失败：%s") % ex],
+                        rows=rows)
                     return
                 continue
             consec = 0
@@ -1903,17 +1919,17 @@ class Api(object):
                 if not text:
                     continue
                 for i in groups[key]:
-                    self.rows[i]["trans"] = text
-                    self.rows[i]["transSrc"] = "machine"
+                    rows[i]["trans"] = text
+                    rows[i]["transSrc"] = "machine"
                     items.append({"i": i, "trans": text, "src": "machine"})
                     # 记忆按行上的原始原文存，和 _baseline_fill 的查询键一致
-                    self._memory_store.put(self.rows[i]["orig"], tgt, text)
+                    self._memory_store.put(rows[i]["orig"], tgt, text)
                 done += len(groups[key])
             self._memory_store.save()
             self._emit({"type": "rows", "items": items})
             self._emit({"type": "progress", "done": done, "total": len(targets),
                         "memory": len(hits)})
-        empty = [i for i in misses if not (self.rows[i]["trans"] or "").strip()]
+        empty = [i for i in misses if not (rows[i]["trans"] or "").strip()]
         reasons = []
         if failed_batches:
             # 跳过的批次也要说清楚为什么，否则用户只看到「少了几条」。
@@ -1927,7 +1943,7 @@ class Api(object):
                     "stopped": False})
         self._trans_report(targets, memory=len(hits) - official_n,
                            official=official_n, reasons=reasons,
-                           dedup=dedup_saved)
+                           dedup=dedup_saved, rows=rows)
 
     def stop_translate(self):
         self._stop.set()
@@ -1942,6 +1958,8 @@ class Api(object):
 
     def clear_rows(self):
         """清空当前提取结果和后端缓存的全部行。"""
+        if self._busy:
+            return {"ok": False, "error": "busy"}
         self.rows = []
         self.meta = {}
         return {"ok": True}

@@ -1627,6 +1627,50 @@ def check_search_scoped():
     return True
 
 
+def check_trans_guard():
+    """机翻在跑时，换表格的入口必须被挡住；结算只认当初发出去的那批行。
+
+    前端已经用全遮盖挡住操作，这里是最后一道：load_locale 会把 self.rows 整个
+    换掉，正在跑的机翻按旧索引读新表，轻则 IndexError，重则写到别人的行上。
+    """
+    api = web_app.Api()
+    api._busy = True
+    try:
+        got = api.load_locale([0], "zh-CN")
+        assert got == {"ok": False, "error": "busy"}, ("load_locale 没挡", got)
+        got = api.clear_rows()
+        assert got == {"ok": False, "error": "busy"}, ("clear_rows 没挡", got)
+    finally:
+        api._busy = False
+
+    # 结算用调用方快照：就算 self.rows 中途被换成更短的一份也不能越界
+    snap = [{"trans": "甲"}, {"trans": ""}, {"trans": "丙"}]
+    api.rows = [{"trans": ""}]
+    rep = api._trans_report([0, 1, 2], rows=snap)
+    assert rep["ok"] == 2 and rep["left"] == 1, rep
+    assert rep["failed"] == [1], rep
+
+    # 前端侧：遮罩里必须有进度和停止入口，停止不能再挂在「翻译全部未填」上
+    root = os.path.dirname(HERE)
+    with open(os.path.join(root, "src", "web", "index.html"),
+              encoding="utf-8-sig") as f:
+        html = f.read()
+    for marker in ('id="btn-tr-stop"', 'id="ov-bar"', 'id="ov-count"',
+                   'id="ov-progress"'):
+        assert marker in html, marker
+    with open(os.path.join(root, "src", "web", "app.js"),
+              encoding="utf-8-sig") as f:
+        js = f.read()
+    for marker in ("function enterTransMask", "function exitTransMask",
+                   'app.inert = true', 'app.inert = false',
+                   "$(\"btn-tr-stop\").onclick", "function syncEditorEnabled"):
+        assert marker in js, marker
+    # 「翻译全部未填」不再兼任停止按钮
+    assert 'state.busy) { pywebview.api.stop_translate()' not in js, \
+        "停止入口还留在「翻译全部未填」上"
+    return True
+
+
 def check_reds_evidence_tiers():
     """没有位置证据的 REDscript 字符串不再一律当界面文本。
 
@@ -2073,6 +2117,8 @@ def main():
           if res is True else "   跳过: 未安装 Much Better Contracts")
     check_noise_rules()
     print("   OK: 误报过滤 (图集/记录名/技术串/外文表/双语表)")
+    check_trans_guard()
+    print("   OK: 机翻互斥 (load_locale/clear_rows 拒绝 busy) / 结算用快照")
     check_identifier_guard()
     print("   OK: 标识符/本地化键守卫 (n\"\" 引用与查表键不参与翻译)")
     res3 = check_resource_layer()

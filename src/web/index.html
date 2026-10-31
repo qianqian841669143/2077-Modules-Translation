@@ -410,6 +410,14 @@
 <div class="overlay" id="overlay">
   <div class="spinner"></div>
   <div id="overlay-text" class="overlay-text">正在处理…</div>
+  <!-- 机翻专用：进度与停止入口都放在遮罩里，遮罩一盖就别想点别处 -->
+  <div class="ov-progress" id="ov-progress">
+    <div class="ovbar"><div class="ovbar-fill" id="ov-bar"></div></div>
+    <div class="ovrow">
+      <span id="ov-count">0 / 0</span>
+      <button class="btn danger" id="btn-tr-stop" data-i18n="停止机翻">停止机翻</button>
+    </div>
+  </div>
 </div>
 
 <div id="ctxmenu" class="ctxmenu"></div>

@@ -341,6 +341,15 @@ textarea.input { height: auto; min-height: var(--ctl-h); max-height: 76px; paddi
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .overlay-text { color: #fff; font-size: 13px; text-shadow: 0 1px 3px rgba(0,0,0,.45); }
+/* 机翻：全遮盖，进度与停止都在遮罩里；不用禁用控件，遮罩本身挡住一切 */
+.overlay.tr { background: rgba(10, 15, 25, .88); backdrop-filter: blur(2px); }
+.ov-progress { display: none; flex-direction: column; gap: 10px;
+               width: min(420px, 72vw); }
+.overlay.tr .ov-progress { display: flex; }
+.ovbar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.18); overflow: hidden; }
+.ovbar-fill { height: 100%; width: 0; background: var(--success); transition: width .25s; }
+.ovrow { display: flex; align-items: center; justify-content: space-between;
+         gap: 12px; color: #fff; font-size: 13px; }
 .btn:disabled, .chip:disabled { opacity: .55; cursor: default; }
 
 /* 文件列: 打开所在目录的小按钮 */

@@ -184,6 +184,14 @@ function bind() {
   $("btn-revert").onclick = () => revertMod();
   bindMoreMenu();
   document.addEventListener("contextmenu", (e) => {
+    // 编辑条上右键：把表格滚回「正在编辑的那一行」。
+    // 复用右键菜单里那一项（locateSelected），不再单独占一块界面。
+    if (e.target.closest(".editor")) {
+      e.preventDefault();
+      if (state.sel >= 0) locateSelected();
+      else toast(T("还没有选择任何行，先点一行再试"), "err");
+      return;
+    }
     const row = e.target.closest(".trow");
     if (!row) return;
     e.preventDefault();
@@ -362,9 +370,14 @@ function bind() {
     if (row.skip) { toast(T("此行已跳过翻译"), "err"); return; }
     translateRows(originalIndicesForRow(row));
   };
-  $("btn-tr-all").onclick = () => {
-    if (state.busy) { pywebview.api.stop_translate(); setStatus(T("正在停止...")); }
-    else translateRows(null);
+  // 机翻期间这个按钮被遮罩挡住，停止入口在遮罩里（btn-tr-stop）。
+  $("btn-tr-all").onclick = () => translateRows(null);
+  $("btn-tr-stop").onclick = async () => {
+    const b = $("btn-tr-stop");
+    if (b) b.disabled = true;
+    $("ov-count").textContent = T("正在停止...");
+    setStatus(T("正在停止..."));
+    await pywebview.api.stop_translate();
   };
 
   document.querySelectorAll("[data-close]").forEach((b) => {
@@ -534,6 +547,11 @@ function transTitle(r) {
 
 function onLoaded(r) {
   setBusy(false);
+  // 先切断编辑状态，再替换 rows。反过来的话 render() 末尾的 syncSelection
+  // 会调 clearSelection → flushEditor → 拿着上一份的 sel 往新表的同一索引里写。
+  state.sel = -1;
+  _transDirty = false;
+  if ($("trans")) $("trans").value = "";
   state.modPath = $("path").value.trim();
   state.root = r.root || state.modPath;
   state.archive = r.archive || "";
@@ -550,12 +568,18 @@ function onLoaded(r) {
   state.hidden = new Set();
   state.onlyFile = null;
   state.transMode = "";
+  // 上一份的筛选与搜索不能带进新数据：搜索词会把新表格直接滤空，而状态栏
+  // 还在报「已加载 N 段文本」，看起来像提取失败。与 clearCurrentRows 一致。
+  state.filter = "全部";
+  state.search = "";
+  $("filter").value = "全部";
+  $("search").value = "";
   updateScopeInfo();
   updateNoiseInfo();
-  state.sel = -1;
   state.page = 1;
   applyModeUi();
   render();
+  syncEditorEnabled();
   $("empty").textContent = (!state.rows.length && r.skippedTarget)
     ? T("没有可提取的原文（已跳过 %d 条目标语言文本）").replace("%d", r.skippedTarget)
     : T("未加载 — 先选模组目录点「加载 / 提取」");
@@ -894,6 +918,7 @@ async function clearCurrentTranslations() {
   $("trans").value = "";
   state.dirty = true;
   render();
+  syncEditorEnabled();
   setStatus(T("已清空当前提取结果的全部译文（模组文件未修改）。"));
 }
 
@@ -926,6 +951,7 @@ async function clearCurrentRows() {
   updateScopeInfo();
   updateNoiseInfo();
   render();
+  syncEditorEnabled();
   setStatus(T("已清空当前提取结果（模组文件未修改）。"));
 }
 
@@ -1205,6 +1231,8 @@ function render() {
   if (state.rows.length && !list.length) $("empty").textContent = T("没有匹配的行");
   updateStats(list);
   syncSelection(list);
+  // 每次重画后校正一次编辑条：没选中行就不该能打字。
+  syncEditorEnabled();
 }
 
 function updateStats(list) {
@@ -1289,6 +1317,7 @@ function selectRow(i) {
   const r = state.rows[i];
   $("trans").value = r ? r.trans || "" : "";
   _transDirty = false;     // 这次是程序回填，不是用户输入
+  syncEditorEnabled();
   $("trans").focus();
   scrollToSel();
 }
@@ -1331,6 +1360,22 @@ function clearSelection() {
   if (t) t.value = "";
   _transDirty = false;
   document.querySelectorAll(".trow.sel").forEach((el) => el.classList.remove("sel"));
+  syncEditorEnabled();
+}
+
+/* 没有选中行时编辑条没有目标：能打字，但写不到任何地方，也没有提示。
+   这里统一收口，让「能不能编辑」跟着选中状态走。 */
+function syncEditorEnabled() {
+  const on = state.sel >= 0 && !!state.rows[state.sel] && !state.busy;
+  const t = $("trans");
+  if (t) {
+    t.disabled = !on;
+    t.placeholder = on
+      ? T("选中一行后在里输入译文, 回车确认并跳到下一行")
+      : T("先在表格里点一行");
+  }
+  const b = $("btn-tr-row");
+  if (b) b.disabled = !on;
 }
 
 function syncSelection(list) {
@@ -1420,13 +1465,47 @@ async function translateRows(indices) {
     if ((r.error || "").includes("API")) openSettings();
     return;
   }
-  state.busy = true;
-  $("btn-tr-all").textContent = T("停止机翻");
-  $("progress").classList.add("on");
-  $("bar").style.width = "0%";
+  enterTransMask(r.total);
   let msg = T("机翻准备中 ... 共 %d 条").replace("%d", r.total);
   if (skipped) msg += " · " + T("已跳过 %d 条").replace("%d", skipped);
   setStatus(msg);
+}
+
+/* ---------------- 机翻遮罩 ---------------- */
+
+/* 机翻一跑几分钟，期间不该允许任何别的操作。用一层全遮盖解决：
+   遮罩本身就是最强的互斥，不必再把每个按钮逐个禁用。
+   main 加 inert 是因为遮罩挡得住鼠标，挡不住键盘——焦点若还停在输入框，
+   Tab / Enter 照样能落到下层的控件上。overlay 在 main 之外，所以停止
+   按钮不会被一起锁死。 */
+function enterTransMask(total) {
+  state.busy = true;
+  const ov = $("overlay");
+  if (ov) ov.classList.add("on", "tr");
+  if ($("overlay-text")) $("overlay-text").textContent = T("机翻进行中…");
+  $("progress").classList.add("on");
+  $("bar").style.width = "0%";
+  $("ov-bar").style.width = "0%";
+  $("ov-count").textContent = "0 / " + Number(total || 0).toLocaleString();
+  const app = document.querySelector("main.app");
+  if (app) app.inert = true;
+  if (document.activeElement && document.activeElement.blur) {
+    document.activeElement.blur();
+  }
+  if ($("btn-tr-stop")) $("btn-tr-stop").focus();
+  syncEditorEnabled();
+}
+
+function exitTransMask() {
+  state.busy = false;
+  const ov = $("overlay");
+  if (ov) ov.classList.remove("on", "tr");
+  const app = document.querySelector("main.app");
+  if (app) app.inert = false;
+  $("progress").classList.remove("on");
+  $("bar").style.width = "0%";
+  $("ov-bar").style.width = "0%";
+  syncEditorEnabled();
 }
 
 /* ---------------- Vortex 活动映射 ---------------- */
@@ -1594,10 +1673,8 @@ function copyVmap() {
 /* ---------------- 机翻结果提示 ---------------- */
 
 function onTransReport(e) {
-  state.busy = false;
-  $("btn-tr-all").textContent = T("翻译全部未填");
-  $("progress").classList.remove("on");
-  $("bar").style.width = "0%";
+  // done 一般先到，这里再来一次只是兜底（exitTransMask 是幂等的）。
+  exitTransMask();
   state.trFailed = (e.failed || []).map(Number).filter((n) => Number.isInteger(n));
   const left = Number(e.left || 0);
   const ok = Number(e.ok || 0);
@@ -1720,13 +1797,16 @@ window.__evt = (e) => {
     $("progress").classList.add("on");
     const pct = e.total ? Math.round((e.done / e.total) * 100) : 0;
     $("bar").style.width = pct + "%";
+    // 进度同时投到遮罩里：机翻时整块界面被盖住，只有遮罩上的这条看得见。
+    $("ov-bar").style.width = pct + "%";
+    $("ov-count").textContent =
+      Number(e.done || 0).toLocaleString() + " / " + Number(e.total || 0).toLocaleString();
     // note: 批次跳过、模型预热这类一次性说明，下一批进度会把它盖掉。
-    setStatus(e.note || T("机翻中 %d / %d ...").replace("%d", e.done).replace("%d", e.total));
+    const line = e.note || T("机翻中 %d / %d ...").replace("%d", e.done).replace("%d", e.total);
+    setStatus(line);
+    if (e.note) $("overlay-text").textContent = e.note;
   } else if (e.type === "done") {
-    state.busy = false;
-    $("btn-tr-all").textContent = T("翻译全部未填");
-    $("bar").style.width = "0%";
-    $("progress").classList.remove("on");
+    exitTransMask();
     let msg = e.memory
       ? T("机翻完成: %d 条（其中 %d 条来自翻译记忆）。请逐条检查后再点「应用到模组」。")
           .replace("%d", e.translated).replace("%d", e.memory)
@@ -1735,8 +1815,8 @@ window.__evt = (e) => {
     setStatus(msg);
     render();
   } else if (e.type === "error") {
-    state.busy = false;
-    $("progress").classList.remove("on");
+    // 先关遮罩：下面几个分支会提前 return，放后面就关不掉了。
+    if (state.busy) exitTransMask();
     toast(e.message, "err");
     if (e.action === "undo") {
       setStatus(T("撤销失败: %s").replace("%s", e.message));
@@ -1747,12 +1827,11 @@ window.__evt = (e) => {
       return;
     }
     // 应用失败与机翻失败是两码事：以前一律按「机翻失败」报，状态栏文字
-    // 会把用户指到错误的方向（还会把「翻译全部未填」按钮文案改回去）。
+    // 会把用户指到错误的方向。
     if (e.action === "apply") {
       setStatus(T("应用失败: %s").replace("%s", e.message));
       return;
     }
-    $("btn-tr-all").textContent = T("翻译全部未填");
     setStatus(T("机翻失败: %s").replace("%s", e.message));
   }
 };
@@ -2316,15 +2395,23 @@ async function loadLocale() {
   const target = $("loc-dst").value;
   const r = await pywebview.api.load_locale(picked, target);
   if (!r.ok) { toast(r.error || "", "err"); return; }
+  // 与 onLoaded 同一套：先切断编辑，再换数据，最后把筛选和搜索复位。
+  state.sel = -1;
+  _transDirty = false;
+  if ($("trans")) $("trans").value = "";
   state.raw = (r.rows || []).map((x, i) => ({ ...x, _i: i }));
   state.rows = state.raw;
   state.merged = false;
   state.hidden = new Set();
   state.onlyFile = null;
   state.transMode = "";
+  state.filter = "全部";
+  state.search = "";
+  $("filter").value = "全部";
+  $("search").value = "";
   updateScopeInfo();
-  state.sel = -1;
   render();
+  syncEditorEnabled();
   $("empty").textContent = (!state.rows.length && r.skippedTarget)
     ? T("没有可提取的原文（已跳过 %d 条目标语言文本）").replace("%d", r.skippedTarget)
     : T("未加载 — 先选模组目录点「加载 / 提取」");

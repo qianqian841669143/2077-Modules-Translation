@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 32, 0, 0),
-    prodvers=(2, 32, 0, 0),
+    filevers=(2, 34, 0, 0),
+    prodvers=(2, 34, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -15,12 +15,12 @@ VSVersionInfo(
       StringTable('040904B0', [
         StringStruct('CompanyName', '2077 Mod Translator'),
         StringStruct('FileDescription', 'Cyberpunk 2077 Mod Translator'),
-        StringStruct('FileVersion', '2.32.0.0'),
+        StringStruct('FileVersion', '2.34.0.0'),
         StringStruct('InternalName', '2077ModTranslator'),
         StringStruct('LegalCopyright', 'Copyright (c) 2026'),
         StringStruct('OriginalFilename', '2077ModTranslator.exe'),
         StringStruct('ProductName', '2077 Mod Translator'),
-        StringStruct('ProductVersion', '2.32.0.0'),
+        StringStruct('ProductVersion', '2.34.0.0'),
         StringStruct('Comments', 'Portable desktop mod translation tool')
       ])
     ]),
