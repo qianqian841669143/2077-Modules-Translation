@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# PyInstaller 产物目录
+build/
+dist/
+# 例外：构建配置本身要入库，否则换台机器没法复现打包
+*.spec
+!2077ModTranslator.spec
+
+# 运行时产物
+*.bak
+userdata/
+*.log
+
+# M0 探针工作目录（解包结果 + 中间产物，可重建）
+.m0/
+
+# 资源模式工作目录（解包 + 中间产物，可重建）
+.l10n/
+
+# 历史版本压缩包（旧发布件，体积大且可重新打包）
+backup/
+
+# 一次性补丁脚本（已应用完毕，只作留档，不参与构建）
+src/tmp_wa1.py
+src/tmp_wa2.py
+
+# 编辑器
+.vscode/
+.idea/
