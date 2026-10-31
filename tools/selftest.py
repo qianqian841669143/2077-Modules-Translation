@@ -1595,6 +1595,38 @@ def check_already_rows():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_search_scoped():
+    """搜索框要能查到译文，不只是原文。
+
+    翻完一整片再回头核对某句时，手里只有中文——只搜 orig 等于搜不到。
+    顺带守住英文界面：placeholder 的键必须有英文串，否则英文界面回落成中文。
+    """
+    import json
+    root = os.path.dirname(HERE)
+    with open(os.path.join(root, "src", "web", "app.js"),
+              encoding="utf-8-sig") as f:
+        js = f.read()
+    start = js.index("function filtered()")
+    end = js.find("\nfunction ", start + 1)
+    body = js[start:] if end < 0 else js[start:end]
+    assert "r.orig" in body, "搜索把原文弄丢了"
+    assert "r.trans" in body, "搜索没有覆盖译文"
+    assert "r.ctx" in body, "搜索丢了上下文"
+
+    with open(os.path.join(root, "src", "web", "index.html"),
+              encoding="utf-8-sig") as f:
+        html = f.read()
+    ph = "原文 / 译文 / 文件名"
+    assert 'id="search"' in html, "搜索框不见了"
+    assert 'data-i18n-ph="%s"' % ph in html, "搜索框提示没写译文"
+
+    with open(os.path.join(root, "src", "locales", "en-US.json"),
+              encoding="utf-8-sig") as f:
+        en = json.load(f)["strings"]
+    assert ph in en, "英文语言包缺这条提示: %s" % ph
+    return True
+
+
 def check_reds_evidence_tiers():
     """没有位置证据的 REDscript 字符串不再一律当界面文本。
 
@@ -2032,6 +2064,8 @@ def main():
     print("   OK: 语言包变体 (languages/ 目录 / -sms 后缀 / jp-kr-ua-th-es-mx)")
     check_already_rows()
     print("   OK: 已译行保留 (翻完再提取不丢行 / 译文可改)")
+    check_search_scoped()
+    print("   OK: 搜索覆盖译文 (原文/译文/文件名/上下文)")
     check_reds_evidence_tiers()
     print("   OK: REDscript 证据分级 (界面/长句/内部日志)")
     res = check_layered_extraction()

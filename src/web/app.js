@@ -678,7 +678,9 @@ function filtered() {
     if (f === "已跳过" && !r.skip) return false;
     if (f === "未跳过" && r.skip) return false;
     if (kw) {
-      const hay = (r.orig + "\n" + (r.disp || r.file) + "\n" + (r.ctx || "")).toLowerCase();
+      // 译文也要能搜：翻完想回头核对某句时，中文关键词只存在于 trans 里。
+      const hay = (r.orig + "\n" + (r.trans || "") + "\n"
+                   + (r.disp || r.file) + "\n" + (r.ctx || "")).toLowerCase();
       if (!hay.includes(kw)) return false;
     }
     return true;
