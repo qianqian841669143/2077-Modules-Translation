@@ -2062,6 +2062,69 @@ def check_locale_pair_by_key():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_apply_ctx_backfill():
+    """前端 apply 不带条目名时, 后端必须从当前表格反查补上。
+
+    语言包写回靠 ctx 里的 `Name =` 定位。前端 items 只传 key(那是 JSON 的键),
+    lua/reds 行的 key 是空的; 缺了 ctx 就只能退回按行号写, 而源文件与目标文件
+    行号不同 —— AMM 的 BeginCombo_LookAt 就是这样拿到 BeginItem_TabTools 的
+    译文。这条链路以前没有测试, 所以「后端逻辑对、前端没传参」能一路漏到用户。
+    """
+    tmp = tempfile.mkdtemp()
+    try:
+        loc = os.path.join(tmp, "Localization")
+        os.makedirs(loc)
+        # 目标文件比源文件少一条、行号也整体前移, 正是 AMM 的形态
+        en = ('return {\n'
+              '\tAAA_Save = "Save",\n'
+              '\tBBB_Close = "Close",\n'
+              '\tCCC_Third = "Third Item",\n'
+              '\tDDD_Fourth = "Fourth Item",\n'
+              '}\n')
+        zh = ('return {\n'
+              '\tAAA_Save = "保存",\n'
+              '\tBBB_Close = "关闭",\n'
+              '\tCCC_Third = "第三项",\n'
+              '}\n')
+        for name, text in (("en_US.lua", en), ("zh_CN.lua", zh)):
+            with open(os.path.join(loc, name), "w", encoding="utf-8") as f:
+                f.write(text)
+
+        target = locale_pack.target_code("简体中文")
+        files = locale_pack.detect(tmp, parse=True, target=target)
+        srcs = locale_pack.pick_sources(files, target)
+        rows, _meta = locale_pack.extract(tmp, srcs, target)
+        assert len(rows) == 4, [r["orig"] for r in rows]
+        assert all(r.get("ctx") for r in rows), [r.get("ctx") for r in rows]
+
+        for r in rows:
+            if not r["trans"]:
+                r["trans"] = "第四项"
+        api = web_app.Api("")
+        api.settings["target_lang"] = "简体中文"
+        api.rows = rows
+        # 前端就是这样提交的: 没有 ctx
+        items = [{"root": tmp, "file": r["file"], "line": r["line"],
+                  "orig": r["orig"], "trans": r["trans"],
+                  "target": r["target"], "kind": "text"} for r in rows]
+        assert all("ctx" not in it for it in items)
+
+        res = api._do_apply(items)
+        assert res["ok"] == 3, res
+        assert res["fail"] == 1, res
+        assert "没有这个条目" in res["failed"][0]["reason"], res["failed"]
+
+        with open(os.path.join(loc, "zh_CN.lua"), encoding="utf-8") as f:
+            after = f.read()
+        assert 'AAA_Save = "保存"' in after, after
+        assert 'BBB_Close = "关闭"' in after, after
+        assert 'CCC_Third = "第三项"' in after, after
+        # 缺条目不能写到邻行去
+        assert "第四项" not in after, after
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_identifier_guard():
     """标识符 / 本地化键守卫。
 
@@ -2383,6 +2446,8 @@ def main():
     print("   OK: 清空后能重翻 (后端同步 / 记忆失效 / 原文=译文筛选)")
     check_locale_pair_by_key()
     print("   OK: 语言包按条目名回填 (缺条目留空 / 单词按钮 / 中文含斜杠)")
+    check_apply_ctx_backfill()
+    print("   OK: 应用时补条目名 (前端不带 ctx 也能按键写回)")
     check_identifier_guard()
     print("   OK: 标识符/本地化键守卫 (n\"\" 引用与查表键不参与翻译)")
     res3 = check_resource_layer()

@@ -2242,8 +2242,12 @@ async function applyAll() {
     // entryId 必须带上：内容模式下混进来的归档行，组包时是按 (file, entryId)
     // 定位条目的。以前这里漏了它，资源层整批对不上号，点「应用」就报
     // 「没有可提交的译文」——看上去像是归档读取失败，其实是提交时丢了主键。
+    // ctx 是语言包的条目名(如 BeginCombo_LookAt)。写回 lua/reds 语言包时
+    // 必须用它定位 —— 目标语言文件与源文件的行号、条目数都不一样, 按行号
+    // 写会把 A 的译文写进 B。以前这里漏了它, 应用后整张表错位。
     items.push({ root, file: r.file, line: r.line, orig: r.orig, trans: r.trans,
                  target: r.target || "", kind: r.kind || "", key: r.key || "",
+                 ctx: r.ctx || "",
                  entryId: r.entryId || "", transSrc: r.transSrc || "" });
   });
   if (!items.length) { toast(T("还没有可应用的译文。"), "err"); return; }

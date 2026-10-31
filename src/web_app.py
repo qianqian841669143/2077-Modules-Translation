@@ -2183,12 +2183,48 @@ class Api(object):
         out["failedTotal"] = r2.get("failedTotal", 0)
         return out
 
+    def _fill_ctx_from_rows(self, items):
+        """前端不带条目名时, 从当前表格按 (file, line, orig) 反查补齐。
+
+        语言包模式的行在 ctx 里存着 `Name = "..."` 的条目名, 写回必须靠它定位。
+        前端 apply 只传 key(那是 JSON 的键), lua/reds 行的 key 是空的 —— 缺了
+        条目名就只能退回按行号写, 而源文件与目标文件行号不同, 会把 A 的译文
+        写进 B (AMM 的 BeginCombo_LookAt 拿到 BeginItem_TabTools 的译文)。
+        """
+        rows = self.rows or []
+        if not items or not rows:
+            return 0
+        index = {}
+        for r in rows:
+            try:
+                ident = (str(r.get("file") or ""), int(r.get("line") or 0),
+                         str(r.get("orig") or ""))
+            except (TypeError, ValueError):
+                continue
+            index.setdefault(ident, r)
+        filled = 0
+        for it in items:
+            if it.get("ctx"):
+                continue
+            try:
+                ident = (str(it.get("file") or ""), int(it.get("line") or 0),
+                         str(it.get("orig") or ""))
+            except (TypeError, ValueError):
+                continue
+            hit = index.get(ident)
+            if hit is not None and hit.get("ctx"):
+                it["ctx"] = hit.get("ctx")
+                filled += 1
+        return filled
+
     def _do_apply_source(self, items, tx=None):
         import locale_pack
         import mod_text_engine as E
         import undo_store
 
         modroot = items[0].get("root") or self.root
+        # 语言包行必须带回条目名, 否则写回会退回按行号(会错位)
+        self._fill_ctx_from_rows(items)
         ok = fail = 0
         errors = []
         created = []
