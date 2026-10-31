@@ -1062,21 +1062,19 @@ function showCtxMenu(x, y, row, cell) {
         state.merged ? T("还原重复行") : T("合并重复行"))}</div>`;
 
   // 「已筛选」= 当前视图（搜索 + 筛选 + 文件过滤 + 隐藏之后剩下的行）。
-  // 跳过行不参与机翻，数字里也不算，免得确认时对不上。
-  const nFiltered = filtered().reduce(
-    (a, r) => a + (r.skip ? 0 : originalIndicesForRow(r).length), 0);
+  // 数字不写进菜单：表格右上角「共 N 条」就是筛选后的总数，再写一遍是重复。
+  const hasFiltered = filtered().length > 0;
 
   m.innerHTML =
     copyItem +
+    `<div class="item${hasFiltered ? "" : " disabled"}" data-act="retrans-filtered">${esc(
+      T("重新翻译已筛选的行"))}</div>` +
     `<div class="sep"></div>` +
     `<div class="ctxgroup${hasSel ? "" : " disabled"}">${esc(T("左键选中"))}</div>` +
     `<div class="item${dis1}" data-act="locate">${esc(T("定位到已选择的行"))}</div>` +
     `<div class="item${dis1}" data-act="toggle-skip">${esc(skipLabel)}</div>` +
     `<div class="item${dis1}" data-act="clear-row-trans">${esc(T("清空选中的行译文"))}</div>` +
     `<div class="item${dis1}" data-act="retrans">${esc(T("重新翻译选中的行"))}</div>` +
-    `<div class="sep"></div>` +
-    `<div class="item${nFiltered ? "" : " disabled"}" data-act="retrans-filtered">${esc(
-      T("重新翻译已筛选的 %d 行").replace("%d", nFiltered))}</div>` +
     `<div class="sep"></div>` +
     `<div class="item" data-act="skip-file">${esc(
       allSkipped ? T("恢复此文件所有行") : T("跳过此文件所有行"))}</div>` +
@@ -1533,11 +1531,21 @@ async function translateRows(indices, force) {
     return;
   }
   state.trForce = !!force;
-  const r = await pywebview.api.translate(targetIndices, skipIndices, !!force);
-  if (!r.ok) {
-    if (r.error === "busy") return;
-    toast(r.error || "error", "err");
-    if ((r.error || "").includes("API")) openSettings();
+  // 先上遮罩再发请求：批量重翻要跑几分钟，点完到 RPC 返回之间的空窗会让
+  // 用户以为没反应、再点一次又撞上 busy。候选数只是预估值，后端返回真实
+  // total 后再校正一次（enterTransMask 是幂等的）。
+  enterTransMask(Array.isArray(targetIndices) ? targetIndices.length : 0);
+  let r = null;
+  try {
+    r = await pywebview.api.translate(targetIndices, skipIndices, !!force);
+  } catch (_) {
+    r = null;
+  }
+  if (!r || !r.ok) {
+    exitTransMask();
+    if (r && r.error === "busy") return;
+    toast((r && r.error) || T("操作失败：后端没有响应"), "err");
+    if (r && (r.error || "").includes("API")) openSettings();
     return;
   }
   enterTransMask(r.total);

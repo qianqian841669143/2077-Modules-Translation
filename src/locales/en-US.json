@@ -237,7 +237,7 @@
     "恢复选中的行": "Restore the selected row",
     "清空选中的行译文": "Clear the selected row's translation",
     "重新翻译选中的行": "Re-translate the selected row",
-    "重新翻译已筛选的 %d 行": "Re-translate the %d filtered rows",
+    "重新翻译已筛选的行": "Re-translate the filtered rows",
     "显示所有文件": "Show all files",
     "显示所有行": "Show all rows",
     "清除筛选": "Clear filters",

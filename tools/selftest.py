@@ -1748,6 +1748,12 @@ def check_clear_resync():
         assert "function retranslateFiltered" in js, "批量重翻没有处理器"
         assert "translateRows(uniq, true)" in js, "重新翻译没走 force 模式"
         assert "state.trForce = !!e.force;" in js, "补翻会丢掉 force 标志"
+        # 菜单文案固定：筛选后的条数表格右上角已经有了，不必在菜单里再写一遍
+        assert "重新翻译已筛选的行" in js, "菜单文案没改成固定文本"
+        # 遮罩要在发请求之前：批量重翻点下去就得有反应，不能等后端回话
+        pre = js[js.index("async function translateRows"):]
+        pre = pre[:pre.index("pywebview.api.translate")]
+        assert "enterTransMask(" in pre, "发翻译请求之前没有上遮罩"
 
         # ---- force 重翻：已有译文的行也要真的再问一次模型
         import types
