@@ -184,14 +184,6 @@ function bind() {
   $("btn-revert").onclick = () => revertMod();
   bindMoreMenu();
   document.addEventListener("contextmenu", (e) => {
-    // 编辑条上右键：把表格滚回「正在编辑的那一行」。
-    // 复用右键菜单里那一项（locateSelected），不再单独占一块界面。
-    if (e.target.closest(".editor")) {
-      e.preventDefault();
-      if (state.sel >= 0) locateSelected();
-      else toast(T("还没有选择任何行，先点一行再试"), "err");
-      return;
-    }
     const row = e.target.closest(".trow");
     if (!row) return;
     e.preventDefault();
@@ -358,7 +350,12 @@ function bind() {
   $("trans").onkeydown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitEditor(true); }
   };
-  $("trans").oninput = () => { if (state.sel >= 0) { state.dirty = true; _transDirty = true; } };
+  $("trans").oninput = () => {
+    if (state.sel >= 0) { state.dirty = true; _transDirty = true; }
+    followEditingSoon();            // 打字时让表格跟上当前行
+  };
+  // 焦点回到编辑条（Tab、点进来、程序回填后）也要把那一行留在视野里
+  $("trans").addEventListener("focus", followEditingRow);
   // 失焦（点按钮、切窗口、点别的行）也结算一次，别把刚敲的字丢掉。
   $("trans").onblur = () => { flushEditor(); };
   $("btn-tr-row").onclick = () => {
@@ -1252,6 +1249,31 @@ function updateStats(list) {
 function scrollToSel() {
   const el = $("tbody").querySelector(`.trow[data-i="${state.sel}"]`);
   if (el) el.scrollIntoView({ block: "nearest" });
+}
+
+/* 编辑时表格自动跟着走：编辑条获得焦点、或内容发生变化时，把「正在编辑的
+   那一行」翻到当前页并滚进视野。用户眼睛在输入框上，表格自己跟过来就好，
+   不必再按按钮或右键去"跳回"。
+
+   注意这里不调 selectRow：它会把焦点抢回输入框，和 focus 事件凑成环。 */
+function followEditingRow() {
+  if (state.sel < 0) return;
+  // 当前页就有这一行：直接滚，不必再跑一遍全表过滤（打字时会频繁调到这里）
+  let el = $("tbody").querySelector(`.trow[data-i="${state.sel}"]`);
+  if (!el) {
+    const pos = filtered().findIndex((r) => r._i === state.sel);
+    if (pos < 0) return;            // 被筛选/隐藏了，交给 syncSelection 处理
+    const page = Math.floor(pos / state.pageSize) + 1;
+    if (page !== state.page) { state.page = page; render(); }
+    el = $("tbody").querySelector(`.trow[data-i="${state.sel}"]`);
+  }
+  if (el) el.scrollIntoView({ block: "nearest" });
+}
+
+let _followTimer = 0;
+function followEditingSoon() {
+  clearTimeout(_followTimer);
+  _followTimer = setTimeout(followEditingRow, 120);
 }
 
 /* ---------------- 选择 / 编辑 ---------------- */

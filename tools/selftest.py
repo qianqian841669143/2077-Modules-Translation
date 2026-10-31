@@ -1663,8 +1663,11 @@ def check_trans_guard():
         js = f.read()
     for marker in ("function enterTransMask", "function exitTransMask",
                    'app.inert = true', 'app.inert = false',
-                   "$(\"btn-tr-stop\").onclick", "function syncEditorEnabled"):
+                   "$(\"btn-tr-stop\").onclick", "function syncEditorEnabled",
+                   "function followEditingRow"):
         assert marker in js, marker
+    # 编辑时靠「编辑条聚焦 / 输入」自动把行带回视野，不再走右键
+    assert 'closest(".editor")' not in js, "编辑条的右键定位又回来了"
     # 「翻译全部未填」不再兼任停止按钮
     assert 'state.busy) { pywebview.api.stop_translate()' not in js, \
         "停止入口还留在「翻译全部未填」上"
