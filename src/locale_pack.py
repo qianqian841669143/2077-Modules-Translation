@@ -206,9 +206,11 @@ def _json_pairs(path):
     return [(k, v) for k, v in _flatten(data) if k]
 
 
-# `Name = "Value"` 里字面量左边的赋值名。语言包绝大多数条目长这样。
+# `Name = "Value"` 里字面量左边的条目名, 两种写法都认:
+#   Key = "Value"  /  ["Key"] = "Value"
 # 末尾允许一个引号: scan_source 给出的字面量起点在引号之后。
-_ASSIGN_TAIL_RE = re.compile(r"""([A-Za-z_]\w*)\s*=\s*["']?$""")
+_ASSIGN_TAIL_RE = re.compile(
+    r'''(?:\[\s*["']([^"']+)["']\s*\]|([A-Za-z_]\w*))\s*=\s*["']?$''')
 # 回填已有译文时, 「按行号」兜底用的键前缀。真实条目名是标识符, 不会含 \x00。
 _LINE_KEY = "\x00line%d"
 
@@ -232,7 +234,9 @@ def _assign_key(text, start):
     """
     ls = text.rfind("\n", 0, start) + 1
     m = _ASSIGN_TAIL_RE.search(text[ls:start])
-    return m.group(1) if m else ""
+    if not m:
+        return ""
+    return m.group(1) or m.group(2) or ""
 
 
 def _text_pairs_ex(path):
@@ -267,6 +271,11 @@ def _text_pairs_ex(path):
         # is_translatable 要求「至少两个英文单词」且排除纯标识符, 会把语言包
         # 里 Close / Save / Cancel 这类单词按钮全丢掉, 这里补一条单词文案判定。
         if not (E.is_translatable(lit.inner) or _is_label_word(lit.inner)):
+            continue
+        # ["Key"] = "Value" 里左边那个 Key 是查表键, 不是文案; 它的字面量
+        # 前面只有一个 `[`。收进表格会多出一条以 id 为原文的假行。
+        head = text[text.rfind("\n", 0, lit.start) + 1:lit.start]
+        if head.rstrip().endswith("["):
             continue
         out.append((lit.line, lit.inner, _assign_key(text, lit.start)))
     return out
@@ -369,6 +378,67 @@ def _existing_target(root, tgt):
         return out
     except Exception:
         return None
+
+
+def apply_text_target(path, rows):
+    """按条目名把译文写回 lua / reds 语言包。
+
+    rows: [(条目名, 原文, 新译文)]
+
+    各语言文件的行号并不一致 —— AMM 的 en_US.lua 1115 行、zh_CN.lua 1113 行,
+    而且两边「可翻译」条目数也不同。沿用源文件的行号去写目标文件, 会把 A 的
+    译文写进 B (原文 Default Aperture 拿到 Failed to load pose 那一条)。
+    所以这里只用 `Name = "..."` 的赋值名定位, 按字面量字节位置替换, 保留缩进、
+    注释与换行风格。
+
+    返回 (写入条数, [(条目名, 原文, 原因)])。
+    """
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            text = f.read()
+    except Exception as ex:  # noqa: BLE001
+        return 0, [(k, o, "读取失败: %s" % ex) for k, o, _t in rows]
+    lang = "lua" if path.lower().endswith(".lua") else "reds"
+    try:
+        toks, lits = E.scan_source(text, lang)
+    except Exception as ex:  # noqa: BLE001
+        return 0, [(k, o, "解析失败: %s" % ex) for k, o, _t in rows]
+    values, key_starts = E.codeware_text_calls(toks, lits)
+
+    index = {}
+    for lit in lits:
+        if lit.start in key_starts:
+            continue
+        if lit.start in values:
+            key = values[lit.start]
+        elif lit.quote in ("\"", "'"):
+            key = _assign_key(text, lit.start)
+        else:
+            continue
+        if key and key not in index:
+            index[key] = lit
+
+    edits, fails, written = [], [], 0
+    for key, orig, trans in rows:
+        k = str(key or "")
+        lit = index.get(k) if k else None
+        if lit is None:
+            fails.append((k, orig, "目标语言包里没有这个条目"
+                          if k else "缺少条目名, 无法定位"))
+            continue
+        body = E.escape_for(str(trans or ""), lit.quote)
+        edits.append((lit.start, lit.end, lit.quote + body + lit.quote))
+        written += 1
+    if edits:
+        # 从后往前替换, 前面的偏移才不会被打乱
+        for start, end, new in sorted(edits, key=lambda x: x[0], reverse=True):
+            text = text[:start] + new + text[end:]
+        try:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+        except Exception as ex:  # noqa: BLE001
+            return 0, [(k, o, "写入失败: %s" % ex) for k, o, _t in rows]
+    return written, fails
 
 
 def extract(root, entries, target_locale):

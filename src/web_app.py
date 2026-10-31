@@ -2315,20 +2315,45 @@ class Api(object):
                     for it in group:
                         add_fail(it, ex)
                     continue
-            pairs = [(int(it["line"]), it["orig"], it["trans"]) for it in group]
-            try:
-                n, details = E.apply_many_ex(dst_path, pairs)
-                ok += n
-                fail += len(details)
-                for idx, _line, _orig, _trans, reason in details:
-                    add_fail(group[idx], reason)
-                if details:
-                    errors.append("%s (%d 条未匹配)" % (tgt, len(details)))
-            except Exception as ex:
-                fail += len(group)
-                errors.append("%s (%s)" % (tgt, ex))
+            if tgt != src and all(it.get("ctx") for it in group):
+                # 语言包: 目标文件与源文件的行号、条目数都不同 (AMM 的
+                # en_US.lua 1115 行 / zh_CN.lua 1113 行), 只能按 `Name =`
+                # 的条目名写回。按行号写会把 A 的译文写进 B。
+                keyed = [(it.get("ctx") or "", it["orig"], it["trans"])
+                         for it in group]
+                by_key = {}
                 for it in group:
-                    add_fail(it, ex)
+                    by_key.setdefault((it.get("ctx") or "", it["orig"]), it)
+                try:
+                    n, bad = locale_pack.apply_text_target(dst_path, keyed)
+                    ok += n
+                    fail += len(bad)
+                    for key, orig, reason in bad:
+                        hit = by_key.get((key, orig))
+                        if hit is not None:
+                            add_fail(hit, reason)
+                    if bad:
+                        errors.append("%s (%d 条未写入)" % (tgt, len(bad)))
+                except Exception as ex:  # noqa: BLE001
+                    fail += len(group)
+                    errors.append("%s (%s)" % (tgt, ex))
+                    for it in group:
+                        add_fail(it, ex)
+            else:
+                pairs = [(int(it["line"]), it["orig"], it["trans"]) for it in group]
+                try:
+                    n, details = E.apply_many_ex(dst_path, pairs)
+                    ok += n
+                    fail += len(details)
+                    for idx, _line, _orig, _trans, reason in details:
+                        add_fail(group[idx], reason)
+                    if details:
+                        errors.append("%s (%d 条未匹配)" % (tgt, len(details)))
+                except Exception as ex:  # noqa: BLE001
+                    fail += len(group)
+                    errors.append("%s (%s)" % (tgt, ex))
+                    for it in group:
+                        add_fail(it, ex)
 
         undo_id = ""
         if own_tx and tx is not None:

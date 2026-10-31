@@ -2036,6 +2036,28 @@ def check_locale_pair_by_key():
         assert "Button_Close" in got and "Button_Save" in got, sorted(got)
         # 含 `/` 的中文句子不能被当成资源路径丢掉
         assert got["Checkbox_Dual"] == "启用/禁用 NPC 外观"
+
+        # ---- 写回: 必须按条目名写进目标文件, 不能沿用源文件的行号。
+        # 这一步是真正会改坏磁盘的路径: 之前用 en 的行号写 zh, 把 A 的译文
+        # 写进 B, 并报「未找到对应原文」。
+        zh_path = os.path.join(loc, "zh_CN.lua")
+        feed = [(r["ctx"], r["orig"], r["trans"]) for r in rows if r["trans"]]
+        assert len(feed) == 5, len(feed)
+        n, bad = locale_pack.apply_text_target(zh_path, feed)
+        assert n == 5, (n, bad)
+        assert not bad, bad
+        with open(zh_path, encoding="utf-8") as f:
+            after = f.read()
+        assert 'Button_Save = "保存"' in after, after
+        assert 'Button_Close = "关闭"' in after, after
+        assert 'Slider_DefaultAperture = "默认的相机孔径"' in after, after
+        assert 'Checkbox_Dual = "启用/禁用 NPC 外观"' in after, after
+        assert 'Only_In_English = "只出现在英文里"' in after, after
+        # 缺条目必须报失败, 而不是写到邻行
+        n2, bad2 = locale_pack.apply_text_target(
+            zh_path, [("No_Such_Key", "Nope", "不存在")])
+        assert n2 == 0, n2
+        assert bad2 and "没有这个条目" in bad2[0][2], bad2
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
