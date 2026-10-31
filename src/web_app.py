@@ -44,6 +44,72 @@ def build_html(theme="light"):
     return html
 
 
+def draft_key(row):
+    """草稿移植用的稳定主键。
+
+    优先级：归档行有 entryId 就用它；JSON 语言包行用它的 key（行号恒为 0，
+    拿行号会全部撞在一起）；其余明文行用「文件 + 行号」——行号不会因为写回
+    而改变，比原文可靠，已经应用过的行原文会变成中文。
+
+    三者都拿不到时才退回原文，此时同文件同原文的多行会撞，只保第一条。
+    """
+    eid = str(row.get("entryId") or "").strip()
+    if eid:
+        return ("e", eid)
+    rel = str(row.get("file") or "").replace("\\", "/").strip().lower()
+    if str(row.get("kind") or "") == "json":
+        key = str(row.get("key") or row.get("ctx") or "").strip()
+        if key:
+            return ("k", rel, key)
+    try:
+        line = int(row.get("line"))
+    except (TypeError, ValueError):
+        line = -1
+    if line > 0:
+        return ("l", rel, line)
+    return ("o", rel, str(row.get("orig") or ""))
+
+
+def merge_drafts(old_rows, new_rows):
+    """重新提取时，把上一批还没写进磁盘的译文与「跳过」搬到新一批上。
+
+    只认「主键 + 原文都对得上」的行。模组更新后行号可能整体错位，宁可不搬，
+    也不能把 A 句的译文写到 B 句上——写错文件比丢草稿严重得多。
+
+    不搬三类：已译行（磁盘本来就是中文，不是草稿）、官方/记忆填的（重新提取
+    会再填一遍，搬了反而标成草稿）、原文变了的（草稿无处安放）。
+    """
+    stats = {"restored": 0, "skip": 0, "dropped": 0}
+    index = {}
+    for r in (old_rows or ()):
+        if r.get("already"):
+            continue
+        if str(r.get("transSrc") or "") in ("official", "official-weak", "memory"):
+            continue
+        index.setdefault(draft_key(r), r)
+    for r in (new_rows or ()):
+        old = index.get(draft_key(r))
+        if not old:
+            continue
+        old_trans = str(old.get("trans") or "").strip()
+        if str(old.get("orig") or "") != str(r.get("orig") or ""):
+            if old_trans:
+                stats["dropped"] += 1
+            continue
+        new_trans = str(r.get("trans") or "").strip()
+        manual = str(old.get("transSrc") or "") == "manual"
+        if old_trans and (not new_trans or manual):
+            r["trans"] = old_trans
+            if old.get("transSrc"):
+                r["transSrc"] = old["transSrc"]
+            r["draft"] = True
+            stats["restored"] += 1
+        if old.get("skip") and not r.get("skip"):
+            r["skip"] = True
+            stats["skip"] += 1
+    return new_rows, stats
+
+
 def fill_resource_entry_ids(items, rows):
     """给缺 entryId 的归档行按 (file, 原文) 反查补齐，返回仍缺主键的条数。
 
@@ -94,6 +160,11 @@ class Api(object):
         self._terms = None
         self.rows = []
         self.meta = {}
+        # 上一次提取的行, 用于同一份模组重新提取时把「还没写进磁盘」的草稿带过来
+        self._draft_rows = []
+        self._draft_key = None
+        # 前端本次加载带过来的最新表格（比后端缓存准，手改只在前端）
+        self._draft_pending = None
         self.root = ""          # 实际工作目录(压缩包会解到临时目录)
         self.archive = ""       # 原始压缩包路径
         # 资源模式（.archive / CR2W）的会话与产物；源码模式下保持 None
@@ -575,11 +646,17 @@ class Api(object):
         return res if isinstance(res, str) else (res[0] if res else "")
 
     # ------------------------------------------------------------ 提取
-    def load_mod(self, path, opts=None):
-        """异步: 立刻返回, 结果通过 loaded / error 事件回推"""
+    def load_mod(self, path, opts=None, drafts=None):
+        """异步: 立刻返回, 结果通过 loaded / error 事件回推。
+
+        drafts 是前端当前表格里的译文与跳过（含还没写进磁盘的）。后端缓存的
+        rows 可能比前端旧——用户在表格里手改、勾跳过都只发生在前端，所以
+        重新提取时要让前端把最新的一份带过来。
+        """
         opts = opts or {}
         if self._busy:
             return {"ok": False, "error": "busy"}
+        self._draft_pending = drafts if isinstance(drafts, list) else None
         self._busy = True
         self._emit({"type": "busy", "on": True, "text": i18n.tr("正在提取可翻译文本 ...")})
 
@@ -600,6 +677,27 @@ class Api(object):
 
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True, "started": True}
+
+    def _carry_drafts(self, rows, key, fresh=False):
+        """同一份数据源重新提取时，把上一批还没写进磁盘的草稿带过来。
+
+        key 不同（换了模组 / 换了归档 / 换了目标语言）就一律不带：不同模组的
+        行号毫无关系，串过来就是往别人身上写。用户点「重新开始」时 fresh 为
+        真，同样不带。
+
+        前端每次加载都会把当前表格的 drafts 传过来，那是唯一准确的一份；
+        后端缓存只在没传（例如命令行调用）时兜底。
+        """
+        pending = self._draft_pending
+        self._draft_pending = None
+        old = pending if pending is not None else self._draft_rows
+        stats = {"restored": 0, "skip": 0, "dropped": 0, "kept": False}
+        if not fresh and old and key == self._draft_key:
+            rows, stats = merge_drafts(old, rows)
+            stats["kept"] = True
+        self._draft_rows = rows
+        self._draft_key = key
+        return rows, stats
 
     def _do_load(self, path, opts):
         import locale_pack
@@ -852,6 +950,8 @@ class Api(object):
                 # 不阻断，只把账摊开，交给用户判断。
                 meta["conflicts"] = len(dup)
                 meta["conflictSample"] = sorted(dup)[:5]
+        dkey = ("mod", os.path.normcase(os.path.abspath(self.archive or root)))
+        rows, carry = self._carry_drafts(rows, dkey, fresh=bool(opts.get("fresh")))
         self.rows = rows
         self.meta = meta
         out = {"ok": True, "rows": rows, "meta": meta, "tmHits": tm_hits,
@@ -862,7 +962,8 @@ class Api(object):
                "target": target,
                "skippedTarget": meta.get("skipped_target", 0),
                "localeRows": len(loc_rows), "sourceRows": len(src_rows),
-               "resourceRows": len(res_rows)}
+               "resourceRows": len(res_rows),
+               "keepView": carry["kept"], "carry": carry}
         for k in ("source", "pairCount", "unpaired", "localeTotal", "sourceFiles"):
             if k in loc_info:
                 out[k] = loc_info[k]
@@ -1055,9 +1156,10 @@ class Api(object):
             return {"ok": False, "error": str(ex)}
         return {"ok": True, "path": d}
 
-    def load_resource(self, path, opts=None):
+    def load_resource(self, path, opts=None, drafts=None):
         """异步：解析归档并抽出条目，结果走 loaded 事件。"""
         opts = opts or {}
+        self._draft_pending = drafts if isinstance(drafts, list) else None
         if self._busy:
             return {"ok": False, "error": "busy"}
         self._busy = True
@@ -1130,6 +1232,9 @@ class Api(object):
         official_hits = (bstat.get("official", 0)
                          + bstat.get("officialWeak", 0))
 
+        dkey = ("archive",
+                os.path.normcase(os.path.abspath(str(target.archive_path or ""))))
+        rows, carry = self._carry_drafts(rows, dkey, fresh=bool(opts.get("fresh")))
         self.l10n_session = sess
         self.l10n_result = None
         self.l10n_undo_root = ""
@@ -1147,6 +1252,7 @@ class Api(object):
             "target": cfg["source_lang"], "source": target.name,
             "extend": target.extend_name(),
             "skippedTarget": skipped,
+            "keepView": carry["kept"], "carry": carry,
         }
 
     def _filter_l10n_rows(self, sess, cfg):
@@ -1665,8 +1771,9 @@ class Api(object):
                 "targets": [{"code": c, "label": l} for c, l in
                             locale_pack.LOCALE_LABELS.items()]}
 
-    def load_locale(self, indices, target):
+    def load_locale(self, indices, target, drafts=None):
         import locale_pack
+        self._draft_pending = drafts if isinstance(drafts, list) else None
         root = self.root or ""
         files = locale_pack.detect(root)
         picked = [files[int(i)] for i in indices if 0 <= int(i) < len(files)]
@@ -1686,10 +1793,13 @@ class Api(object):
                     hits += 1
             if hits:
                 self._memory_store.save()
+        dkey = ("locale", os.path.normcase(os.path.abspath(root)), str(target))
+        rows, carry = self._carry_drafts(rows, dkey)
         self.rows = rows
         self.meta = meta
         return {"ok": True, "rows": rows, "meta": meta, "tmHits": hits,
-                "root": root, "target": target}
+                "root": root, "target": target,
+                "keepView": carry["kept"], "carry": carry}
 
     # ------------------------------------------------------------ 机翻
     def translate(self, indices=None, skip_indices=None):
@@ -1944,6 +2054,9 @@ class Api(object):
         """清空当前提取结果和后端缓存的全部行。"""
         self.rows = []
         self.meta = {}
+        # 这一份数据源作废：下次提取不带走任何草稿
+        self._draft_rows = []
+        self._draft_key = None
         return {"ok": True}
 
     # ------------------------------------------------------------ 回填

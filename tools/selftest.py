@@ -1627,6 +1627,82 @@ def check_search_scoped():
     return True
 
 
+def check_draft_carry():
+    """重新提取时，没写进磁盘的译文与跳过要跟过来；会对错行的绝对不能跟。
+
+    用户的工作流是「翻一批 → 想核对 → 再点一次提取」，以前这一下会把还没
+    应用的几百条译文全抹掉。现在按「主键 + 原文」精确搬运，对不上就丢——
+    写错文件比丢草稿严重得多。
+    """
+    old = [
+        # 明文行：文件 + 行号对得上、原文没变 -> 搬
+        {"file": "a.reds", "line": 12, "orig": "Show Hints",
+         "trans": "显示提示", "transSrc": "manual"},
+        # 跳过标记也要搬
+        {"file": "a.reds", "line": 20, "orig": "Skip Gig",
+         "trans": "", "skip": True},
+        # 原文变了的不能搬
+        {"file": "a.reds", "line": 30, "orig": "Old text",
+         "trans": "旧译文", "transSrc": "manual"},
+        # 官方/记忆填的不是草稿，不搬（新提取会自己再填一遍）
+        {"file": "a.reds", "line": 40, "orig": "Official line",
+         "trans": "官方译文", "transSrc": "official"},
+        # 已译行是磁盘现状，不是草稿
+        {"file": "a.reds", "line": 50, "orig": "秘宝",
+         "trans": "秘宝", "already": 1},
+        # 归档行靠 entryId
+        {"file": "x.archive", "entryId": "E7", "orig": "Hidden Gems",
+         "trans": "隐藏瑰宝", "transSrc": "manual"},
+        # JSON 语言包行的行号恒为 0，只能靠 key
+        {"file": "languages/en-us.json", "line": 0, "kind": "json",
+         "key": "ui_hint", "orig": "Hint", "trans": "提示",
+         "transSrc": "manual"},
+    ]
+    new = [
+        {"file": "a.reds", "line": 12, "orig": "Show Hints", "trans": ""},
+        {"file": "a.reds", "line": 20, "orig": "Skip Gig", "trans": ""},
+        {"file": "a.reds", "line": 30, "orig": "New text", "trans": ""},
+        {"file": "a.reds", "line": 40, "orig": "Official line", "trans": "官方基线"},
+        {"file": "a.reds", "line": 50, "orig": "秘宝", "trans": "秘宝", "already": 1},
+        {"file": "x.archive", "entryId": "E7", "orig": "Hidden Gems", "trans": ""},
+        {"file": "languages/en-us.json", "line": 0, "kind": "json",
+         "key": "ui_hint", "orig": "Hint", "trans": ""},
+        {"file": "a.reds", "line": 99, "orig": "Brand new", "trans": ""},
+    ]
+    rows, stats = web_app.merge_drafts(old, new)
+    assert rows[0]["trans"] == "显示提示", rows[0]
+    assert rows[0].get("draft"), "搬过来的译文要标成草稿"
+    assert rows[1]["skip"] is True, rows[1]
+    assert rows[2]["trans"] == "", "原文变了还搬译文 = 往别人身上写"
+    assert rows[3]["trans"] == "官方基线", "官方语料不该被旧草稿盖回去"
+    assert rows[6]["trans"] == "提示", "JSON 行要靠 key 对上，不能靠恒为 0 的行号"
+    assert rows[7]["trans"] == ""
+    assert stats["restored"] == 3, stats
+    assert stats["skip"] == 1, stats
+    assert stats["dropped"] == 1, stats
+
+    api = web_app.Api()
+    # 第一次（没有上一次的 key）：不搬
+    _, st = api._carry_drafts([{"file": "a", "line": 1, "orig": "X",
+                                "trans": ""}], ("mod", "d1"))
+    assert st["kept"] is False, st
+    # 同一个数据源：前端带来的最新草稿要盖上
+    api._draft_pending = [{"file": "a", "line": 1, "orig": "X", "trans": "乙"}]
+    got, st = api._carry_drafts([{"file": "a", "line": 1, "orig": "X",
+                                  "trans": ""}], ("mod", "d1"))
+    assert st["kept"] is True and got[0]["trans"] == "乙", (st, got)
+    # 换了模组：一条都不许带过去
+    api._draft_pending = [{"file": "a", "line": 1, "orig": "X", "trans": "丙"}]
+    got, st = api._carry_drafts([{"file": "a", "line": 1, "orig": "X",
+                                  "trans": ""}], ("mod", "d2"))
+    assert st["kept"] is False and got[0]["trans"] == "", (st, got)
+    # 「重新开始」：同源也不带
+    got, st = api._carry_drafts([{"file": "a", "line": 1, "orig": "X",
+                                  "trans": ""}], ("mod", "d2"), fresh=True)
+    assert st["kept"] is False and got[0]["trans"] == "", (st, got)
+    return True
+
+
 def check_reds_evidence_tiers():
     """没有位置证据的 REDscript 字符串不再一律当界面文本。
 
@@ -2066,6 +2142,8 @@ def main():
     print("   OK: 已译行保留 (翻完再提取不丢行 / 译文可改)")
     check_search_scoped()
     print("   OK: 搜索覆盖译文 (原文/译文/文件名/上下文)")
+    check_draft_carry()
+    print("   OK: 草稿搬运 (同模组保留 / 换模组丢弃 / 原文变了不搬)")
     check_reds_evidence_tiers()
     print("   OK: REDscript 证据分级 (界面/长句/内部日志)")
     res = check_layered_extraction()

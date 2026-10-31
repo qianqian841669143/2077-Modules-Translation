@@ -19,7 +19,9 @@ const state = {
   // Vortex 活动映射：下载包 ↔ 安装缓存 ↔ 游戏部署
   vmap: null, vmapFilter: "all", vmapSearch: "",
   // 上一次机翻没翻出来的行号（「继续」只补这些）
-  trFailed: [], trBusy: false
+  trFailed: [], trBusy: false,
+  // 「重新开始」：下一次提取丢掉筛选/隐藏/草稿
+  freshLoad: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -173,6 +175,8 @@ function bind() {
     if (p) { $("path").value = p; state.modPath = p; loadMod(); }
   };
   $("btn-load").onclick = () => loadMod();
+  // 与「加载 / 提取」的区别：这个不带走筛选、隐藏和草稿，一切从磁盘重来
+  $("btn-reload-fresh").onclick = () => { state.freshLoad = true; loadMod(); };
   $("btn-apply").onclick = () => applyAll();
   $("btn-undo").onclick = () => undoLastApply();
   $("btn-export").onclick = () => exportXlsx();
@@ -269,7 +273,8 @@ function bind() {
     const p = await pywebview.api.l10n_pick();
     if (!p) return;
     setBusy(true, T("正在解包并解析归档 ..."));
-    const r = await pywebview.api.load_resource(p);
+    flushEditor();
+    const r = await pywebview.api.load_resource(p, state.opts, draftPatch());
     if (!r.ok) {
       setBusy(false);
       if (r.error !== "busy") toast(r.error || "error", "err");
@@ -475,11 +480,26 @@ function bind() {
 }
 
 /* ---------------- 数据 ---------------- */
+/* 把表格里「还没写进磁盘」的译文与跳过打包给后端。用户手改、勾跳过都只发生
+   在前端，后端缓存的 rows 比这里旧；只带需要的字段，避免整份元数据来回跑。 */
+function draftPatch() {
+  return state.raw.map((r) => ({
+    entryId: r.entryId || "", file: r.file || "", line: r.line || 0,
+    kind: r.kind || "", key: r.key || "",
+    orig: r.orig || "", trans: r.trans || "", skip: r.skip ? 1 : 0,
+    transSrc: r.transSrc || "", already: r.already ? 1 : 0,
+  }));
+}
+
 async function loadMod() {
   const path = $("path").value.trim();
   if (!path) { toast(T("请先选择有效的模组目录"), "err"); return; }
-  setBusy(true, T("正在提取可翻译文本 ..."));
-  const r = await pywebview.api.load_mod(path, state.opts);
+  flushEditor();                       // 正在编辑的那一行先结算，别丢在半路
+  const fresh = !!state.freshLoad;
+  state.freshLoad = false;
+  setBusy(true, fresh ? T("正在从磁盘重新提取（不保留状态）...")
+                      : T("正在提取可翻译文本 ..."));
+  const r = await pywebview.api.load_mod(path, { ...state.opts, fresh }, draftPatch());
   if (!r.ok) {
     setBusy(false);
     if (r.error !== "busy") toast(r.error || "error", "err");
@@ -532,8 +552,36 @@ function transTitle(r) {
   return T(label) + "：" + r.trans;
 }
 
+/* 视图状态：同一份模组重新提取时沿用上一份，换模组 / 点「重新开始」时清空。
+   只碰「看」的状态，不碰译文——译文由后端的草稿搬运负责。 */
+function resetView() {
+  state.hidden = new Set();
+  state.onlyFile = null;
+  state.transMode = "";
+  state.sel = -1;
+  state.page = 1;
+}
+
+function restoreView(prev) {
+  const files = new Set(state.rows.map((r) => r.file));
+  // 旧的文件名可能因为模组更新而消失，留着会把新文件名也藏掉
+  state.hidden = new Set(Array.from(prev.hidden).filter((f) => files.has(f)));
+  state.onlyFile = (prev.onlyFile && files.has(prev.onlyFile)) ? prev.onlyFile : null;
+  state.transMode = prev.transMode || "";
+  state.sel = (prev.sel >= 0 && prev.sel < state.rows.length) ? prev.sel : -1;
+  state.page = Math.max(1, prev.page || 1);
+}
+
 function onLoaded(r) {
   setBusy(false);
+  const prev = {
+    hidden: new Set(state.hidden),
+    onlyFile: state.onlyFile,
+    transMode: state.transMode,
+    sel: Number(state.sel),
+    page: Number(state.page) || 1,
+  };
+  const keepView = !!r.keepView;
   state.modPath = $("path").value.trim();
   state.root = r.root || state.modPath;
   state.archive = r.archive || "";
@@ -544,18 +592,20 @@ function onLoaded(r) {
   // 都必须收回，否则会去装上一批译文打包出来的归档。
   state.resResult = null;
   state.revertUndo = false;
+  state.applyErrors = [];
   state.raw = (r.rows || []).map((x, i) => ({ ...x, _i: i }));
   state.rows = state.raw;
   state.merged = false;
-  state.hidden = new Set();
-  state.onlyFile = null;
-  state.transMode = "";
+  if (keepView) restoreView(prev);
+  else resetView();
   updateScopeInfo();
   updateNoiseInfo();
-  state.sel = -1;
-  state.page = 1;
   applyModeUi();
   render();
+  // 编辑器内容跟着选中行走：重新提取后它可能指向另一行，留着旧文本会误编辑
+  const selRow = (state.sel >= 0) ? state.rows[state.sel] : null;
+  $("trans").value = selRow ? (selRow.trans || "") : "";
+  _transDirty = false;
   $("empty").textContent = (!state.rows.length && r.skippedTarget)
     ? T("没有可提取的原文（已跳过 %d 条目标语言文本）").replace("%d", r.skippedTarget)
     : T("未加载 — 先选模组目录点「加载 / 提取」");
@@ -630,7 +680,20 @@ function onLoaded(r) {
     msg += " · " + T("未生效：该目录不在 Vortex 部署清单里");
     toast(T("这个目录没有生效（Vortex 没把它部署进游戏）。\n改动写入后游戏读不到——先在 Vortex 里 Deploy，或改加载已生效的版本。"), "err");
   }
+  // 草稿搬运的账：这些译文还在内存里，磁盘上没有，别忘了点「应用」。
+  const cl = carryLine(r);
+  if (cl) msg += " · " + cl;
   setStatus(msg);
+}
+
+/* 重新提取时带过来的草稿条数，给状态栏用。 */
+function carryLine(r) {
+  const c = r.carry || {};
+  const parts = [];
+  if (c.restored) parts.push(T("沿用上次未写入的译文 %d 条").replace("%d", c.restored));
+  if (c.skip) parts.push(T("沿用上次的跳过标记 %d 条").replace("%d", c.skip));
+  if (c.dropped) parts.push(T("%d 条草稿因原文已变而丢弃").replace("%d", c.dropped));
+  return parts.join(" · ");
 }
 
 function groupFiles() {
@@ -2314,16 +2377,21 @@ async function loadLocale() {
   const skip = state.localeFiles.filter((f) => !$("loc-src").value || f.locale === $("loc-src").value);
   const picked = boxes.map((b) => skip.findIndex((f) => f.rel === b.dataset.rel));
   const target = $("loc-dst").value;
-  const r = await pywebview.api.load_locale(picked, target);
+  const r = await pywebview.api.load_locale(picked, target, draftPatch());
   if (!r.ok) { toast(r.error || "", "err"); return; }
+  const prev = {
+    hidden: new Set(state.hidden),
+    onlyFile: state.onlyFile,
+    transMode: state.transMode,
+    sel: Number(state.sel),
+    page: Number(state.page) || 1,
+  };
   state.raw = (r.rows || []).map((x, i) => ({ ...x, _i: i }));
   state.rows = state.raw;
   state.merged = false;
-  state.hidden = new Set();
-  state.onlyFile = null;
-  state.transMode = "";
+  if (r.keepView) restoreView(prev);
+  else resetView();
   updateScopeInfo();
-  state.sel = -1;
   render();
   $("empty").textContent = (!state.rows.length && r.skippedTarget)
     ? T("没有可提取的原文（已跳过 %d 条目标语言文本）").replace("%d", r.skippedTarget)
@@ -2355,6 +2423,8 @@ async function loadLocale() {
   const blLine2 = baselineLine(r);
   if (blLine2) msg += " · " + blLine2;
   else if (r.tmHits) msg += " " + T("记忆命中 %d 条").replace("%d", r.tmHits);
+  const cl2 = carryLine(r);
+  if (cl2) msg += " · " + cl2;
   setStatus(msg);
 }
 
