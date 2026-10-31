@@ -53,20 +53,31 @@ $excludes = @(
 
 $mode = if ($OneFile) { "--onefile" } else { "--onedir" }
 Write-Host "打包中 ($mode) ..." -ForegroundColor Cyan
+
+# 单文件 exe 走项目根目录那份 spec：它用 SPECPATH 拼相对路径，能入库、换机器
+# 也能复现。onedir 或改名时仍走下面的命令行形式（spec 把名字和形态写死了）。
+$spec = Join-Path $root "$Name.spec"
+$useSpec = $OneFile -and (Test-Path $spec)
 Push-Location $src
 try {
-    & $Python -m PyInstaller --noconfirm --clean $mode --windowed `
-        --name $Name `
-        --icon $icon `
-        --manifest $manifest `
-        --version-file $versionFile `
-        --add-data "$root\src\locales;locales" `
-        --add-data "$root\src\web;web" `
-        --distpath $dist `
-        --workpath $build `
-        --specpath $build `
-        @excludes `
-        $entry
+    if ($useSpec) {
+        Write-Host "使用 spec: $spec" -ForegroundColor Cyan
+        & $Python -m PyInstaller --noconfirm --clean `
+            --distpath $dist --workpath $build $spec
+    } else {
+        & $Python -m PyInstaller --noconfirm --clean $mode --windowed `
+            --name $Name `
+            --icon $icon `
+            --manifest $manifest `
+            --version-file $versionFile `
+            --add-data "$root\src\locales;locales" `
+            --add-data "$root\src\web;web" `
+            --distpath $dist `
+            --workpath $build `
+            --specpath $build `
+            @excludes `
+            $entry
+    }
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller 失败 (exit $LASTEXITCODE)" }
 }
 finally { Pop-Location }
