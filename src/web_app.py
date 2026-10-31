@@ -1165,8 +1165,17 @@ class Api(object):
         if cfg["skip_target"]:
             skipped = int(langs.get(target_lang, 0))
 
+        # 目标语言里已有的译文先配回源语言行：模组自带 zh-cn 时（如 Nearby Auto
+        # Loot 这种 19 语言全的），作者的中文比机翻好，不该被一键机翻盖掉。
+        # 配不到的照旧留空，机翻只补真正缺的条目。
+        try:
+            from localization import pipeline as Lpipe
+            all_rows = Lpipe.pair_existing(sess.rows, target_lang, "zh-CN", src)
+        except Exception:
+            all_rows = sess.rows
+
         keep = []
-        for r in sess.rows:
+        for r in all_rows:
             lg = r.get("lang") or ""
             if cfg["skip_target"] and lg == target_lang:
                 continue

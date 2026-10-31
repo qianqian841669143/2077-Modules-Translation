@@ -135,6 +135,34 @@ def is_loc_key(s):
     return caps >= 2
 
 
+# @runtimeProperty("ModSettings.displayName", "NearbyLoot-Enabled") —— 第二个参数
+# 是 onscreens 的**查表键**，不是文案：Codeware 拿它去 GetLocalizedText，查不到
+# 才回退显示键本身。真文案在 mod 归档的 localization 里。
+# is_loc_key 要求「三段以上」，而 NearbyLoot-Enabled / NearbyLoot-Sound 只有两段，
+# 于是被当成界面文本翻掉——写回 .reds 就把查表键改成了中文，引用当场断掉，
+# 表面上还正常（回退显示的就是那句中文），是最容易被忽略的一类损坏。
+_PROP_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:[-._][A-Za-z0-9_]+)+$")
+# 段内还有大写拐点：NearbyLoot / GeneralCategory。普通连字符词组（Auto-Drive）没有。
+_CAMEL_SEG_RE = re.compile(r"^[A-Za-z]+[A-Z]")
+
+
+def is_prop_loc_key(s):
+    """@runtimeProperty 第二个参数是不是查表键。
+
+    比 is_loc_key 松（允许两段），但只在「已经确定这个位置就是 key 字段」
+    时才用，所以不会误伤普通文案。
+    """
+    t = (s or "").strip()
+    if not t or len(t) > 64 or re.search(r"\s", t):
+        return False
+    if not _PROP_KEY_RE.match(t):
+        return False
+    segs = [x for x in re.split(r"[-._]", t) if x]
+    if any(_CAMEL_SEG_RE.match(x) for x in segs):
+        return True
+    return len(segs) >= 3
+
+
 def is_translatable(s):
     """严格判定: 值得翻译的界面/设置文本"""
     if not s:
@@ -1185,6 +1213,7 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
 
     rp_re = re.compile(r"@runtimeProperty\(\s*\"([^\"]*)\"\s*,\s*\"((?:[^\"\\]|\\.)*)\"\s*\)")
     rp_types = {}
+    rp_keys = set()          # 第二个参数是查表键的 (行, 值)
     if ext != ".xml":
         for m in rp_re.finditer(text):
             key = m.group(1).split(".")[-1]
@@ -1193,6 +1222,10 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
                 continue
             line = text.count("\n", 0, m.start(2)) + 1
             rp_types[(line, m.group(2))] = (typ, "@runtimeProperty(" + m.group(1) + ")")
+            # "ModSettings.mod", "Nearby Auto Loot" 这种带空格的是真名字，
+            # 保持可翻；无空格的连字符串才是查表键。
+            if is_prop_loc_key(m.group(2)):
+                rp_keys.add((line, m.group(2)))
     for lit in lits:
         if lit.prefix and lit.prefix in _REDS_PREFIX:
             # r"..." ResRef / n"..." CName / t"..." TweakDBID：都是引擎标识符，
@@ -1228,6 +1261,11 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
         if is_loc_key(lit.inner):
             # 本地化查表键：它的译文在 mod 归档的 onscreens 里，属于资源层。
             # 在源码层翻它只会造出一堆假的「待翻行」。
+            drop(NOISE.FAMILY_LOCKEY)
+            continue
+        if (lit.line, lit.inner) in rp_keys:
+            # @runtimeProperty("ModSettings.displayName", "NearbyLoot-Enabled")：
+            # 两段式查表键，is_loc_key 的「三段」门槛认不出来，这里靠位置证据补上。
             drop(NOISE.FAMILY_LOCKEY)
             continue
         if lit.start in codeware_keys:        # this.Text 的第一个参数是 key, 不翻译

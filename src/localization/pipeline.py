@@ -40,6 +40,77 @@ def _norm(text):
 _LANG_RE = re.compile(r"^[a-z]{2}-[a-z]{2}$")
 
 
+def strip_lang(rel):
+    """把路径里的语言标记抹成 `*`，用于跨语言配对同一份资源。
+
+        base\\localization\\en-us\\onscreens\\nearby-loot.json
+        base\\localization\\zh-cn\\onscreens\\nearby-loot.json
+     —— 两者统一成 base\\localization\\*\\onscreens\\nearby-loot.json
+    """
+    parts = [p for p in _norm(rel).split("\\") if p]
+    if not parts:
+        return ""
+    stem = parts[-1]
+    low = stem.lower()
+    if low.endswith(".json"):
+        low = low[:-5]
+    if _LANG_RE.match(low):
+        parts[-1] = "*"
+    for i, p in enumerate(parts[:-1]):
+        if _LANG_RE.match(p.lower()):
+            parts[i] = "*"
+    return "\\".join(parts).lower()
+
+
+def pair_existing(rows, target_lang, target_locale="", src_lang="en-us"):
+    """把目标语言文件里**已经有的译文**配到源语言行上。
+
+    模组自带 zh-cn 时（本站这类 mod 很常见），以前这几行会被整批丢掉，
+    界面于是把它们当成「还没翻」，一键机翻再把作者写好的中文覆盖掉——
+    翻得还不如原作者的版本。这里改成：目标语言里已有且确实是中文的，
+    直接填进译文列并标 already，机翻只补真正缺的条目。
+
+    只动 src_lang 的行：多语言 mod 里 de-de / fr-fr 这些行同样能被配对（路径
+    抹掉语言后一模一样），但它们不是原文，拿去当待翻行会把译文写成中文。
+
+    返回新的行列表，不修改传入的 row（sess.rows 还要用于回写定位）。
+    """
+    tgt_lang = target_lang or DEFAULT_LANG
+    src_lang = src_lang or "en-us"
+    have = {}
+    for r in rows:
+        if (r.get("lang") or "") != tgt_lang:
+            continue
+        text = str(r.get("orig") or "").strip()
+        if not text:
+            continue
+        key = (strip_lang(r.get("file")), str(r.get("entryId") or ""))
+        have.setdefault(key, text)
+    if not have:
+        return list(rows)
+
+    from mod_text_engine import is_target_language_text as _is_tgt
+
+    out = []
+    for r in rows:
+        if (r.get("lang") or "") != src_lang:
+            out.append(r)
+            continue
+        orig = str(r.get("orig") or "").strip()
+        key = (strip_lang(r.get("file")), str(r.get("entryId") or ""))
+        cur = have.get(key)
+        # 三种情况都当「没翻」：查不到、与原文一字不差（作者照抄的占位英文）、
+        # 不是目标语言的文字（作者把 en-us 复制了一份当 zh-cn）。
+        if not cur or cur == orig or not _is_tgt(cur, target_locale or "zh-CN"):
+            out.append(r)
+            continue
+        r = dict(r)
+        r["trans"] = cur
+        r["already"] = 1
+        out.append(r)
+    return out
+
+
 def _lang_of_rel(rel):
     """从资源路径判断语言。
 

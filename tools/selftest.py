@@ -2167,6 +2167,88 @@ def check_lua_lang_sections():
     assert "Only One Language Here" in [it[3] for it in items2], items2
 
 
+def check_prop_loc_key():
+    """@runtimeProperty 第二个参数若已经是查表键, 就不能再当文案翻。
+
+    回归背景: Nearby Auto Loot 的
+        @runtimeProperty("ModSettings.displayName", "NearbyLoot-Enabled")
+    这类 key 只有两段, 达不到 is_loc_key 的「三段」门槛, 于是一个 20 条的
+    .reds 里 13 条都是查表键。翻掉再写回就把 key 改成了中文, 归档里 zh-cn
+    的条目再也查不到 —— 界面上因为 Codeware 查不到会回退显示 key 本身,
+    看起来反而「正常」, 是最不容易发现的一类损坏。
+    """
+    src = "\n".join([
+        'public class S extends ScriptableSystem {',
+        '    @runtimeProperty("ModSettings.mod", "Nearby Auto Loot")',
+        '    @runtimeProperty("ModSettings.displayName", "NearbyLoot-Enabled")',
+        '    public let a: Bool = true;',
+        '    @runtimeProperty("ModSettings.displayName", "NearbyLoot-GeneralCategory")',
+        '    @runtimeProperty("ModSettings.category", "NearbyLoot-QuestCategory")',
+        '    @runtimeProperty("ModSettings.category.order", "1")',
+        '    public let b: Bool = true;',
+        '}',
+    ])
+    noise = {}
+    rows = E._extract_reds(src, ".reds", target_locale="zh-CN", stats={},
+                           loose=True, trace=False, noise=noise)
+    origs = [r[3] for r in rows]
+    for key in ("NearbyLoot-Enabled", "NearbyLoot-GeneralCategory",
+                "NearbyLoot-QuestCategory"):
+        assert key not in origs, (key, origs)
+    # 带空格的是真名字, 照旧可翻 (模组名的回退文案)
+    assert "Nearby Auto Loot" in origs, origs
+    # 数值属性根本不进表
+    assert "1" not in origs, origs
+    assert noise.get(NOISE.FAMILY_LOCKEY, 0) >= 3, noise
+    # 形态判据: 只认「无空格 + 段内大写拐点或三段以上」
+    for ok in ("Nearby Auto Loot", "Auto-Drive", "1.0", "Show Dev Option"):
+        assert not E.is_prop_loc_key(ok), ok
+    for bad in ("NearbyLoot-Enabled", "NearbyLoot-GeneralCategory",
+                "UI-Labels-Resume", "Gameplay-Guard-SwitchSeats"):
+        assert E.is_prop_loc_key(bad), bad
+
+
+def check_pair_existing():
+    """归档自己带目标语言时, 作者写好的译文要当基线, 不能被机翻覆盖。
+
+    回归背景: Nearby Auto Loot 自带 19 种语言, zh-cn 14 条全是作者的中文。
+    资源层以前把目标语言文件整批丢掉, 于是 14 行全被当成「还没翻」, 一键
+    机翻会把「拾取容器物品」换成「战利品容器」这种更差的译法。
+    """
+    from localization import pipeline as Lpipe
+
+    EN = "base\\localization\\en-us\\onscreens\\x.json"
+    ZH = "base\\localization\\zh-cn\\onscreens\\x.json"
+    DE = "base\\localization\\de-de\\onscreens\\x.json"
+    rows = [
+        {"file": EN, "lang": "en-us", "entryId": "K1", "orig": "Loot containers"},
+        {"file": ZH, "lang": "zh-cn", "entryId": "K1", "orig": "拾取容器物品"},
+        {"file": DE, "lang": "de-de", "entryId": "K1", "orig": "Behälter"},
+        # 作者把英文原样抄进 zh-cn 当占位: 不能当成已译
+        {"file": EN, "lang": "en-us", "entryId": "K2", "orig": "Quest loot"},
+        {"file": ZH, "lang": "zh-cn", "entryId": "K2", "orig": "Quest loot"},
+        # zh-cn 里根本没有这一条
+        {"file": EN, "lang": "en-us", "entryId": "K3", "orig": "Radius (m)"},
+        # 只有 en-us 与 zh-cn 的路径差异, 条目标识对得上
+        {"file": EN, "lang": "en-us", "entryId": "K4", "orig": "Enable nearby pickup"},
+        {"file": ZH, "lang": "zh-cn", "entryId": "K4", "orig": "启用附近拾取"},
+    ]
+    out = Lpipe.pair_existing(rows, "zh-cn", "zh-CN", "en-us")
+    got = {(r["entryId"], r["lang"]): r for r in out}
+    assert got[("K1", "en-us")].get("trans") == "拾取容器物品", got[("K1", "en-us")]
+    assert got[("K1", "en-us")].get("already") == 1
+    assert got[("K4", "en-us")].get("trans") == "启用附近拾取"
+    # 占位英文 / 缺条目: 保持待翻
+    assert not got[("K2", "en-us")].get("trans")
+    assert not got[("K3", "en-us")].get("trans")
+    # 其它语言的行不许被写成中文 (它们不是原文)
+    assert not got[("K1", "de-de")].get("trans"), got[("K1", "de-de")]
+    # 传入的 row 不能被就地改动: sess.rows 还要用来回写定位
+    assert all(not r.get("trans") for r in rows)
+    # 路径里的语言段被抹成 * 后两侧一致
+    assert Lpipe.strip_lang(EN) == Lpipe.strip_lang(ZH) == Lpipe.strip_lang(DE)
+
+
 def check_identifier_guard():
     """标识符 / 本地化键守卫。
 
@@ -2492,6 +2574,10 @@ def main():
     print("   OK: 应用时补条目名 (前端不带 ctx 也能按键写回)")
     check_lua_lang_sections()
     print("   OK: lua 多语言段 (只取 en + 目标语言 / 段外不受影响)")
+    check_prop_loc_key()
+    print("   OK: @runtimeProperty 两段式查表键 (不再当成界面文本)")
+    check_pair_existing()
+    print("   OK: 归档自带中文当基线 (占位英文/缺条目不误判)")
     check_identifier_guard()
     print("   OK: 标识符/本地化键守卫 (n\"\" 引用与查表键不参与翻译)")
     res3 = check_resource_layer()
