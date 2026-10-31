@@ -222,6 +222,52 @@ ChineseSimplified.reds:59 `")"`。其余 37 条原文已是中文。
 两次（`(触发 ragdoll 状态`、`(一辆摩托车在你刚被命名后撞上了你`），像两条不同原文拿到
 了同一句译文，需要单独核。
 
+## P20 两个静默失败：非 ASCII 标识符让整份文件消失 / 目标语言判断大小写敏感
+
+扫安装缓存目录（286 个模组）时撞到的，两个都表现为「看起来没问题，其实全错」。
+
+**A. `scan_source` 遇到非 ASCII 标识符直接抛异常，整份文件被吞掉**
+
+```python
+if c.isalpha() or c == "_":
+    m = IDENT_TOK_RE.match(text, i)     # 纯 ASCII 正则
+    toks.append(Tok("ident", m.group(0), ...))   # CJK 时 m 为 None -> AttributeError
+```
+
+`str.isalpha()` 对中日韩字符返回 True，`IDENT_TOK_RE` 匹配不到 → `m.group(0)` 抛
+`AttributeError`。`extract_from_file` / `extract_root_ex` 外层是 `except Exception`，
+于是**这份文件一条都不进表**，界面只表现为「这个模组没有文本」。`c.isdigit()` 同理
+（全角数字 `０-９` 会命中 `isdigit()` 但匹配不到 `NUM_TOK_RE`）。
+
+实例：INCF-CORE.reds（1.4）在 07:03 被一次 `particles → 粒子效果` 的整文件替换改坏，
+`node.particleSystem` 变 `node.粒子效果ystem`、`CParticleSystem` 变 `C粒子效果ystem`、
+`emitter.maxParticles` 变 `emitter.max粒子效果`，于是这份 13 KB 的模组在扫描里被
+判成「有源码但提取不到文案」。文件本身当时也确实编译不过（redscript 整层不加载），
+只是工具没报错、还给了个「没有文本」的结论。
+
+改法：`if c.isascii() and (c.isalpha() or c == "_")`，数字同理；并且
+`extract_root_ex` 把解析异常计数进 `meta["parseErrors"]`，加载后状态栏报
+「N 个文件解析失败」，别让文件无声消失。
+
+**B. `is_target_language_text` 精确查 `_TARGET_SCRIPT_RE`，大小写不一致就静默返回 False**
+
+```python
+_TARGET_SCRIPT_RE = {"zh-CN": ..., "zh-TW": ..., "ja-JP": ...}
+rx = _TARGET_SCRIPT_RE.get(target_locale)      # "zh-cn" -> None -> False
+```
+
+只有 app 内部用 `locale_pack.target_code()` 吐出的大写 `zh-CN` 才对得上；任何地方给
+`zh-cn` / `zh_CN`（外部脚本、批量入口、以后新增的调用）都会让**所有中文行重新变成
+待翻候选**。实测同一份 SenSen Core：传 `zh-cn` 得到 389 条「待翻」，传 `zh-CN`
+得到 2 条待翻 + 387 条已译。
+
+改法：`_locale_key()` 就写在下面几行却没人用——`is_target_language_text` 里先
+`_locale_key(target_locale)` 归一化再查表，同时把 `_TARGET_SCRIPT_RE` 的键也改成
+小写。
+
+两个都属于「静默给出错误结论」，比崩溃更难发现；A 会让模组凭空少掉文本，B 会把
+已经翻好的行当成待翻再翻一遍。
+
 ## 已知但不打算改
 
 - 不提供「忽略骨架校验」开关。那等于把「写坏整层脚本、游戏里 redscript 全不加载」
