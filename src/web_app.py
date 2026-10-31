@@ -1697,7 +1697,13 @@ class Api(object):
                 "root": root, "target": target}
 
     # ------------------------------------------------------------ 机翻
-    def translate(self, indices=None, skip_indices=None):
+    def translate(self, indices=None, skip_indices=None, force=False):
+        """机翻。force=True 是「重新翻译」：跳过基线，把这几行重新发给模型。
+
+        普通机翻会先查官方语料与翻译记忆，命中就不发模型。用户右键点
+        「重新翻译」时要的正好相反——手上有译文、但不想再用它，希望模型
+        重新给一个。所以 force 模式既不看现有译文，也不查基线。
+        """
         import mt_client
         if self._busy:
             return {"ok": False, "error": "busy"}
@@ -1728,7 +1734,7 @@ class Api(object):
 
         def work():
             try:
-                self._run_translate(targets, base, model, tgt)
+                self._run_translate(targets, base, model, tgt, force=bool(force))
             except Exception as ex:
                 self._emit({"type": "error", "message": str(ex)})
             finally:
@@ -1770,7 +1776,7 @@ class Api(object):
         self._emit(rep)
         return rep
 
-    def _run_translate(self, targets, base, model, tgt):
+    def _run_translate(self, targets, base, model, tgt, force=False):
         # translate() 与 _run_translate() 是两个独立方法。mt_client 必须在
         # 真正执行翻译的方法里导入；只在 translate() 内 import 会让工作线程
         # 报 NameError: name 'mt_client' is not defined，表现为每次机翻都失败。
@@ -1787,14 +1793,21 @@ class Api(object):
         before = {}
         for i in targets:
             before[i] = str(rows[i].get("trans") or "").strip()
-        bstat = self._baseline_fill([rows[i] for i in targets])
+        if force:
+            # 「重新翻译」：基线整个跳过。官方语料与翻译记忆里存的多半就是
+            # 用户当下不满意的那个译法，查了等于原样填回来。
+            bstat = {"official": 0, "officialWeak": 0}
+        else:
+            bstat = self._baseline_fill([rows[i] for i in targets])
         # 官方给的都算 official：稳的 + 待核的都省掉了模型调用
         official_n = (int(bstat.get("official", 0) or 0)
                       + int(bstat.get("officialWeak", 0) or 0))
         hits = []
         misses = []
         kept = 0
-        for i in targets:
+        if force:
+            misses = list(targets)
+        for i in ([] if force else targets):
             now = str(rows[i].get("trans") or "").strip()
             if now and not before[i]:
                 # 带上来源，前端才能画色条、导出才能写对「译文来源」。

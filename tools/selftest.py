@@ -1683,6 +1683,7 @@ def check_clear_resync():
       2. 机翻结果同时写进了 TM，清空后 _baseline_fill 原样填回来。
     """
     import json
+    import time
     import tm as TMod
 
     root = os.path.dirname(HERE)
@@ -1726,6 +1727,9 @@ def check_clear_resync():
         start = js.index("function filtered()")
         body = js[start:js.find("\nfunction ", start + 1)]
         assert '"原文=译文"' in body, "筛选只是加进了列表，没进过滤逻辑"
+        # 已译行（引擎判定本来就是目标语言）必须在筛选里被排除，
+        # 否则自带中文的模组一筛就是整张表
+        assert "if (r.already) return false;" in body, "「原文=译文」没排除已译行"
         for marker in ("function syncClearedRows", "clear_row_translations",
                        "await _transSync"):
             assert marker in js, marker
@@ -1737,6 +1741,71 @@ def check_clear_resync():
                   else len(seg)]
         assert "enterTransMask(" in seg, "补翻没有进遮罩"
         assert 'btn-tr-all").textContent' not in js, "还在改「翻译全部未填」的文案"
+        # 右键「重新翻译」：入口、处理器、以及交给后端的 force 标志
+        assert 'data-act="retrans"' in js, "右键菜单没有「重新翻译」"
+        assert "function retranslateRow" in js, "重新翻译没有处理器"
+        assert "translateRows(idx, true)" in js, "重新翻译没走 force 模式"
+
+        # ---- force 重翻：已有译文的行也要真的再问一次模型
+        import types
+        import baseline as Lbase
+
+        tmp2 = tempfile.mkdtemp()
+        try:
+            api2 = web_app.Api()
+            api2.settings["target_lang"] = "简体中文"
+            api2.settings["api_base"] = "http://127.0.0.1:1/v1"
+            api2.settings["local_model_enabled"] = True
+            api2.rows = [{"orig": "Off", "line": 1, "file": "a.reds",
+                          "trans": "旧译"}]
+            api2._memory = TMod.Memory(os.path.join(tmp2, "memory.json"))
+
+            class _Win:
+                def evaluate_js(self, script):
+                    pass
+
+            class _Gloss:
+                def relevant(self, texts):
+                    return []
+
+                def prompt_block(self, terms):
+                    return ""
+
+            api2._window = _Win()
+            api2._glossary = _Gloss()
+
+            calls = {"n": 0}
+
+            def fake_batch(base, model, texts, target=None, glossary=""):
+                calls["n"] += 1
+                return ["新译"] * len(texts)
+
+            fake_mt = types.ModuleType("mt_client")
+            fake_mt.resolve_model = lambda *a, **k: "fake"
+            fake_mt.translate_batch = fake_batch
+            fake_mt.warmup = lambda *a, **k: (False, "fake")
+            old_mt = sys.modules.get("mt_client")
+            sys.modules["mt_client"] = fake_mt
+            old_load = Lbase.load_official
+            Lbase.load_official = lambda enabled, lang: (None, "")
+            try:
+                got = api2.translate([0], [], force=True)
+                assert got.get("ok"), got
+                for _ in range(300):
+                    if not api2._busy:
+                        break
+                    time.sleep(0.02)
+                assert not api2._busy, "重翻线程没有结束"
+                assert calls["n"] == 1, "「重新翻译」没有真的发给模型"
+                assert api2.rows[0]["trans"] == "新译", api2.rows
+            finally:
+                Lbase.load_official = old_load
+                if old_mt is None:
+                    sys.modules.pop("mt_client", None)
+                else:
+                    sys.modules["mt_client"] = old_mt
+        finally:
+            shutil.rmtree(tmp2, ignore_errors=True)
 
         with open(os.path.join(root, "src", "locales", "en-US.json"),
                   encoding="utf-8-sig") as f:

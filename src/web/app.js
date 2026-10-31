@@ -229,6 +229,10 @@ function bind() {
       if (selRow) clearRowTranslation(selRow);
       return;
     }
+    if (act === "retrans") {
+      if (selRow) retranslateRow(selRow);
+      return;
+    }
     // 第二类：作用在右击行所属的文件上。
     if (act === "skip-file") {
       const allSkipped = !state.rows.some((x) => x.file === r.file && !x.skip);
@@ -693,6 +697,8 @@ function filtered() {
     // 原文=译文：模型偶尔把原文原样吐回来（专名、术语、偷懒），表面上
     // 「已填」，其实一个字都没翻。这类行只能靠比对才找得出来。
     if (f === "原文=译文") {
+      // 引擎已判定「本来就是目标语言」的行：trans 预填成原文，不是漏翻
+      if (r.already) return false;
       const o = String(r.orig || "").trim();
       const t = String(r.trans || "").trim();
       if (!t || o !== t) return false;
@@ -1061,6 +1067,7 @@ function showCtxMenu(x, y, row, cell) {
     `<div class="item${dis1}" data-act="locate">${esc(T("定位到已选择的行"))}</div>` +
     `<div class="item${dis1}" data-act="toggle-skip">${esc(skipLabel)}</div>` +
     `<div class="item${dis1}" data-act="clear-row-trans">${esc(T("清空选中的行译文"))}</div>` +
+    `<div class="item${dis1}" data-act="retrans">${esc(T("重新翻译选中的行"))}</div>` +
     `<div class="sep"></div>` +
     `<div class="item" data-act="skip-file">${esc(
       allSkipped ? T("恢复此文件所有行") : T("跳过此文件所有行"))}</div>` +
@@ -1485,7 +1492,9 @@ function syncClearedRows(indices) {
   return _transSync;
 }
 
-async function translateRows(indices) {
+/* force=true 是「重新翻译」：手上已有的译文不算数，后端也不许查基线。
+   普通机翻要跳过已填的行，重翻则相反——要的正是把那几行重新发出去。 */
+async function translateRows(indices, force) {
   if (state.busy) return;
   await _transSync;   // 刚清空的行要先落到后端，否则会被当成「已填」跳过
   const skipIndices = state.raw
@@ -1502,7 +1511,7 @@ async function translateRows(indices) {
     targetIndices = Array.from(new Set((indices || []).map((i) => Number(i))
       .filter((n) => Number.isInteger(n))));
     candidates = targetIndices.map((i) => state.raw.find((r) => Number(r._i) === i))
-      .filter((r) => r && !r.skip && !String(r.trans || "").trim());
+      .filter((r) => r && !r.skip && (force || !String(r.trans || "").trim()));
   }
   const skipped = state.raw.filter((r) => r.skip).length;
   if (!candidates.length) {
@@ -1511,7 +1520,7 @@ async function translateRows(indices) {
       : T("没有「未填译文」的行。"), "err");
     return;
   }
-  const r = await pywebview.api.translate(targetIndices, skipIndices);
+  const r = await pywebview.api.translate(targetIndices, skipIndices, !!force);
   if (!r.ok) {
     if (r.error === "busy") return;
     toast(r.error || "error", "err");
@@ -1522,6 +1531,27 @@ async function translateRows(indices) {
   let msg = T("机翻准备中 ... 共 %d 条").replace("%d", r.total);
   if (skipped) msg += " · " + T("已跳过 %d 条").replace("%d", skipped);
   setStatus(msg);
+}
+
+/* 右键「重新翻译选中的行」：先清掉这行的译文（后端那份 + 对应记忆），
+   再以 force 模式发出去。不先清的话后端会把它当成「本来就有译文」跳过；
+   不 force 的话基线又会把用户不满意的旧译法原样填回来。 */
+async function retranslateRow(row) {
+  if (state.busy || !row) return;
+  if (row.skip) { toast(T("此行已跳过翻译"), "err"); return; }
+  const idx = originalIndicesForRow(row);
+  if (!idx.length) return;
+  await syncClearedRows(idx);
+  row.trans = "";
+  delete row.transSrc;
+  (row.dups || []).forEach((d) => { d.trans = ""; delete d.transSrc; });
+  const want = new Set(idx);
+  state.raw.forEach((raw) => {
+    if (want.has(Number(raw._i))) { raw.trans = ""; delete raw.transSrc; }
+  });
+  state.dirty = true;
+  render();
+  await translateRows(idx, true);
 }
 
 /* ---------------- 机翻遮罩 ---------------- */
