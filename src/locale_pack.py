@@ -508,6 +508,13 @@ CODEWARE_MODULE_RE = re.compile(
 PROVIDER_CASE_RE = re.compile(
     r'\bcase\s+n"([^"]+)"\s*:\s*return\s+new\s+([A-Za-z_]\w*)\s*\(\s*\)\s*;',
     re.M)
+# 任何类型声明 (class / struct / enum / bitfield), 用来判断一个 .reds 到底
+# 是不是「只有语言包」的纯文件
+REDS_TYPE_RE = re.compile(
+    r"^[ \t]*(?:(?:public|private|protected|abstract|final|native|cb)\s+)*"
+    r"(?:class|struct|enum|bitfield)\s+([A-Za-z_]\w*)", re.M)
+# REDscript 注入注解 (@addField/@wrapMethod/...), @if/@else 不算
+REDS_ANNOTATION_RE = re.compile(r"^[ \t]*@(?!if\b|else\b)([A-Za-z_]\w*)", re.M)
 IMPORT_LINE_RE = re.compile(
     r"^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)\s*;?\s*$", re.M)
 
@@ -525,6 +532,52 @@ def _write_reds(path, text):
 def _module_name(text):
     m = CODEWARE_MODULE_RE.search(text or "")
     return m.group(1) if m else ""
+
+
+def reds_is_pure_package(text):
+    """判断一个 .reds 能不能整文件复制成另一语言的语言包。
+
+    只有「文件里除了这个 ModLocalizationPackage 类什么都没有」时才安全:
+    复制整份模组源码会产生重复类型, REDscript 直接报 SYM_REDEFINITION,
+    整个脚本层都编译不过 (不只是这个模组)。带 @addField/@wrapMethod 之类的
+    注入也一样, 复制后注入会执行两次。
+    """
+    text = text or ""
+    classes = CODEWARE_PACKAGE_RE.findall(text)
+    if len(classes) != 1:
+        return False
+    if len(REDS_TYPE_RE.findall(text)) != 1:
+        return False
+    return not REDS_ANNOTATION_RE.search(text)
+
+
+def _class_owners(root, module, class_name, exclude=None):
+    """同一 module 里还有谁声明了这个类名。"""
+    out = []
+    if not root or not class_name:
+        return out
+    skip = os.path.normcase(os.path.abspath(exclude)) if exclude else ""
+    pat = re.compile(r"\bclass\s+" + re.escape(class_name) + r"\b")
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d.lower() not in
+                       ("redmod_backup", ".git", "node_modules", "__pycache__")]
+        for fn in filenames:
+            if not fn.lower().endswith(".reds"):
+                continue
+            path = os.path.join(dirpath, fn)
+            if skip and os.path.normcase(os.path.abspath(path)) == skip:
+                continue
+            try:
+                text = _read_reds(path)
+            except Exception:
+                continue
+            if module and _module_name(text) != module:
+                continue
+            if not pat.search(text):
+                continue
+            out.append(os.path.relpath(path, root).replace("\\", "/"))
+    out.sort()
+    return out
 
 
 def _parse_imports(text):
@@ -867,8 +920,6 @@ def prepare_codeware_package(root, src_rel, tgt_rel, target_locale=None,
             locale = canonical_locale(os.path.splitext(os.path.basename(tgt_rel))[0])
         except Exception:
             locale = None
-    class_name = _reds_class_for_target(tgt_rel, locale)
-    report["class"] = class_name
     src_module = _module_name(src_text)
     target_dir = os.path.dirname(dst)
 
@@ -895,6 +946,47 @@ def prepare_codeware_package(root, src_rel, tgt_rel, target_locale=None,
             candidates.append((999, prov_path, prov_text))
     else:
         candidates = _provider_matches(root, src_module, target_dir)
+
+    # 类名优先沿用 Provider 里已经写好的那个名字。作者的命名通常是
+    # 「DVCore_English / DVCore_ChineseSimplified」——一个 module 下并列几十个
+    # 语言包，靠前缀区分；一律改写成裸的 ChineseSimplified 会让几十个文件撞
+    # 同一个类名 (SYM_REDEFINITION)，整个脚本层都编译不过。
+    #
+    # 同一个 module 下也可能并列几十个 Provider，每个只管自己目录里的那个
+    # 语言包。范围不缩小，就会把 zh-cn 分支写进别人的 Provider（指向别人的
+    # 包类），31 个语言包会互相顶掉。
+    cur_cls = m.group(1)
+
+    def _claims(text):
+        return bool(re.search(r"\bnew\s+" + re.escape(cur_cls) + r"\s*\(", text))
+
+    if not exact_rels:
+        claimed = [c for c in candidates if _claims(c[2])]
+        if not claimed:
+            claimed = [c for c in candidates
+                       if os.path.normcase(os.path.dirname(c[1])) ==
+                       os.path.normcase(target_dir)]
+        if claimed:
+            candidates = claimed
+
+    pref = ""
+    for _score, _ppath, _ptext in candidates:
+        for _loc, _cls in PROVIDER_CASE_RE.findall(_ptext):
+            if (_loc or "").lower() == (locale or "").lower():
+                pref = _cls
+                break
+        if pref:
+            break
+    class_name = pref or _reds_class_for_target(tgt_rel, locale)
+    report["class"] = class_name
+    if m.group(1) != class_name:
+        owners = _class_owners(root, src_module, class_name, exclude=dst)
+        if owners:
+            report["applied"] = False
+            report["error"] = (
+                "语言包类名 %s 已被 %s 占用, 改名会产生重复类型, 已跳过"
+                % (class_name, owners[0]))
+            return report
 
     def write_text(path, text):
         if before_write:
@@ -932,11 +1024,26 @@ def prepare_codeware_package(root, src_rel, tgt_rel, target_locale=None,
 
 
 def ensure_target(root, entry_rel, target_rel_path):
-    """目标文件不存在时, 从源文件复制一份"""
+    """目标文件不存在时, 从源文件复制一份
+
+    ``.reds`` 只允许复制「纯语言包」文件。模组把语言包和逻辑写在同一个
+    .reds 里时 (INCF-CORE 就是), 整文件复制会把 CompatibilityManager /
+    RequirementsPopup / @addField 全部声明两遍, REDscript 报
+    SYM_REDEFINITION, 整个脚本层都加载不了。
+    """
     src = os.path.join(root, entry_rel.replace("/", os.sep))
     dst = os.path.join(root, target_rel_path.replace("/", os.sep))
     if os.path.exists(dst):
         return dst
+    if dst.lower().endswith(".reds"):
+        try:
+            text = _read_reds(src)
+        except Exception as ex:
+            raise ValueError("读取源文件失败: %s" % ex)
+        if not reds_is_pure_package(text):
+            raise ValueError(
+                "该文件把语言包和模组逻辑写在同一个 .reds 里, 整文件复制会产生"
+                "重复类型 (REDscript SYM_REDEFINITION), 已拒绝; 请用源码模式改写")
     os.makedirs(os.path.dirname(dst) or root, exist_ok=True)
     shutil.copy2(src, dst)
     return dst

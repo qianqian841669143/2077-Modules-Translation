@@ -2515,6 +2515,159 @@ def check_noise_rules():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _lp_write(root, rel, text):
+    p = os.path.join(root, rel.replace("/", os.sep))
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    return p
+
+
+def check_locale_pack_names():
+    """语言包类名沿用 Provider 的命名, 撞名时放弃改名。
+
+    回归背景 (2026-10-31, DigitalVixenCore): 一个 module 下并列 31 个子语言包,
+    作者用 ``DVCore_ChineseSimplified`` / ``TrueFirstPerson_ChineseSimplified``
+    区分。工具一律改写成裸的 ``ChineseSimplified``, 31 个类名撞在一起,
+    REDscript 报 SYM_REDEFINITION —— 整个 redscript 层编译失败, 所有模组失效。
+    """
+    root = tempfile.mkdtemp(prefix="lp_names_")
+    try:
+        def pkg(mod, cls, text):
+            return ("module %s\n\nimport Codeware.Localization.*\n\n"
+                    "public class %s extends ModLocalizationPackage {\n"
+                    "  protected func DefineTexts() -> Void {\n"
+                    '    this.Text("K", "%s");\n  }\n}\n' % (mod, cls, text))
+
+        def prov(mod, cls, cases):
+            body = "".join('      case n"%s": return new %s();\n' % c for c in cases)
+            return ("module %s\n\nimport Codeware.Localization.*\n\n"
+                    "public class %s extends ModLocalizationProvider {\n"
+                    "  public func GetPackage(language: CName) -> ref<ModLocalizationPackage> {\n"
+                    "    switch language {\n%s"
+                    "      default: return null;\n    };\n  }\n}\n"
+                    % (mod, cls, body))
+
+        # 1) Provider 里已经有 zh-cn 分支 —— 必须原样沿用 DVCore_ChineseSimplified
+        mod = "DigitalVixenCore.Translations"
+        _lp_write(root, "DVCore/English.reds", pkg(mod, "DVCore_English", "English"))
+        _lp_write(root, "DVCore/ChineseSimplified.reds",
+                  pkg(mod, "DVCore_ChineseSimplified", "中文"))
+        _lp_write(root, "DVCore/Provider.reds", prov(
+            mod, "DVCore_LocalizationProvider",
+            [("en-us", "DVCore_English"), ("zh-cn", "DVCore_ChineseSimplified")]))
+        _lp_write(root, "TFP/ChineseSimplified.reds",
+                  pkg(mod, "TrueFirstPerson_ChineseSimplified", "中文"))
+        rep = locale_pack.prepare_codeware_package(
+            root, "DVCore/English.reds", "DVCore/ChineseSimplified.reds",
+            target_locale="zh-CN")
+        assert not rep["error"], rep
+        assert rep["class"] == "DVCore_ChineseSimplified", rep
+        text = open(os.path.join(root, "DVCore/ChineseSimplified.reds"),
+                    encoding="utf-8").read()
+        assert "class DVCore_ChineseSimplified" in text
+        assert "class ChineseSimplified" not in text, "类名被改写成裸名"
+        assert "new DVCore_ChineseSimplified()" in open(
+            os.path.join(root, "DVCore/Provider.reds"), encoding="utf-8").read()
+
+        # 2) Provider 没有 zh-cn 分支, 要生成新名字; 该名字已被人占用时必须放弃
+        mod2 = "Bad.Translations"
+        _lp_write(root, "Bad/English.reds", pkg(mod2, "Bad_English", "English"))
+        _lp_write(root, "Bad/ChineseSimplified.reds", pkg(mod2, "Bad_English", "中文"))
+        _lp_write(root, "Bad/ZhPackage.reds", pkg(mod2, "ChineseSimplified", "中文"))
+        _lp_write(root, "Bad/Provider.reds", prov(
+            mod2, "Bad_LocalizationProvider", [("en-us", "Bad_English")]))
+        rep2 = locale_pack.prepare_codeware_package(
+            root, "Bad/English.reds", "Bad/ChineseSimplified.reds",
+            target_locale="zh-CN")
+        assert rep2["error"], rep2
+        assert rep2["applied"] is False
+        assert "ChineseSimplified" in rep2["error"], rep2
+
+        # 3) 同一 module 下并列两个 Provider, 只许动认领了当前包类的那个
+        mod3 = "Two.Translations"
+        _lp_write(root, "A/English.reds", pkg(mod3, "A_English", "English"))
+        _lp_write(root, "A/ChineseSimplified.reds", pkg(mod3, "A_English", "中文"))
+        _lp_write(root, "A/Provider.reds", prov(
+            mod3, "A_Provider", [("en-us", "A_English")]))
+        _lp_write(root, "B/ChineseSimplified.reds",
+                  pkg(mod3, "B_ChineseSimplified", "中文"))
+        _lp_write(root, "B/Provider.reds", prov(
+            mod3, "B_Provider",
+            [("en-us", "B_English"), ("zh-cn", "B_ChineseSimplified")]))
+        b_before = open(os.path.join(root, "B/Provider.reds"),
+                        encoding="utf-8").read()
+        rep3 = locale_pack.prepare_codeware_package(
+            root, "A/English.reds", "A/ChineseSimplified.reds",
+            target_locale="zh-CN")
+        assert not rep3["error"], rep3
+        assert rep3["class"] == "ChineseSimplified", rep3
+        a_text = open(os.path.join(root, "A/Provider.reds"), encoding="utf-8").read()
+        assert 'case n"zh-cn": return new ChineseSimplified();' in a_text, a_text
+        b_after = open(os.path.join(root, "B/Provider.reds"),
+                       encoding="utf-8").read()
+        assert b_after == b_before, "动了别的语言包的 Provider"
+        assert "B_ChineseSimplified" in b_after
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def check_locale_pack_copy_guard():
+    """「语言包 + 逻辑」混写的 .reds 不许整文件复制成语言包。
+
+    回归背景 (2026-10-31, INCF-CORE): 一个文件里既有 EnglishPackage, 又有
+    CompatibilityManager / RequirementsPopup / @addField/@wrapMethod。工具
+    把它整份复制成 ChineseSimplified.reds, 于是 4 个类型重复声明 + 2 个
+    重复注入, REDscript 报 SYM_REDEFINITION, 整个脚本层编译失败。
+    """
+    root = tempfile.mkdtemp(prefix="lp_copy_")
+    try:
+        mono = "\n".join([
+            "module INCFCore",
+            "",
+            "public class EnglishPackage extends ModLocalizationPackage {",
+            "  protected func DefineTexts() -> Void {",
+            '    this.Text("UI-X", "Hi");',
+            "  }",
+            "}",
+            "",
+            "public class RequirementsPopup {",
+            "}",
+            "",
+            "@addField(QuestTrackerGameController)",
+            "private let m_x: Int32;",
+            "",
+        ])
+        _lp_write(root, "mono.reds", mono)
+        assert not locale_pack.reds_is_pure_package(mono)
+        try:
+            locale_pack.ensure_target(root, "mono.reds", "ChineseSimplified.reds")
+            assert False, "混写文件不该被复制"
+        except ValueError as ex:
+            assert "重复类型" in str(ex), ex
+        assert not os.path.exists(
+            os.path.join(root, "ChineseSimplified.reds")), "拒绝后不能留半成品"
+
+        pure = "\n".join([
+            "module Pure.Core",
+            "",
+            "import Codeware.Localization.*",
+            "",
+            "public class Pure_English extends ModLocalizationPackage {",
+            "  protected func DefineTexts() -> Void {",
+            '    this.Text("K", "Hi");',
+            "  }",
+            "}",
+            "",
+        ])
+        _lp_write(root, "pure.reds", pure)
+        assert locale_pack.reds_is_pure_package(pure)
+        locale_pack.ensure_target(root, "pure.reds", "pure_zh.reds")
+        assert os.path.exists(os.path.join(root, "pure_zh.reds"))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main():
     print("== 回填自测 ==")
     check_apply_roundtrip()
@@ -2578,6 +2731,10 @@ def main():
     print("   OK: @runtimeProperty 两段式查表键 (不再当成界面文本)")
     check_pair_existing()
     print("   OK: 归档自带中文当基线 (占位英文/缺条目不误判)")
+    check_locale_pack_names()
+    print("   OK: 语言包类名 (沿用 Provider 命名 / 撞名就放弃改名)")
+    check_locale_pack_copy_guard()
+    print("   OK: 语言包整文件复制守卫 (混写文件拒绝复制)")
     check_identifier_guard()
     print("   OK: 标识符/本地化键守卫 (n\"\" 引用与查表键不参与翻译)")
     res3 = check_resource_layer()
