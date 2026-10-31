@@ -206,11 +206,41 @@ def _json_pairs(path):
     return [(k, v) for k, v in _flatten(data) if k]
 
 
+# `Name = "Value"` 里字面量左边的赋值名。语言包绝大多数条目长这样。
+# 末尾允许一个引号: scan_source 给出的字面量起点在引号之后。
+_ASSIGN_TAIL_RE = re.compile(r"""([A-Za-z_]\w*)\s*=\s*["']?$""")
+# 回填已有译文时, 「按行号」兜底用的键前缀。真实条目名是标识符, 不会含 \x00。
+_LINE_KEY = "\x00line%d"
+
+# 语言包里的单词 UI 文本: Close / Save / Cancel / Weather / Poses ...
+# 只认「首字母大写 + 其余小写 + 至少 3 个字母」, 这样 GodMode / onUpdate /
+# RegisterForEvent 这类驼峰或小写标识符不会被当成文案。
+_LABEL_WORD_RE = re.compile(r"^[A-Z][a-z]{2,}$")
+
+
+def _is_label_word(s):
+    """语言包里 `Close` 这种单个英文单词的 UI 文本。"""
+    return bool(_LABEL_WORD_RE.match((s or "").strip()))
+
+
+def _assign_key(text, start):
+    """字面量若是 `Name = "..."` 的右值, 返回赋值名; 否则返回空串。
+
+    语言包各语言文件的条目顺序和数量都可能不同 (例如 en_US.lua 有 974 条
+    赋值、zh_CN.lua 也 974 条, 但被判定为「可翻译」的条目数不同), 因此必须
+    用条目名对齐, 不能用第几条对齐 —— 后者会整体错位, 把 A 的译文填到 B 上。
+    """
+    ls = text.rfind("\n", 0, start) + 1
+    m = _ASSIGN_TAIL_RE.search(text[ls:start])
+    return m.group(1) if m else ""
+
+
 def _text_pairs_ex(path):
     """lua / reds: 用引擎的字面量扫描, 返回 (行号, 原文, key)。
 
     Codeware 的 this.Text("key", "value") 只提取第二个参数 value；
     第一个参数 key 会跳过并作为上下文显示。
+    普通 `Name = "Value"` 条目用赋值名作 key, 供跨语言文件配对。
     """
     try:
         with open(path, "r", encoding="utf-8-sig", newline="") as f:
@@ -234,9 +264,11 @@ def _text_pairs_ex(path):
             if val.strip():
                 out.append((lit.line, val, values[lit.start]))
             continue
-        if not E.is_translatable(lit.inner):
+        # is_translatable 要求「至少两个英文单词」且排除纯标识符, 会把语言包
+        # 里 Close / Save / Cancel 这类单词按钮全丢掉, 这里补一条单词文案判定。
+        if not (E.is_translatable(lit.inner) or _is_label_word(lit.inner)):
             continue
-        out.append((lit.line, lit.inner, ""))
+        out.append((lit.line, lit.inner, _assign_key(text, lit.start)))
     return out
 
 
@@ -317,14 +349,24 @@ def target_rel(entry, target_locale):
 
 
 def _existing_target(root, tgt):
-    """读已经存在的目标语言文件, 用于回填已有译文"""
+    """读已经存在的目标语言文件, 用于回填已有译文
+
+    lua/reds 返回 dict: 条目名 -> 译文, 并附带「行号 -> 译文」兜底键。
+    条目名对齐是对的唯一依据: 不能用「第几条」, 因为各语言文件里被判定为
+    可翻译的条目数并不相同, 按序号取会整体错位。
+    """
     path = os.path.join(root, tgt.replace("/", os.sep))
     if not os.path.exists(path):
         return None
     try:
         if tgt.lower().endswith(".json"):
             return {k: v for k, v in _json_pairs(path)}
-        return [v for _ln, v in _text_pairs(path)]
+        out = {}
+        for line, val, key in _text_pairs_ex(path):
+            if key and key not in out:
+                out[key] = val
+            out[_LINE_KEY % line] = val
+        return out
     except Exception:
         return None
 
@@ -365,8 +407,14 @@ def extract(root, entries, target_locale):
                     meta["skipped_target"] += 1
                     continue
                 cur = ""
-                if isinstance(existing, list) and idx < len(existing):
-                    v = existing[idx] or ""
+                if isinstance(existing, dict):
+                    if key:
+                        # 有条目名时必须按条目名取。目标语言文件可能缺少某个
+                        # 条目, 此时宁可留空, 也不能退回行号 —— 各语言文件
+                        # 行数并不相同, 退回去会拿到邻行(别的条目)的译文。
+                        v = existing.get(key) or ""
+                    else:
+                        v = existing.get(_LINE_KEY % line) or ""
                     if v and v != val:
                         cur = v
                 rows.append({"file": rel, "disp": rel, "line": line, "type": "语言包",

@@ -1981,6 +1981,65 @@ def _check_layered_extraction_in(root, tmp):
     return True
 
 
+def check_locale_pair_by_key():
+    """语言包回填已有译文必须按条目名对齐, 不能按「第几条」。
+
+    Appearance Menu Mod 2.15.1 是活例子: en_US.lua 与 zh_CN.lua 各有 974 条
+    赋值, 但中文里含 `/`(启用/禁用)的句子被 _looks_like_path 当成路径丢掉,
+    单英文词(Close/Save)又被 is_translatable 当成标识符丢掉, 两边「可翻译」
+    条目数变成 674 / 963。旧代码用 existing[idx] 回填, 从第一条被丢的文本起
+    整体错位 —— 表格里原文 "Default Aperture" 挂着译文
+    "Failed to load pose: animation %s not found."。
+    """
+    tmp = tempfile.mkdtemp()
+    try:
+        loc = os.path.join(tmp, "Localization")
+        os.makedirs(loc)
+        en = ('return {\n'
+              '\tButton_Save = "Save",\n'
+              '\tButton_Close = "Close",\n'
+              '\tWarn_AnimNotFound = "Failed to load pose: animation %s not found.",\n'
+              '\tSlider_DefaultAperture = "Default Aperture",\n'
+              '\tOnly_In_English = "Only In English",\n'
+              '\tCheckbox_Dual = "Enable/disable NPC appearance",\n'
+              '}\n')
+        # 顺序打乱 + 缺一条 Warn_AnimNotFound + 含 `/` 的中文句子
+        zh = ('return {\n'
+              '\tSlider_DefaultAperture = "默认的相机孔径",\n'
+              '\tButton_Close = "关闭",\n'
+              '\tButton_Save = "保存",\n'
+              '\tCheckbox_Dual = "启用/禁用 NPC 外观",\n'
+              '\tOnly_In_English = "只出现在英文里",\n'
+              '}\n')
+        for name, text in (("en_US.lua", en), ("zh_CN.lua", zh)):
+            with open(os.path.join(loc, name), "w", encoding="utf-8") as f:
+                f.write(text)
+
+        target = locale_pack.target_code("简体中文")
+        files = locale_pack.detect(tmp, parse=True, target=target)
+        srcs = locale_pack.pick_sources(files, target)
+        assert len(srcs) == 1, [s.get("rel") for s in srcs]
+        rows, _meta = locale_pack.extract(tmp, srcs, target)
+        got = {r["ctx"]: r["trans"] for r in rows}
+        want = {
+            "Button_Save": "保存",
+            "Button_Close": "关闭",
+            "Slider_DefaultAperture": "默认的相机孔径",
+            "Checkbox_Dual": "启用/禁用 NPC 外观",
+            "Only_In_English": "只出现在英文里",
+            # 中文包里缺这个条目: 宁可留空, 也不能借邻行的译文
+            "Warn_AnimNotFound": "",
+        }
+        bad = {k: (got.get(k), want.get(k)) for k in want if got.get(k) != want.get(k)}
+        assert not bad, bad
+        # 单个英文单词的按钮 (Close/Save) 必须收进原文列
+        assert "Button_Close" in got and "Button_Save" in got, sorted(got)
+        # 含 `/` 的中文句子不能被当成资源路径丢掉
+        assert got["Checkbox_Dual"] == "启用/禁用 NPC 外观"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_identifier_guard():
     """标识符 / 本地化键守卫。
 
@@ -2300,6 +2359,8 @@ def main():
     print("   OK: 机翻互斥 (load_locale/clear_rows 拒绝 busy) / 结算用快照")
     check_clear_resync()
     print("   OK: 清空后能重翻 (后端同步 / 记忆失效 / 原文=译文筛选)")
+    check_locale_pair_by_key()
+    print("   OK: 语言包按条目名回填 (缺条目留空 / 单词按钮 / 中文含斜杠)")
     check_identifier_guard()
     print("   OK: 标识符/本地化键守卫 (n\"\" 引用与查表键不参与翻译)")
     res3 = check_resource_layer()

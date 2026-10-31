@@ -93,6 +93,10 @@ def _looks_like_path(t):
     if MARKUP_RE.search(t):
         return False
     if ("\\" in t or "/" in t):
+        # 中文里 `/` 常作「或」用(启用/禁用、实验性/有趣), 且中文不以空格分词,
+        # 下面那条「无空格才算路径」会把整句中文判成路径, 直接丢掉。
+        if CJK_RE.search(t):
+            return False
         # 带空格的一般是句子("He said \\ ok"), 无空格才当作路径
         if not re.search(r"\s", t):
             return True
