@@ -195,13 +195,17 @@ def is_translatable(s):
 # 用于提取时跳过已经翻好的目标语言文本, 避免把中文/日文等再次收进原文列。
 # 英语/西班牙语/德语/法语等拉丁字母语言与英文源码无法只靠字符区分,
 # 它们仍通过「跳过目标语言文件」来处理。
+# 键一律小写, 查询前用 _locale_key() 归一化 —— 以前这里写 "zh-CN", 而
+# is_target_language_text 是精确查表, 调用方传 "zh-cn" 就静默返回 False,
+# 结果是整份中文文件重新变成「待翻候选」(同一份 SenSen Core: zh-cn 389 条,
+# zh-CN 2 条)。
 _TARGET_SCRIPT_RE = {
-    "zh-CN": re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]"),
-    "zh-TW": re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]"),
-    "ja-JP": re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]"),
-    "ko-KR": re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]"),
-    "ru-RU": re.compile(r"[\u0400-\u04ff]"),
-    "ar-SA": re.compile(r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]"),
+    "zh-cn": re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]"),
+    "zh-tw": re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]"),
+    "ja-jp": re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]"),
+    "ko-kr": re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]"),
+    "ru-ru": re.compile(r"[\u0400-\u04ff]"),
+    "ar-sa": re.compile(r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]"),
 }
 
 
@@ -210,10 +214,14 @@ def is_target_language_text(s, target_locale):
 
     只对能通过字符范围可靠辨认的语言生效(中文/日文/韩文/俄文/阿拉伯文),
     避免把英文源码当成目标语言误跳过。
+
+    ``target_locale`` 大小写/连接符不敏感: ``zh-CN`` / ``zh-cn`` / ``zh_CN``
+    等价。以前是精确查表, 传小写就静默返回 False, 中文行会被当成待翻候选。
     """
     if not s or not target_locale:
         return False
-    rx = _TARGET_SCRIPT_RE.get(target_locale)
+    key = _locale_key(target_locale)
+    rx = _TARGET_SCRIPT_RE.get(key)
     return bool(rx and rx.search(s))
 
 
@@ -503,16 +511,24 @@ def scan_source(text, lang):
             i = j
             continue
         # ---- 标识符 / 数字 / 标点
-        if c.isalpha() or c == "_":
+        #
+        # 只认 ASCII: str.isalpha()/isdigit() 对中日韩字符和全角数字也返回
+        # True, 但 IDENT_TOK_RE / NUM_TOK_RE 是纯 ASCII 正则, match 会得到
+        # None -> AttributeError, 整份文件被 extract_from_file / extract_root_ex
+        # 的 except 吞掉, 表现成「这个模组没有文本」。中文标识符(被误改过的
+        # reds)以前就是这么让整个文件从表里消失的。
+        if c.isascii() and (c.isalpha() or c == "_"):
             m = IDENT_TOK_RE.match(text, i)
-            toks.append(Tok("ident", m.group(0), i, m.end(), line))
-            i = m.end()
-            continue
-        if c.isdigit():
+            if m is not None:
+                toks.append(Tok("ident", m.group(0), i, m.end(), line))
+                i = m.end()
+                continue
+        if c.isascii() and c.isdigit():
             m = NUM_TOK_RE.match(text, i)
-            toks.append(Tok("num", m.group(0), i, m.end(), line))
-            i = m.end()
-            continue
+            if m is not None:
+                toks.append(Tok("num", m.group(0), i, m.end(), line))
+                i = m.end()
+                continue
         for p in ("...", "..", "==", "~=", "<=", ">=", "::"):
             if text.startswith(p, i):
                 toks.append(Tok("op", p, i, i + len(p), line))
@@ -1377,12 +1393,19 @@ def lang_of(path):
     return "lua" if ext == ".lua" else ("xml" if ext == ".xml" else "reds")
 
 
-def extract_from_file(path, target_locale="", loose=True, trace=False):
-    """返回 [(行号, 类型, 上下文, 原文), ...]"""
+def extract_from_file(path, target_locale="", loose=True, trace=False, errors=None):
+    """返回 [(行号, 类型, 上下文, 原文), ...]
+
+    errors: 传入 list 时, 解析失败会追加 (path, 原因)。以前这里静默
+    ``return []``, 一份文件解析不了就等于「这个模组没有文本」, 用户和
+    日志都看不到任何痕迹。
+    """
     try:
         with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
             text = f.read()
-    except Exception:
+    except Exception as ex:
+        if errors is not None:
+            errors.append((path, "读取失败: %s" % ex))
         return []
     ext = os.path.splitext(path)[1].lower()
     try:
@@ -1390,7 +1413,9 @@ def extract_from_file(path, target_locale="", loose=True, trace=False):
             return _extract_lua(text, loose=loose, trace=trace)
         return _extract_reds(text, ext, target_locale=target_locale,
                              loose=loose, trace=trace)
-    except Exception:
+    except Exception as ex:
+        if errors is not None:
+            errors.append((path, "%s: %s" % (type(ex).__name__, ex)))
         return []
 
 
@@ -1438,7 +1463,8 @@ def extract_root_ex(root, include_lua=True, loose=True, include_locale_lua=False
     meta = {"files": 0, "lua_files": 0, "reds_files": 0, "types": {},
             "locale_json": _count_locale_json(root),
             "locale_lua": _count_locale_lua(root), "skipped_target": 0,
-            "locale_pairs": 0, "locale_pairs_used": 0, "noise": {}}
+            "locale_pairs": 0, "locale_pairs_used": 0, "noise": {},
+            "parse_errors": 0, "parse_error_sample": []}
     excluded = {str(x).replace("\\", "/") for x in (exclude_rels or ())}
     for path in iter_source_files(root, include_lua=include_lua,
                                   include_locale_lua=include_locale_lua):
@@ -1469,7 +1495,12 @@ def extract_root_ex(root, include_lua=True, loose=True, include_locale_lua=False
                 meta["reds_files"] += 1
                 for k in ("locale_pairs", "locale_pairs_used"):
                     meta[k] += reds_stats.get(k, 0)
-        except Exception:
+        except Exception as ex:
+            # 解析不了 ≠ 没有文本: 计数记下来, 让加载结果里能报出来。
+            meta["parse_errors"] += 1
+            if len(meta["parse_error_sample"]) < 5:
+                meta["parse_error_sample"].append(
+                    "%s: %s: %s" % (rel, type(ex).__name__, ex))
             continue
         for fam in NOISE.ALL_FAMILIES:
             n = int(noise.get(fam, 0) or 0)
@@ -1548,8 +1579,15 @@ def escape_for(text, quote):
     return "".join(out)
 
 
-# 代码碎片的特征: redscript 插值 \\( / 连续右括号 / 以 ) ] , 开头或 ) ; 结尾
-_CODEY_FRAGMENT_RE = re.compile(r"\\\(|\)\)|\)\s*;|^\s*[\)\],]")
+# 代码碎片的特征: redscript 插值 \\( / 连续右括号 / 以 ) ] 开头。
+#
+# 原来的规则还包含「以 , 开头」和「以 ); 结尾」两支, 实测把它们全算上时
+# 45 条拦截里 43 条是误伤:
+#   - `s += ", 已计入" + IntToString(n)` 是 redscript 拼 UI 文本的惯用写法;
+#   - `"… (the mod folder is not writable …); the previous settings file is kept"`
+#     是屏幕上的说明文字, 只是句子里正好出现了「);」。
+# 真正要防的插值断裂一定会命中 \\\( 或 \)\), 这两支保留就够了。
+_CODEY_FRAGMENT_RE = re.compile(r"\\\(|\)\)|^\s*[\)\]]")
 
 
 def looks_like_code_fragment(t):
@@ -1558,9 +1596,15 @@ def looks_like_code_fragment(t):
     ``s"..."`` 插值串被错误切分后会留下 ``)) \(this.m_page + 1)/\(pages)``
     这种半句代码: 它既不该翻, 写回去还会把插值的右括号一起吃掉, 让整行
     语法崩掉 (REDscript 编译失败 -> 整个脚本层不加载)。
+
+    已经是中文的串直接放行: 代码碎片是 ASCII, 中文只可能是译好的文案。
+    老规则不区分这一点, 于是历史中文行(「, 已计入」「) 重试后」)会被永久
+    拒写, 用户连改措辞都做不到。
     """
     s = (t or "").strip()
     if not s:
+        return False
+    if CJK_RE.search(s):
         return False
     return bool(_CODEY_FRAGMENT_RE.search(s))
 

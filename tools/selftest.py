@@ -2582,6 +2582,18 @@ def check_code_fragment_guard():
         assert not E.looks_like_code_fragment("Pick up (E)")
         assert not E.looks_like_code_fragment("See you :)")
 
+        # 收窄后的边界: 逗号开头 / 句中出现「);」都是正常文案, 不能拒。
+        # 这两支以前把 43 条真实文案挡在门外 (P19)。
+        assert not E.looks_like_code_fragment(", landings after it")
+        assert not E.looks_like_code_fragment(
+            "settings could not be saved (the folder is not writable); "
+            "the previous settings file is kept")
+        # 已经是目标语言的片段放行, 否则历史中文行永久改不动
+        assert not E.looks_like_code_fragment(", 已计入")
+        assert not E.looks_like_code_fragment(") 重试后")
+        # 单字符右括号仍是碎片
+        assert E.looks_like_code_fragment(")")
+
         n, fails = E.apply_many_ex(p, [(8, junk, "第 1/2 页")])
         assert n == 0, n
         assert fails and "代码片段" in fails[0][4], fails
@@ -2605,6 +2617,58 @@ def check_code_fragment_guard():
         assert "启用附近拾取" in open(p2, encoding="utf-8").read()
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def check_parse_and_locale_robustness():
+    """两个「静默给出错误结论」的坑 (P20)。
+
+    1. scan_source 用 str.isalpha() 判断标识符, 而它对中日韩字符也返回 True,
+       ASCII 正则匹配不到就是 AttributeError, 整份文件被 except 吞掉 ->
+       界面上只表现为「这个模组没有文本」。
+    2. is_target_language_text 以前精确查 "zh-CN", 传 "zh-cn" 静默 False ->
+       整份中文文件重新变成待翻候选。
+    """
+    # 中文标识符 / 全角数字: 只要求分词器不崩, 且文件仍能提取
+    code = ("public class Foo {\n"
+            "  public func F() -> Void {\n"
+            "    let x = node.粒子效果ystem;\n"
+            "    emitter.max粒子效果 = Cast<Uint16>(0u);\n"
+            "    let y = １２３;\n"
+            '    Show(n"k", "Pick up the dropped item");\n'
+            "  }\n"
+            "}\n")
+    toks, _ = E.scan_source(code, "reds")
+    assert toks, "中文标识符把分词器打崩了"
+
+    root = tempfile.mkdtemp(prefix="st_p20_")
+    try:
+        p = os.path.join(root, "a.reds")
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(code)
+        errs = []
+        items = E.extract_from_file(p, target_locale="zh-CN", errors=errs)
+        assert items, "含中文标识符的文件一条都没提取出来"
+        assert not errs, ("解析错误被记下来了", errs)
+        data, meta = E.extract_root_ex(root, target_locale="zh-CN")
+        assert sum(len(v) for v in data.values()) >= 1, data
+        assert meta.get("parse_errors") == 0, meta.get("parse_errors")
+
+        # 真的坏掉的文件要能计数, 不能再无声消失
+        bad = os.path.join(root, "b.reds")
+        with open(bad, "w", encoding="utf-8", newline="") as f:
+            f.write("Show(n\"k\"\n")
+        errs2 = []
+        assert E.extract_from_file(bad, errors=errs2) == [] or errs2 is not None
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # 目标语言代码大小写/连接符无关
+    for tag in ("zh-CN", "zh-cn", "zh_CN", "Zh-Cn"):
+        assert E.is_target_language_text("已计入", tag), tag
+        assert not E.is_target_language_text("Counted", tag), tag
+    assert E.is_target_language_text("カウント", "ja-jp")
+    assert E.is_target_language_text("Привет", "ru-RU")
+    assert not E.is_target_language_text("已计入", ""), "空码不该当目标语言"
 
 
 def _lp_write(root, rel, text):
@@ -2830,7 +2894,9 @@ def main():
     check_reds_interpolation()
     print(r'   OK: s"..." 插值串 (嵌套引号不截断 / 碎片判噪音)')
     check_code_fragment_guard()
-    print("   OK: 代码碎片写回守卫 (拒绝写盘 / 骨架不变)")
+    print("   OK: 代码碎片写回守卫 (拒绝写盘 / 骨架不变 / 逗号开头与目标语言放行)")
+    check_parse_and_locale_robustness()
+    print("   OK: 非 ASCII 标识符不吞文件 / 解析失败可计数 / 目标语言码大小写无关")
     check_identifier_guard()
     print("   OK: 标识符/本地化键守卫 (n\"\" 引用与查表键不参与翻译)")
     res3 = check_resource_layer()

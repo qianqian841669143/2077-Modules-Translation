@@ -829,6 +829,11 @@ class Api(object):
             merged["locale_pairs"] = meta.get("locale_pairs", 0)
             merged["locale_pairs_used"] = meta.get("locale_pairs_used", 0)
             merged["noise"] = meta.get("noise", {})
+            merged["parse_errors"] = (int(meta.get("parse_errors", 0) or 0)
+                                      + int(loc_meta.get("parse_errors", 0) or 0))
+            merged["parse_error_sample"] = (
+                list(loc_meta.get("parse_error_sample") or [])
+                + list(meta.get("parse_error_sample") or []))[:5]
             merged["layered"] = True
             merged["source"] = meta["source"]
             merged["localeRows"] = len(loc_rows)
@@ -861,6 +866,8 @@ class Api(object):
                "root": root, "archive": self.archive, "mode": mode,
                "target": target,
                "skippedTarget": meta.get("skipped_target", 0),
+               "parseErrors": int(meta.get("parse_errors", 0) or 0),
+               "parseErrorSample": list(meta.get("parse_error_sample") or [])[:5],
                "localeRows": len(loc_rows), "sourceRows": len(src_rows),
                "resourceRows": len(res_rows)}
         for k in ("source", "pairCount", "unpaired", "localeTotal", "sourceFiles"):

@@ -276,6 +276,7 @@
     "没有可复制的内容": "Nothing to copy",
     "单元格": "cell",
     "已跳过 %d 条目标语言文本": "Skipped %d target-language text(s)",
+    "%d 个文件解析失败（已跳过）": "%d file(s) failed to parse (skipped)",
     "所选文件都是当前目标语言，已跳过。请选择源语言文件。": "All selected files are in the current target language and were skipped. Choose a source-language file.",
     "没有可提取的原文（已跳过 %d 条目标语言文本）": "No extractable source text (%d target-language text(s) skipped)",
     "应用失败列表": "Apply failure list",

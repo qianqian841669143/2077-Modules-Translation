@@ -613,6 +613,10 @@ function onLoaded(r) {
           .replace("%d", r.skippedTarget).replace("%d", doneN)
       : " · " + T("已跳过 %d 条目标语言文本").replace("%d", r.skippedTarget);
   }
+  if (r.parseErrors) {
+    // 解析失败的文件以前是静默消失的：界面上只表现为「这个模组没有文本」。
+    msg += " · " + T("%d 个文件解析失败（已跳过）").replace("%d", r.parseErrors);
+  }
   if (r.localeRows || r.sourceRows) {
     msg += " · " + T("语言包 %d 行 / 设置与源码 %d 行")
       .replace("%d", r.localeRows || 0).replace("%d", r.sourceRows || 0);
@@ -2563,6 +2567,9 @@ async function loadLocale() {
   const blLine2 = baselineLine(r);
   if (blLine2) msg += " · " + blLine2;
   else if (r.tmHits) msg += " " + T("记忆命中 %d 条").replace("%d", r.tmHits);
+  if (r.parseErrors) {
+    msg += " · " + T("%d 个文件解析失败（已跳过）").replace("%d", r.parseErrors);
+  }
   setStatus(msg);
 }
 

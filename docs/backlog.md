@@ -185,6 +185,11 @@ BGM 分支直接死。模型这次只翻了第一段纯属侥幸，换次采样�
 
 ## P19 代码碎片守卫实测：45 条拦截全是误伤，`lead:,` 一条规则吃掉 43 条
 
+> v2.40.1 已按下面前两条修好（规则收窄 + 中文原文放行）。同一份 366 个文件的回放：
+> 拦截从 **45 条降到 1 条**（只剩 DVCore 自带的 `")"`）。回归在
+> `tools/selftest.py::check_code_fragment_guard`。第 3、4 条（标记为代码 / soft-hard
+> 分级）仍未做。
+
 P16 记的是机制（没出口、一条干掉整批）。实测连判据本身也不成立。失败原因不落盘
 （`logs/apply.log` 只有「N 条未匹配」，`undo/*/manifest.json` 只存备份），所以用工具
 自己的 `extract_from_file` + `looks_like_code_fragment` 回放：全部撤销清单里工具真实
@@ -223,6 +228,12 @@ ChineseSimplified.reds:59 `")"`。其余 37 条原文已是中文。
 了同一句译文，需要单独核。
 
 ## P20 两个静默失败：非 ASCII 标识符让整份文件消失 / 目标语言判断大小写敏感
+
+> v2.40.1 已修：`scan_source` 只认 ASCII 标识符与数字；`is_target_language_text`
+> 先用 `_locale_key()` 归一化（表键也改成小写）；`extract_root_ex` 新增
+> `meta["parse_errors"]` + 样本，加载结果带 `parseErrors`，状态栏显示
+> 「N 个文件解析失败（已跳过）」。回归在
+> `tools/selftest.py::check_parse_and_locale_robustness`。
 
 扫安装缓存目录（286 个模组）时撞到的，两个都表现为「看起来没问题，其实全错」。
 
