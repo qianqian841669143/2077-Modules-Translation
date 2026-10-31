@@ -1583,9 +1583,19 @@ def same_code_shape(old_text, new_text, lang):
     return _code_shape(t1) == _code_shape(t2)
 
 
+def _shape_guard_applies(path):
+    """只有真正的代码文件才做「骨架不变」校验。
+
+    .txt / .ini 这类纯文本没有语法, 一段中文替换掉一段英文时 token 序列
+    本来就会变, 不能拿它当依据。
+    """
+    return os.path.splitext(path)[1].lower() in (".reds", ".lua")
+
+
 def apply_translation(path, line_no, original, trans):
     """把文件中 (行号, 原文) 对应的字符串替换为译文; 返回是否成功"""
-    if looks_like_code_fragment(original):
+    guard = _shape_guard_applies(path)
+    if guard and looks_like_code_fragment(original):
         return False
     try:
         with open(path, "r", encoding="utf-8", newline="") as f:
@@ -1614,7 +1624,7 @@ def apply_translation(path, line_no, original, trans):
     new_text = (text[:pick.start + 1] + escape_for(trans, pick.quote)
                 + escape_for(suffix, pick.quote) + text[pick.end - 1:])
     # 语法自检: 替换后代码骨架必须不变
-    if not same_code_shape(text, new_text, lang):
+    if guard and not same_code_shape(text, new_text, lang):
         return False
     try:
         with open(path, "w", encoding="utf-8", newline="") as f:
@@ -1639,6 +1649,7 @@ def apply_many_ex(path, pairs):
                    for i, p in enumerate(pairs)]
     original_text = text
     lang = lang_of(path)
+    guard = _shape_guard_applies(path)
     try:
         _, lits = scan_source(text, lang)
     except Exception:
@@ -1662,7 +1673,7 @@ def apply_many_ex(path, pairs):
         return None
 
     for idx, (line, orig, trans) in enumerate(pairs):
-        if looks_like_code_fragment(orig):
+        if guard and looks_like_code_fragment(orig):
             failures.append((idx, line, orig, trans, "疑似代码片段, 拒绝写回"))
             continue
         try:
@@ -1686,7 +1697,7 @@ def apply_many_ex(path, pairs):
         suffix = lit.inner[len(orig):] if lit.inner.startswith(orig) else ""
         new = escape_for(trans + suffix, lit.quote)
         text = text[:lit.start + 1] + new + text[lit.end - 1:]
-    if not same_code_shape(original_text, text, lang):
+    if guard and not same_code_shape(original_text, text, lang):
         return 0, [(i, p[0], p[1], p[2], "写回后代码骨架不一致, 已拒绝")
                    for i, p in enumerate(pairs)]
     try:

@@ -2595,6 +2595,14 @@ def check_code_fragment_guard():
         # 骨架校验: 吃掉引号/括号的替换必须被拒
         assert E.same_code_shape('Show(n"a", "abc");', 'Show(n"a", "中文");', "reds")
         assert not E.same_code_shape('Show(n"a", "abc");', 'Show(n"a" "中文");', "reds")
+
+        # 纯文本文件不做骨架校验: 中文替换英文本来就会改变 token 序列
+        p2 = os.path.join(root, "notes.txt")
+        with open(p2, "w", encoding="utf-8", newline="") as f:
+            f.write('"Enable nearby pickup"\n')
+        n3, f3 = E.apply_many_ex(p2, [(1, "Enable nearby pickup", "启用附近拾取")])
+        assert n3 == 1 and not f3, (n3, f3)
+        assert "启用附近拾取" in open(p2, encoding="utf-8").read()
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
