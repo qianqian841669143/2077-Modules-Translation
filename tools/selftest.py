@@ -2515,6 +2515,90 @@ def check_noise_rules():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_reds_interpolation():
+    r"""s"..." 插值串要整体识别, 不能切成代码碎片。
+
+    回归背景 (2026-10-31, RedWindows\RW_Builder.reds:182): 那一行是
+        s"\(count) \(GetLocalizedTextByKey(n"X.parts"))   \(...) \(this.m_page + 1)/\(pages)"
+    插值里嵌了 n"..." 的引号, 词法层按引号切字符串, 于是提前截断, 最后漏出
+    一条 ")) \(this.m_page + 1)/\(pages)" 当作文案。全盘 30 处 / 14 文件,
+    漏出 10 条这种半句代码。
+    """
+    line = ('  : s"\\(count) \\(GetLocalizedTextByKey(n"X.parts"))   '
+            '\\(GetLocalizedTextByKey(n"X.page")) \\(this.m_page + 1)/\\(pages)");')
+    toks, lits = E.scan_source(line, "reds")
+    assert len(lits) == 1, [l.inner for l in lits]
+    assert lits[0].prefix == "s", lits[0].prefix
+    assert lits[0].inner.endswith("\\(pages)"), lits[0].inner
+    assert 'n"X.parts"' in lits[0].inner
+
+    # 整条是插值串 -> 按 r/n/t 一样当前缀处理, 一条都不产出
+    rows = E._extract_reds(line, ".reds", target_locale="zh-CN", stats={},
+                           loose=True, trace=False, noise={})
+    assert rows == [], rows
+
+    # \( ) 里再嵌字符串, 里面的括号不能提前收尾
+    s = 'x = s"\\(ToString("a)b")) ok";'
+    _, l2 = E.scan_source(s, "reds")
+    assert len(l2) == 1 and l2[0].inner.endswith(" ok"), [l.inner for l in l2]
+
+    # 碎片本身也要能被判成噪音 (纵深防御)
+    assert NOISE.hard_family(r")) \(this.m_page + 1)/\(pages)") == NOISE.FAMILY_TECH
+    assert NOISE.hard_family(r"Price: \(price)") == ""
+    # 有真实文本的模板不能被判掉
+    assert NOISE.hard_family(r"你有 \(count) 件物品") == ""
+
+
+def check_code_fragment_guard():
+    """代码碎片不许写回, 写回后代码骨架必须不变。
+
+    同一条垃圾行如果被点了「应用」, 替换会连 \\(...) 的右括号一起吃掉,
+    整行语法崩掉 -> REDscript 编译失败 -> 整个脚本层不加载。所以要在写盘前
+    拒绝, 而不是靠「写坏了再撤销」。
+    """
+    root = tempfile.mkdtemp(prefix="frag_")
+    try:
+        body = "\n".join([
+            "module FragTest",
+            "",
+            "public class FragTest {",
+            '  public func F() -> Void {',
+            '    let pages: Int32 = 2;',
+            '    let count: Int32 = 3;',
+            '    let text: String = "Pick up (E)";',
+            '    Show(n"status", s"\\(count) \\(GetLocalizedTextByKey(n"X.parts")) '
+            '\\(this.m_page + 1)/\\(pages)");',
+            "  }",
+            "}",
+            "",
+        ])
+        p = os.path.join(root, "frag.reds")
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(body)
+        before = body
+
+        junk = r")) \(this.m_page + 1)/\(pages)"
+        assert E.looks_like_code_fragment(junk)
+        assert not E.looks_like_code_fragment("Pick up (E)")
+        assert not E.looks_like_code_fragment("See you :)")
+
+        n, fails = E.apply_many_ex(p, [(8, junk, "第 1/2 页")])
+        assert n == 0, n
+        assert fails and "代码片段" in fails[0][4], fails
+        assert open(p, encoding="utf-8").read() == before, "拒绝后文件不该被改动"
+
+        # 正常译文照常写回
+        n2, f2 = E.apply_many_ex(p, [(7, "Pick up (E)", "拾取（E）")])
+        assert n2 == 1 and not f2, (n2, f2)
+        assert "拾取（E）" in open(p, encoding="utf-8").read()
+
+        # 骨架校验: 吃掉引号/括号的替换必须被拒
+        assert E.same_code_shape('Show(n"a", "abc");', 'Show(n"a", "中文");', "reds")
+        assert not E.same_code_shape('Show(n"a", "abc");', 'Show(n"a" "中文");', "reds")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _lp_write(root, rel, text):
     p = os.path.join(root, rel.replace("/", os.sep))
     os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -2735,6 +2819,10 @@ def main():
     print("   OK: 语言包类名 (沿用 Provider 命名 / 撞名就放弃改名)")
     check_locale_pack_copy_guard()
     print("   OK: 语言包整文件复制守卫 (混写文件拒绝复制)")
+    check_reds_interpolation()
+    print(r'   OK: s"..." 插值串 (嵌套引号不截断 / 碎片判噪音)')
+    check_code_fragment_guard()
+    print("   OK: 代码碎片写回守卫 (拒绝写盘 / 骨架不变)")
     check_identifier_guard()
     print("   OK: 标识符/本地化键守卫 (n\"\" 引用与查表键不参与翻译)")
     res3 = check_resource_layer()

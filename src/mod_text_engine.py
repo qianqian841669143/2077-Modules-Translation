@@ -365,6 +365,42 @@ NUM_TOK_RE = re.compile(r"\d+\.?\d*")
 LONG_OPEN_RE = re.compile(r"\[(=*)\[")
 
 
+def _skip_interp(text, j):
+    r"""从 ``\(`` 之后开始, 跳到配对的 ``)`` 之后; 返回 -1 表示没配对。
+
+    插值里可以再写 ``n"..."`` / ``ToString(")")``, 所以内部字符串要整段跳过,
+    里面的括号不算数。
+    """
+    n = len(text)
+    depth = 1
+    while j < n:
+        ch = text[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch in "\"'":
+            k = j + 1
+            while k < n:
+                if text[k] == "\\":
+                    k += 2
+                    continue
+                if text[k] == ch:
+                    break
+                k += 1
+            if k >= n:
+                return -1
+            j = k + 1
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return -1
+
+
 def scan_source(text, lang):
     """返回 (tokens, literals)。lang: 'lua' | 'reds' | 'xml'"""
     toks, lits = [], []
@@ -414,18 +450,6 @@ def scan_source(text, lang):
                 continue
         # ---- 字符串
         if c in "\"'":
-            j = i + 1
-            while j < n:
-                ch = text[j]
-                if ch == "\\":
-                    j += 2
-                    continue
-                if ch == c:
-                    break
-                j += 1
-            if j >= n:
-                break
-            inner = text[i + 1:j]
             prefix = ""
             if not lua:
                 k = i
@@ -434,6 +458,28 @@ def scan_source(text, lang):
                 run = text[k:i]
                 if run in ("r", "n", "t", "s"):
                     prefix = run
+            # s"..." 是插值字符串: \( ... ) 里面是代码, 其中的 " 不是字符串结束。
+            # 不认插值的话, 一行会被切成几块碎片, 抽出来的「原文」其实是半句
+            # 代码 (例如 ")) \(this.m_page + 1)/\(pages)"), 写回时还会把
+            # 插值的右括号一起吃掉, 整行语法崩掉。
+            interp = (prefix == "s" and c == '"')
+            j = i + 1
+            while j < n:
+                ch = text[j]
+                if ch == "\\":
+                    if interp and j + 1 < n and text[j + 1] == "(":
+                        k2 = _skip_interp(text, j + 2)
+                        if k2 > 0:
+                            j = k2
+                            continue
+                    j += 2
+                    continue
+                if ch == c:
+                    break
+                j += 1
+            if j >= n:
+                break
+            inner = text[i + 1:j]
             lit = Lit(i, j + 1, c, inner, line, prefix)
             lits.append(lit)
             toks.append(Tok("str", inner, i, j + 1, line))
@@ -1502,8 +1548,45 @@ def escape_for(text, quote):
     return "".join(out)
 
 
+# 代码碎片的特征: redscript 插值 \\( / 连续右括号 / 以 ) ] , 开头或 ) ; 结尾
+_CODEY_FRAGMENT_RE = re.compile(r"\\\(|\)\)|\)\s*;|^\s*[\)\],]")
+
+
+def looks_like_code_fragment(t):
+    r"""判断一条「原文」其实是代码碎片, 而不是文案。
+
+    ``s"..."`` 插值串被错误切分后会留下 ``)) \(this.m_page + 1)/\(pages)``
+    这种半句代码: 它既不该翻, 写回去还会把插值的右括号一起吃掉, 让整行
+    语法崩掉 (REDscript 编译失败 -> 整个脚本层不加载)。
+    """
+    s = (t or "").strip()
+    if not s:
+        return False
+    return bool(_CODEY_FRAGMENT_RE.search(s))
+
+
+def _code_shape(toks):
+    return [(t.kind, "" if t.kind == "str" else t.val) for t in toks]
+
+
+def same_code_shape(old_text, new_text, lang):
+    """替换前后「代码骨架」必须一致(字符串内容除外)。
+
+    只改字符串内容时骨架不变; 替换后若多/少括号、引号错位, 骨架就会变,
+    说明这次写回会把语法改坏, 必须拒绝而不是硬写。
+    """
+    try:
+        t1, _ = scan_source(old_text, lang)
+        t2, _ = scan_source(new_text, lang)
+    except Exception:
+        return False
+    return _code_shape(t1) == _code_shape(t2)
+
+
 def apply_translation(path, line_no, original, trans):
     """把文件中 (行号, 原文) 对应的字符串替换为译文; 返回是否成功"""
+    if looks_like_code_fragment(original):
+        return False
     try:
         with open(path, "r", encoding="utf-8", newline="") as f:
             text = f.read()
@@ -1530,12 +1613,8 @@ def apply_translation(path, line_no, original, trans):
     suffix = pick.inner[len(original):]          # 保留 "##id" 这类隐藏后缀
     new_text = (text[:pick.start + 1] + escape_for(trans, pick.quote)
                 + escape_for(suffix, pick.quote) + text[pick.end - 1:])
-    # 语法自检: 重新扫描后字面量数量与引号必须一致
-    try:
-        _, lits2 = scan_source(new_text, lang)
-        if len(lits2) < len(lits):
-            return False
-    except Exception:
+    # 语法自检: 替换后代码骨架必须不变
+    if not same_code_shape(text, new_text, lang):
         return False
     try:
         with open(path, "w", encoding="utf-8", newline="") as f:
@@ -1558,6 +1637,7 @@ def apply_many_ex(path, pairs):
     except Exception:
         return 0, [(i, p[0], p[1], p[2], "读取文件失败")
                    for i, p in enumerate(pairs)]
+    original_text = text
     lang = lang_of(path)
     try:
         _, lits = scan_source(text, lang)
@@ -1582,6 +1662,9 @@ def apply_many_ex(path, pairs):
         return None
 
     for idx, (line, orig, trans) in enumerate(pairs):
+        if looks_like_code_fragment(orig):
+            failures.append((idx, line, orig, trans, "疑似代码片段, 拒绝写回"))
+            continue
         try:
             line_no = int(line)
         except Exception:
@@ -1603,6 +1686,9 @@ def apply_many_ex(path, pairs):
         suffix = lit.inner[len(orig):] if lit.inner.startswith(orig) else ""
         new = escape_for(trans + suffix, lit.quote)
         text = text[:lit.start + 1] + new + text[lit.end - 1:]
+    if not same_code_shape(original_text, text, lang):
+        return 0, [(i, p[0], p[1], p[2], "写回后代码骨架不一致, 已拒绝")
+                   for i, p in enumerate(pairs)]
     try:
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(text)

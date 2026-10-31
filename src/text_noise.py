@@ -64,15 +64,50 @@ _SQL = re.compile(
     r"ALTER\s+TABLE\b|DROP\s+TABLE\b|"
     r"ORDER\s+BY\s+[\w.,\s]+?(?:ASC|DESC)?)\s*$", re.I)
 # 去掉格式占位符后一个字母都不剩: "%d / %s"、"/"、"€$"
-_FMT_STRIP = re.compile(r"%\d*(?:\.\d+)?[sdifgeExXo%]|\{[^{}]*\}|\\[nrt\"'\\]")
+_FMT_STRIP = re.compile(r"%\d*(?:\.\d+)?[sdifgeExXo%]|\{[^{}]*\}|\\[nrt\"'\\]|\$[A-Za-z_]\w*")
+# REDscript 的 \( ... ) 插值: 里面是代码, 不是文案
+_INTERP_OPEN = "\\("
 # 任意文字系统的字母(含中日韩/谚文), 用来区分「纯符号」和「外文」
 _ANY_LETTER = re.compile(r"[^\W\d_]", re.UNICODE)
 # key=value 调试 dump: "dist=%.1f busy=%.1f", "error|reason=player missing|..."
 _KV_RE = re.compile(r"\b[A-Za-z_]\w*=")
 
 
+def _strip_interp(s):
+    r"""抹掉 REDscript 的 ``\( ... )`` 插值(括号配平)。
+
+    ``s"\(count) \(GetLocalizedTextByKey(n"X.galleryParts"))   ..."`` 这种
+    插值字符串, 去掉代码后只剩空格和斜杠 —— 一个词都没有, 本来就不是文案。
+    不抹掉的话 ``this.m_page`` 里的字母会让它伪装成正常文本。
+    """
+    if _INTERP_OPEN not in s:
+        return s
+    out = []
+    i, n = 0, len(s)
+    depth = 0
+    while i < n:
+        if depth == 0 and s.startswith(_INTERP_OPEN, i):
+            depth = 1
+            i += 2
+            continue
+        ch = s[i]
+        if depth:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _has_letters(s):
-    return bool(_ANY_LETTER.search(_FMT_STRIP.sub("", s)))
+    return bool(_ANY_LETTER.search(_strip_interp(_FMT_STRIP.sub("", s))))
 
 
 def _kv_dump(s):
