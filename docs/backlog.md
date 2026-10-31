@@ -145,6 +145,44 @@ if guard and not same_code_shape(original_text, text, lang):
    `Codeware → Codeware`（框架名保名），并对「源串是单个驼峰/全大写专名」
    的机翻结果不给自动填入（宁可留空让用户看一眼）。
 
+## P18 `a|b|c|20` 这种数据行被当成句子收进候选
+
+GhxstCompanion.reds:1227 `private func StoryBeats() -> array<String>` 里是一张表：
+
+```reds
+// [key, pool, facts (any of, comma), extra wait seconds]
+"takemura|story_takemura|q112_done|20",
+```
+
+`:1266` / `:1278` 用 `StrSplit(b, "|")` 拆开，四段全是 id：`p[0]` 拼
+`SetFact("ghxst_beat_" + p[0])`、当 `StringToName(p[0])` 的 CName、还被
+`Equals(p[0], "ponr")` 直接比字面量；`p[1]` 是语音池名，进
+`Speak(StringToName(p[1]))`。
+
+翻掉任一字段的后果：`p[1]` 变中文 → 语音池查不到、角色哑火；`p[0]` 变中文 →
+fact 名变、旧存档的 beat 状态失配；`ponr` 那条（`:1251`）被翻 → 生死关头的
+BGM 分支直接死。模型这次只翻了第一段纯属侥幸，换次采样就可能整串翻掉。
+
+工具侧：这类串没有位置证据，落在「长句兜底」档，`is_translatable` 只要求
+「≥2 个英文词」就收。实测该文件 168 条候选里 **24 条**是数据行（1229–1251 整块
++ 1196 的音效序列），约占 14%。
+
+三层改法：
+
+1. **形状层** `looks_like_data_row(s)`：含 ≥2 个 `|`（`;` `\t` 同理），所有段
+   匹配 `^[A-Za-z0-9_.:,\-]+$`（无空格、无 CJK、无句末标点），且至少一段是
+   snake_case 或纯数字 → `NOISE.FAMILY_DATA`，不进候选。
+2. **上下文层**：文件里出现 `StrSplit(x, "|")` 时，该文件内「段数 ≥2 且全段都是
+   标识符形状」的字面量默认判数据行。用代码本身当证据，不内置表；能顺带覆盖
+   `w:3.0|s:ghxst_sfx_connect|`、`g:…|g:…` 随机池。
+3. **写回守卫**（硬线，不给覆盖开关）：原文 `|` 段数 ≥2 时，译文段数必须相同，
+   且每段的「ASCII 标识符 / CJK」属性不许变。坏法（哑火、BGM 不播、fact 失配）
+   在文件层面完全看不出来，只能靠守卫挡。
+
+白名单：段内含空格或段首像句子（`Alive|Dead`、`Yes|No`）仍按文案处理，避免误杀
+真正的二选一 UI 文本。另外这类名字真要本地化，正确做法是在 mod 里加显示列，
+不是翻译字符串。
+
 ## 已知但不打算改
 
 - 不提供「忽略骨架校验」开关。那等于把「写坏整层脚本、游戏里 redscript 全不加载」
