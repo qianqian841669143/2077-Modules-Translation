@@ -1793,6 +1793,7 @@ class Api(object):
                       + int(bstat.get("officialWeak", 0) or 0))
         hits = []
         misses = []
+        kept = 0
         for i in targets:
             now = str(rows[i].get("trans") or "").strip()
             if now and not before[i]:
@@ -1801,13 +1802,19 @@ class Api(object):
                              "src": rows[i].get("transSrc") or ""})
             elif not now:
                 misses.append(i)
+            else:
+                # 发出去时是空的、回来时后端已经有译文：说明这行在前端被清空
+                # 过但没同步到后端。既不重翻也不覆盖，但要算进账——以前这类
+                # 行既不在 hits 也不在 misses，报表里凭空少一条，表现就是
+                # 「翻译了 0 条」而用户明明点了。
+                kept += 1
         mem_n = max(0, len(hits) - official_n)
         if hits:
             self._emit({"type": "rows", "items": hits})
             self._emit({"type": "progress", "done": len(hits), "total": len(targets),
                         "memory": len(hits)})
         if not misses:
-            self._emit({"type": "done", "translated": len(hits),
+            self._emit({"type": "done", "translated": len(hits) + kept,
                         "memory": len(hits), "stopped": False})
             self._trans_report(targets, memory=mem_n, official=official_n,
                                rows=rows)
@@ -1822,7 +1829,7 @@ class Api(object):
                 reasons=[self._tr("本地模型接口连不上：%s") % ex], rows=rows)
             return
 
-        done = len(hits)
+        done = len(hits) + kept
         batch = 8
 
         # 2) 按原文去重：同一句话只发给模型一次。
@@ -1949,12 +1956,59 @@ class Api(object):
         self._stop.set()
         return True
 
+    def _forget_memory_for(self, rows):
+        """让这些原文对应的机翻记忆失效，返回删掉的条数。
+
+        清空译文等于「这条我不要了」。机翻结果在写回表格的同时就进了 TM，
+        只清表格的话，下一轮 _baseline_fill 会原样填回来——用户看到的是
+        「清空了也白清」。手改与官方来源的条目不动，见 tm.Memory.forget。
+        """
+        tgt = self.settings.get("target_lang", "简体中文")
+        n = 0
+        for r in (rows or []):
+            try:
+                if self._memory_store.forget(r.get("orig") or "", tgt):
+                    n += 1
+            except Exception:
+                pass
+        if n:
+            try:
+                self._memory_store.save()
+            except Exception:
+                pass
+        return n
+
     def clear_translations(self):
         """清空当前提取结果的译文，保留原文行。"""
         for r in self.rows:
             r["trans"] = ""
             r.pop("transSrc", None)
-        return {"ok": True}
+        dropped = self._forget_memory_for(self.rows)
+        return {"ok": True, "forgot": dropped}
+
+    def clear_row_translations(self, indices=None):
+        """清空指定行的译文（右键「清空选中的行译文」、编辑条里删空）。
+
+        前端清空只改了浏览器内存，后端 self.rows 还留着旧译文。下次
+        translate() 会把那些行当成「本来就有译文」而跳过，表现就是
+        「清空之后点翻译没反应」。这里补上同步；顺便让对应记忆失效，
+        重翻才会真的再问一次模型，而不是把同一条从 TM 里搬回来。
+        """
+        if self._busy:
+            return {"ok": False, "error": "busy"}
+        picked = []
+        for x in (indices or []):
+            try:
+                i = int(x)
+            except Exception:
+                continue
+            if 0 <= i < len(self.rows):
+                picked.append(self.rows[i])
+        for r in picked:
+            r["trans"] = ""
+            r.pop("transSrc", None)
+        dropped = self._forget_memory_for(picked)
+        return {"ok": True, "count": len(picked), "forgot": dropped}
 
     def clear_rows(self):
         """清空当前提取结果和后端缓存的全部行。"""

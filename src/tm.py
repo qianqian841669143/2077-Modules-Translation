@@ -119,6 +119,27 @@ class Memory(object):
         if len(self.entries) > self.limit:
             self._trim()
 
+    def forget(self, src, tgt="简体中文", origins=("machine", "memory", "")):
+        """删掉一条记忆，返回是否真的删了。
+
+        用途是「用户否定了这条译文」：清空某行后重翻，如果记忆里还留着上次
+        的结果，_baseline_fill 会立刻把同一句原样填回来，看起来就像没翻。
+
+        只删机翻/记忆来源的条目。手改和官方语料是更可靠的资产，不能因为
+        用户清空了一次显示就跟着丢——那两种来源本来也不该出现在这里。
+        """
+        if not src:
+            return False
+        k = self._key(src, tgt)
+        e = self.entries.get(k)
+        if not e:
+            return False
+        if (e.get("o") or "") not in origins:
+            return False
+        del self.entries[k]
+        self._dirty = True
+        return True
+
     def _trim(self):
         items = sorted(self.entries.items(),
                        key=lambda kv: (kv[1].get("ts", 0), kv[1].get("n", 0)),

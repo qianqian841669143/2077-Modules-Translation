@@ -1674,6 +1674,79 @@ def check_trans_guard():
     return True
 
 
+def check_clear_resync():
+    """清空译文要能真的重翻，而不是被自己的旧数据挡住。
+
+    两条独立的原因，缺一条都会让用户看到「清空了还是翻不了 / 翻出来还是那句」：
+      1. 前端清空只改了浏览器内存，后端 self.rows 仍留着旧译文，于是
+         translate() 把那行当「本来就有译文」跳过；
+      2. 机翻结果同时写进了 TM，清空后 _baseline_fill 原样填回来。
+    """
+    import json
+    import tm as TMod
+
+    root = os.path.dirname(HERE)
+
+    # ---- 记忆：只让机翻/记忆来源失效，手改与官方不动
+    tmp = tempfile.mkdtemp()
+    try:
+        mem = TMod.Memory(os.path.join(tmp, "memory.json"))
+        mem.put("Off", "简体中文", "关闭", origin="machine")
+        mem.put("Warning", "简体中文", "警示语", origin="manual")
+        assert mem.forget("Off", "简体中文") is True, "机翻记忆没删掉"
+        assert mem.get_entry("Off", "简体中文") is None, "删了却还在"
+        assert mem.forget("Warning", "简体中文") is False, "手改记忆被删了"
+        assert mem.get_entry("Warning", "简体中文")["text"] == "警示语"
+        assert mem.forget("不存在", "简体中文") is False
+
+        # ---- 后端：清空指定行，同时让记忆失效
+        api = web_app.Api()
+        api._memory = mem
+        api.settings["target_lang"] = "简体中文"
+        # 上面已经删过 Off，这里换一条新的，专门验清空时顺带失效记忆
+        mem.put("Street Cred", "简体中文", "街头声望", origin="machine")
+        api.rows = [{"orig": "Street Cred", "trans": "街头声望",
+                     "transSrc": "machine"},
+                    {"orig": "Warning", "trans": "警示语", "transSrc": "manual"}]
+        got = api.clear_row_translations([0])
+        assert got.get("ok") is True, got
+        assert got.get("forgot") == 1, got
+        assert api.rows[0]["trans"] == "", api.rows[0]
+        assert "transSrc" not in api.rows[0], "清空后还挂着来源色条"
+        assert api.rows[1]["trans"] == "警示语", "清空波及了别的行"
+        assert mem.get_entry("Street Cred", "简体中文") is None, "清空没让记忆失效"
+        # 越界与脏输入不能炸
+        assert api.clear_row_translations([99, "x"])["count"] == 0
+
+        # ---- 前端：筛选、同步与遮罩三处都得在
+        with open(os.path.join(root, "src", "web", "app.js"),
+                  encoding="utf-8-sig") as f:
+            js = f.read()
+        assert '"原文=译文"' in js, "筛选没加「原文=译文」"
+        start = js.index("function filtered()")
+        body = js[start:js.find("\nfunction ", start + 1)]
+        assert '"原文=译文"' in body, "筛选只是加进了列表，没进过滤逻辑"
+        for marker in ("function syncClearedRows", "clear_row_translations",
+                       "await _transSync"):
+            assert marker in js, marker
+        # 清空入口两处都要走同步
+        assert js.count("syncClearedRows(") >= 3, "有清空入口没同步后端"
+        # 「继续翻译剩下的」也要进全遮罩，且不能再改「翻译全部未填」的文案
+        seg = js[js.index("async function continueTranslate"):]
+        seg = seg[:seg.find("\nasync function " ) if seg.find("\nasync function ") > 0
+                  else len(seg)]
+        assert "enterTransMask(" in seg, "补翻没有进遮罩"
+        assert 'btn-tr-all").textContent' not in js, "还在改「翻译全部未填」的文案"
+
+        with open(os.path.join(root, "src", "locales", "en-US.json"),
+                  encoding="utf-8-sig") as f:
+            en = json.load(f)["strings"]
+        assert "原文=译文" in en, "英文语言包缺这条筛选"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return True
+
+
 def check_reds_evidence_tiers():
     """没有位置证据的 REDscript 字符串不再一律当界面文本。
 
@@ -2122,6 +2195,8 @@ def main():
     print("   OK: 误报过滤 (图集/记录名/技术串/外文表/双语表)")
     check_trans_guard()
     print("   OK: 机翻互斥 (load_locale/clear_rows 拒绝 busy) / 结算用快照")
+    check_clear_resync()
+    print("   OK: 清空后能重翻 (后端同步 / 记忆失效 / 原文=译文筛选)")
     check_identifier_guard()
     print("   OK: 标识符/本地化键守卫 (n\"\" 引用与查表键不参与翻译)")
     res3 = check_resource_layer()

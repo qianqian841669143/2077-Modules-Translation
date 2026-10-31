@@ -1,7 +1,7 @@
 /* ============================================================
    2077 Mod Translator — 前端逻辑
    ============================================================ */
-const FILTERS = ["全部", "未填译文", "已填译文", "官方译文", "官方待核", "记忆译文",
+const FILTERS = ["全部", "未填译文", "已填译文", "原文=译文", "官方译文", "官方待核", "记忆译文",
                  "设置项", "界面文本", "长句文本", "已跳过", "未跳过"];
 const SETTING_TYPES = ["显示名称", "描述", "分类", "模组名", "选项文本"];
 
@@ -690,6 +690,13 @@ function filtered() {
     const f = state.filter;
     if (f === "未填译文" && r.trans) return false;
     if (f === "已填译文" && !r.trans) return false;
+    // 原文=译文：模型偶尔把原文原样吐回来（专名、术语、偷懒），表面上
+    // 「已填」，其实一个字都没翻。这类行只能靠比对才找得出来。
+    if (f === "原文=译文") {
+      const o = String(r.orig || "").trim();
+      const t = String(r.trans || "").trim();
+      if (!t || o !== t) return false;
+    }
     if (f === "官方译文" && r.transSrc !== "official") return false;
     if (f === "官方待核" && r.transSrc !== "official-weak") return false;
     if (f === "记忆译文" && r.transSrc !== "memory") return false;
@@ -884,7 +891,7 @@ function setFileSkip(file, value) {
     : T("已恢复此文件 %d 条内容的翻译。").replace("%d", n));
 }
 
-function clearRowTranslation(row) {
+async function clearRowTranslation(row) {
   if (!row) return;
   if (!String(row.trans || "").trim()) {
     toast(T("这一行还没有译文。"), "err");
@@ -893,6 +900,8 @@ function clearRowTranslation(row) {
   if (!confirm(T("清空这一行的译文？\n原文和模组文件都不会改动，只是把已填的译文去掉。"))) {
     return;
   }
+  // 先同步后端（含让这条机翻记忆失效），再清本地，否则重翻会拿到旧结果
+  await syncClearedRows(originalIndicesForRow(row));
   const keys = rowKeysFor(row);
   state.raw.forEach((raw) => {
     if (keys.has(rowKey(raw))) raw.trans = "";
@@ -1324,6 +1333,8 @@ function flushEditor() {
   if (!r || !el) return false;
   const v = String(el.value || "").trim();
   if (v === String(r.trans || "")) return false;
+  // 删空 = 清空：后端那份也要一起清，否则重翻时会被当成「本来就有译文」跳过
+  if (!v) syncClearedRows(originalIndicesForRow(r));
   r.trans = v;
   r.transSrc = "manual";   // 用户亲手改的，来源归他，别让官方语料盖回去
   state.dirty = true;
@@ -1422,7 +1433,11 @@ function inlineEdit(cell) {
   input.focus();
   input.select();
   const commit = (save) => {
-    if (save) { r.trans = input.value.trim(); }
+    if (save) {
+      r.trans = input.value.trim();
+      // 表格里删空也是清空：后端那份不同步，重翻就会被当成「已有译文」跳过
+      if (!r.trans) syncClearedRows(originalIndicesForRow(r));
+    }
     render();
     selectRow(i);
   };
@@ -1455,8 +1470,24 @@ function step(d) {
 }
 
 /* ---------------- 机翻 ---------------- */
+
+/* 清空译文必须同步到后端。后端 self.rows 还留着旧译文时，下一轮机翻会把
+   那些行当成「本来就有译文」而跳过，表现就是「清空了反而翻不动」。
+   这里用一条串行链，保证「清空」先落地、再开始查未填，避免两个 RPC 抢跑。 */
+let _transSync = Promise.resolve();
+function syncClearedRows(indices) {
+  const idx = (indices || []).map((n) => Number(n))
+    .filter((n) => Number.isInteger(n));
+  if (!idx.length) return _transSync;
+  _transSync = _transSync
+    .then(() => pywebview.api.clear_row_translations(idx))
+    .catch(() => null);   // 后端没响应也不能让这条链断掉，否则后续机翻卡死
+  return _transSync;
+}
+
 async function translateRows(indices) {
   if (state.busy) return;
+  await _transSync;   // 刚清空的行要先落到后端，否则会被当成「已填」跳过
   const skipIndices = state.raw
     .filter((r) => r.skip)
     .map((r) => Number(r._i))
@@ -1752,11 +1783,8 @@ async function continueTranslate() {
     toast((r && r.error) || "error", "err");
     return;
   }
-  state.busy = true;
   state.trFailed = [];
-  $("btn-tr-all").textContent = T("停止机翻");
-  $("progress").classList.add("on");
-  $("bar").style.width = "0%";
+  enterTransMask(r.total);
   setStatus(T("重试剩下的 %d 条 ...").replace("%d", r.total));
 }
 
