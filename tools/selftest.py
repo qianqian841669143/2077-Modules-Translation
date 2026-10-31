@@ -1741,10 +1741,13 @@ def check_clear_resync():
                   else len(seg)]
         assert "enterTransMask(" in seg, "补翻没有进遮罩"
         assert 'btn-tr-all").textContent' not in js, "还在改「翻译全部未填」的文案"
-        # 右键「重新翻译」：入口、处理器、以及交给后端的 force 标志
+        # 右键「重新翻译」：单行与「已筛选」两个入口，以及交给后端的 force 标志
         assert 'data-act="retrans"' in js, "右键菜单没有「重新翻译」"
+        assert 'data-act="retrans-filtered"' in js, "右键菜单没有「重新翻译已筛选」"
         assert "function retranslateRow" in js, "重新翻译没有处理器"
-        assert "translateRows(idx, true)" in js, "重新翻译没走 force 模式"
+        assert "function retranslateFiltered" in js, "批量重翻没有处理器"
+        assert "translateRows(uniq, true)" in js, "重新翻译没走 force 模式"
+        assert "state.trForce = !!e.force;" in js, "补翻会丢掉 force 标志"
 
         # ---- force 重翻：已有译文的行也要真的再问一次模型
         import types
@@ -1798,6 +1801,31 @@ def check_clear_resync():
                 assert not api2._busy, "重翻线程没有结束"
                 assert calls["n"] == 1, "「重新翻译」没有真的发给模型"
                 assert api2.rows[0]["trans"] == "新译", api2.rows
+
+                # 模型返回空：旧译文必须原样留着（不清空才有的好处），
+                # 且账目要按「本轮真的写回了哪些行」算
+                api2.rows = [{"orig": "Off", "line": 1, "file": "a.reds",
+                              "trans": "旧译"}]
+                fake_mt.translate_batch = lambda *a, **k: [""]
+                got = api2.translate([0], [], force=True)
+                assert got.get("ok"), got
+                for _ in range(300):
+                    if not api2._busy:
+                        break
+                    time.sleep(0.02)
+                assert not api2._busy, "重翻线程没有结束"
+                assert api2.rows[0]["trans"] == "旧译", "失败的重翻把旧译文弄丢了"
+
+                rep = api2._trans_report([0], force=True, written=set(),
+                                         rows=api2.rows)
+                assert rep["ok"] == 0 and rep["left"] == 1, rep
+                assert rep["force"] is True, rep
+                rep2 = api2._trans_report([0], force=True, written={0},
+                                          rows=[{"trans": "新译"}])
+                assert rep2["ok"] == 1 and rep2["left"] == 0, rep2
+                # 非 force 仍按 trans 非空结算（基线命中也算翻好了）
+                rep3 = api2._trans_report([0], rows=[{"trans": "官方给的"}])
+                assert rep3["ok"] == 1 and rep3["force"] is False, rep3
             finally:
                 Lbase.load_official = old_load
                 if old_mt is None:

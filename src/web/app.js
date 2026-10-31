@@ -19,7 +19,7 @@ const state = {
   // Vortex 活动映射：下载包 ↔ 安装缓存 ↔ 游戏部署
   vmap: null, vmapFilter: "all", vmapSearch: "",
   // 上一次机翻没翻出来的行号（「继续」只补这些）
-  trFailed: [], trBusy: false
+  trFailed: [], trBusy: false, trForce: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -233,6 +233,7 @@ function bind() {
       if (selRow) retranslateRow(selRow);
       return;
     }
+    if (act === "retrans-filtered") { retranslateFiltered(); return; }
     // 第二类：作用在右击行所属的文件上。
     if (act === "skip-file") {
       const allSkipped = !state.rows.some((x) => x.file === r.file && !x.skip);
@@ -1060,6 +1061,11 @@ function showCtxMenu(x, y, row, cell) {
     : `<div class="item" data-act="merge">${esc(
         state.merged ? T("还原重复行") : T("合并重复行"))}</div>`;
 
+  // 「已筛选」= 当前视图（搜索 + 筛选 + 文件过滤 + 隐藏之后剩下的行）。
+  // 跳过行不参与机翻，数字里也不算，免得确认时对不上。
+  const nFiltered = filtered().reduce(
+    (a, r) => a + (r.skip ? 0 : originalIndicesForRow(r).length), 0);
+
   m.innerHTML =
     copyItem +
     `<div class="sep"></div>` +
@@ -1068,6 +1074,9 @@ function showCtxMenu(x, y, row, cell) {
     `<div class="item${dis1}" data-act="toggle-skip">${esc(skipLabel)}</div>` +
     `<div class="item${dis1}" data-act="clear-row-trans">${esc(T("清空选中的行译文"))}</div>` +
     `<div class="item${dis1}" data-act="retrans">${esc(T("重新翻译选中的行"))}</div>` +
+    `<div class="sep"></div>` +
+    `<div class="item${nFiltered ? "" : " disabled"}" data-act="retrans-filtered">${esc(
+      T("重新翻译已筛选的 %d 行").replace("%d", nFiltered))}</div>` +
     `<div class="sep"></div>` +
     `<div class="item" data-act="skip-file">${esc(
       allSkipped ? T("恢复此文件所有行") : T("跳过此文件所有行"))}</div>` +
@@ -1510,7 +1519,10 @@ async function translateRows(indices, force) {
   } else {
     targetIndices = Array.from(new Set((indices || []).map((i) => Number(i))
       .filter((n) => Number.isInteger(n))));
-    candidates = targetIndices.map((i) => state.raw.find((r) => Number(r._i) === i))
+    // 按索引建表再查：批量重翻可能一次几万行，逐条 find 是平方复杂度。
+    const byIdx = new Map();
+    state.raw.forEach((r) => byIdx.set(Number(r._i), r));
+    candidates = targetIndices.map((i) => byIdx.get(i))
       .filter((r) => r && !r.skip && (force || !String(r.trans || "").trim()));
   }
   const skipped = state.raw.filter((r) => r.skip).length;
@@ -1520,6 +1532,7 @@ async function translateRows(indices, force) {
       : T("没有「未填译文」的行。"), "err");
     return;
   }
+  state.trForce = !!force;
   const r = await pywebview.api.translate(targetIndices, skipIndices, !!force);
   if (!r.ok) {
     if (r.error === "busy") return;
@@ -1533,25 +1546,38 @@ async function translateRows(indices, force) {
   setStatus(msg);
 }
 
-/* 右键「重新翻译选中的行」：先清掉这行的译文（后端那份 + 对应记忆），
-   再以 force 模式发出去。不先清的话后端会把它当成「本来就有译文」跳过；
-   不 force 的话基线又会把用户不满意的旧译法原样填回来。 */
+/* 重新翻译：走 force 模式，不清空旧译文。
+   后端 force 会无视现有译文、也不查基线；旧值留着当垫底，模型没翻成的行
+   不会变成空白。右键的单行入口与「已筛选」批量入口共用这一条路径。 */
+async function retranslateRows(rows) {
+  if (state.busy) return;
+  const idx = [];
+  (rows || []).forEach((row) => {
+    if (!row || row.skip) return;          // 跳过行本来就不翻，别混进计数
+    idx.push(...originalIndicesForRow(row));
+  });
+  const uniq = Array.from(new Set(idx.filter((n) => Number.isInteger(n))));
+  if (!uniq.length) { toast(T("没有可重翻的行。"), "err"); return; }
+  await translateRows(uniq, true);
+}
+
 async function retranslateRow(row) {
   if (state.busy || !row) return;
   if (row.skip) { toast(T("此行已跳过翻译"), "err"); return; }
-  const idx = originalIndicesForRow(row);
-  if (!idx.length) return;
-  await syncClearedRows(idx);
-  row.trans = "";
-  delete row.transSrc;
-  (row.dups || []).forEach((d) => { d.trans = ""; delete d.transSrc; });
-  const want = new Set(idx);
-  state.raw.forEach((raw) => {
-    if (want.has(Number(raw._i))) { raw.trans = ""; delete raw.transSrc; }
-  });
-  state.dirty = true;
-  render();
-  await translateRows(idx, true);
+  await retranslateRows([row]);
+}
+
+/* 「重新翻译已筛选的 N 行」：作用域就是当前视图，筛选里有什么就重翻什么。
+   这是给「模型偷懒把原文原样吐回来」那批行准备的二次翻译入口。 */
+async function retranslateFiltered() {
+  if (state.busy) return;
+  const list = filtered();
+  const n = list.reduce(
+    (a, r) => a + (r.skip ? 0 : originalIndicesForRow(r).length), 0);
+  if (!n) { toast(T("当前筛选没有可重翻的行。"), "err"); return; }
+  if (!confirm(T("重新翻译当前筛选的 %d 行？\n会覆盖这些行现有的译文，且不查官方基线与翻译记忆。")
+               .replace("%d", n))) return;
+  await retranslateRows(list);
 }
 
 /* ---------------- 机翻遮罩 ---------------- */
@@ -1759,6 +1785,9 @@ function onTransReport(e) {
   // done 一般先到，这里再来一次只是兜底（exitTransMask 是幂等的）。
   exitTransMask();
   state.trFailed = (e.failed || []).map(Number).filter((n) => Number.isInteger(n));
+  // 「继续翻译剩下的」要沿用同一模式：重翻失败后补翻如果退回普通模式，
+  // 基线会把旧译文原样填回来，看起来像补成功了。
+  state.trForce = !!e.force;
   const left = Number(e.left || 0);
   const ok = Number(e.ok || 0);
   const official = Number(e.official || 0);
@@ -1807,7 +1836,7 @@ async function continueTranslate() {
   if (state.busy) return;
   const skipIndices = state.raw.filter((r) => r.skip)
     .map((r) => Number(r._i)).filter((n) => Number.isInteger(n));
-  const r = await pywebview.api.translate(idx, skipIndices);
+  const r = await pywebview.api.translate(idx, skipIndices, !!state.trForce);
   if (!r || !r.ok) {
     if (r && r.error === "busy") return;
     toast((r && r.error) || "error", "err");

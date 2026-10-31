@@ -1744,7 +1744,7 @@ class Api(object):
         return {"ok": True, "total": len(targets)}
 
     def _trans_report(self, targets, reasons=None, stopped=False, memory=0,
-                      official=0, dedup=0, rows=None):
+                      official=0, dedup=0, rows=None, force=False, written=None):
         """机翻结束后统一报一次账：翻了多少、还剩多少、为什么剩、去重省了多少。
 
         「还剩」不只看异常：模型偶尔会返回空串，那种也算没翻出来。
@@ -1752,13 +1752,20 @@ class Api(object):
 
         rows 用调用方那一份快照：机翻期间 self.rows 万一被别的路径换掉，
         结算也必须对着当初发出去的那批行算。
+
+        force（重新翻译）必须按「本轮真的写回了哪些行」结算：这些行上本来
+        就有旧译文，按 trans 非空算会把模型失败的行也报成成功，用户点了
+        「继续翻译剩下的」也补不回来。
         """
         rows = self.rows if rows is None else rows
         ok = 0
         left = []
         for i in targets:
             try:
-                filled = bool((rows[i]["trans"] or "").strip())
+                if force:
+                    filled = i in (written or ())
+                else:
+                    filled = bool((rows[i]["trans"] or "").strip())
             except Exception:
                 filled = False
             if filled:
@@ -1772,6 +1779,9 @@ class Api(object):
                # 同文去重省下的模型调用次数。前端会显示成「同文合并 N 条」。
                "dedup": max(0, int(dedup or 0)),
                "stopped": bool(stopped),
+               # 前端「继续翻译剩下的」要沿用同一模式，否则补翻会退回基线，
+               # 旧译文原样填回来，看起来像补成功了。
+               "force": bool(force),
                "reasons": [r for r in (reasons or []) if r]}
         self._emit(rep)
         return rep
@@ -1805,6 +1815,9 @@ class Api(object):
         hits = []
         misses = []
         kept = 0
+        # 本轮真正写回的行。force 模式下这些行本来就有旧译文，结算必须按
+        # 这份集合算，否则模型失败的行会被旧译文冒充成「已完成」。
+        written = set()
         if force:
             misses = list(targets)
         for i in ([] if force else targets):
@@ -1830,7 +1843,7 @@ class Api(object):
             self._emit({"type": "done", "translated": len(hits) + kept,
                         "memory": len(hits), "stopped": False})
             self._trans_report(targets, memory=mem_n, official=official_n,
-                               rows=rows)
+                               rows=rows, force=force, written=written)
             return
 
         try:
@@ -1839,7 +1852,8 @@ class Api(object):
             self._emit({"type": "error", "message": str(ex)})
             self._trans_report(
                 targets, memory=mem_n, official=official_n,
-                reasons=[self._tr("本地模型接口连不上：%s") % ex], rows=rows)
+                reasons=[self._tr("本地模型接口连不上：%s") % ex], rows=rows,
+                force=force, written=written)
             return
 
         done = len(hits) + kept
@@ -1889,7 +1903,7 @@ class Api(object):
                     targets, memory=len(hits) - official_n, official=official_n,
                     stopped=True, dedup=dedup_saved,
                     reasons=[self._tr("已手动停止，剩下的还没有翻译")],
-                    rows=rows)
+                    rows=rows, force=force, written=written)
                 return
             keys = order[k:k + batch]
             texts = [rep_text[c] for c in keys]
@@ -1929,7 +1943,7 @@ class Api(object):
                         targets, memory=len(hits) - official_n, official=official_n,
                         stopped=True, dedup=dedup_saved,
                         reasons=[self._tr("调用本地模型失败：%s") % ex],
-                        rows=rows)
+                        rows=rows, force=force, written=written)
                     return
                 continue
             consec = 0
@@ -1942,6 +1956,7 @@ class Api(object):
                     rows[i]["trans"] = text
                     rows[i]["transSrc"] = "machine"
                     items.append({"i": i, "trans": text, "src": "machine"})
+                    written.add(i)
                     # 记忆按行上的原始原文存，和 _baseline_fill 的查询键一致
                     self._memory_store.put(rows[i]["orig"], tgt, text)
                 done += len(groups[key])
@@ -1949,7 +1964,11 @@ class Api(object):
             self._emit({"type": "rows", "items": items})
             self._emit({"type": "progress", "done": done, "total": len(targets),
                         "memory": len(hits)})
-        empty = [i for i in misses if not (rows[i]["trans"] or "").strip()]
+        # 重翻时旧译文还在，按 trans 非空判断会把失败行也算成「翻好了」。
+        if force:
+            empty = [i for i in misses if i not in written]
+        else:
+            empty = [i for i in misses if not (rows[i]["trans"] or "").strip()]
         reasons = []
         if failed_batches:
             # 跳过的批次也要说清楚为什么，否则用户只看到「少了几条」。
@@ -1963,7 +1982,8 @@ class Api(object):
                     "stopped": False})
         self._trans_report(targets, memory=len(hits) - official_n,
                            official=official_n, reasons=reasons,
-                           dedup=dedup_saved, rows=rows)
+                           dedup=dedup_saved, rows=rows,
+                           force=force, written=written)
 
     def stop_translate(self):
         self._stop.set()
