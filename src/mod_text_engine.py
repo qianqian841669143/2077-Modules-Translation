@@ -874,7 +874,36 @@ def _wrapper_rules(text):
     return out
 
 
-def _extract_lua(text, loose=True, trace=False, noise=None):
+def _brace_end(text, open_pos):
+    """从 '{' 的位置出发, 返回与之配对的 '}' 之后的位置。
+
+    Lua 语言段表 (["en-us"] = { ... }) 的边界要靠它算: 只有知道段在哪里结束,
+    段外的普通代码才不会被误判成「还在最后一段里」。
+    """
+    depth, i, n = 0, open_pos, len(text)
+    while i < n:
+        c = text[i]
+        if c in ("\"", "'"):
+            q = c
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    i += 2
+                    continue
+                if text[i] == q:
+                    break
+                i += 1
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
+def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
     toks, lits = scan_source(text, "lua")
     by_start = {l.start: l for l in lits}
     taken = {}          # start -> (类型, 上下文)
@@ -884,15 +913,54 @@ def _extract_lua(text, loose=True, trace=False, noise=None):
     wrappers = _wrapper_rules(text)
     # 模组自带的「英文 → 中文」数据表: 左边是查表 key, 翻它会把表打坏
     table_keys = NOISE.bilingual_keys(text)
+    # 同一个文件里按语言键塞了多套语言时 (["en-us"] = {...}, ["de-de"] = {...})，
+    # 只有源语言段是「原文」，目标语言段留给 is_target_language_text 当已译处理。
+    # 拉丁字母写成的德/法/西语段靠字符区分不出来，以前会被整段当成待翻文本 ——
+    # QuickhackPanel 一个文件就因此多出 48 条外语长句。
+    # 按语言键切段 (["en-us"] = {...} / ["zh-cn"] = {...})：只有源语言段是原文，
+    # 目标语言段留给 is_target_language_text 区分「已译」与「这段里漏翻的英文」
+    # (如 QuickhackPanel 的 tab)。其余语言段整段丢弃 —— 拉丁字母写成的德/法/西
+    # 语靠字符区分不出来，以前会被整段当成待翻文本，一个文件就多出几十条外语。
+    sections = []
+    for m in NOISE._LUA_LANG_KEY_RE.finditer(text):
+        code = (m.group(1) or "").lower()
+        region = (m.group(2) or "").lower()
+        lang = code + "-" + region if region else code
+        open_pos = text.rfind("{", m.start(), m.end())
+        sections.append((m.start(), _brace_end(text, open_pos) if open_pos >= 0 else m.end(), lang))
+    keep_starts = None
+    if sections:
+        _tgt_full = (target_locale or "").lower().replace("_", "-")
+        _tgt_main = _tgt_full.split("-")[0]
+
+        def wants(lang):
+            if lang.split("-")[0] == "en":
+                return True
+            if _tgt_full and lang == _tgt_full:
+                return True
+            return bool(_tgt_main and lang == _tgt_main)
+
+        keep_starts = {start for start, _end, lang in sections if wants(lang)}
     dropped = noise if noise is not None else {}
 
     def drop(family):
         dropped[family] = dropped.get(family, 0) + 1
 
+    def kept_section(pos):
+        if keep_starts is None:
+            return True
+        for start, end, _lang in sections:
+            if start <= pos < end:
+                return start in keep_starts
+        return True
+
     def take(lit, typ, ctx=""):
         if lit is None or lit.quote not in ("\"", "'"):
             return
         if lit.start in taken:
+            return
+        if not kept_section(lit.start):
+            drop(NOISE.FAMILY_LANG)
             return
         taken[lit.start] = (typ, ctx)
 
@@ -1306,7 +1374,8 @@ def extract_root_ex(root, include_lua=True, loose=True, include_locale_lua=False
                 text = f.read()
             ext = os.path.splitext(path)[1].lower()
             if ext == ".lua":
-                items = _extract_lua(text, loose=loose, trace=trace, noise=noise)
+                items = _extract_lua(text, loose=loose, trace=trace, noise=noise,
+                                    target_locale=target_locale)
                 meta["lua_files"] += 1
             else:
                 reds_stats = {}

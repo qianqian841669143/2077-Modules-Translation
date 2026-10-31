@@ -161,6 +161,11 @@ _FUNC_LANG_RE = re.compile(
 # public class German extends ModLocalizationPackage
 _CLASS_LANG_RE = re.compile(
     r"\bclass\s+([A-Za-z_]\w*)\s+extends\s+ModLocalizationPackage\b", re.I)
+# ["en-us"] = { ... } —— Lua 里按语言键组织的多语言表。
+# QuickhackPanel 这类模组把 20 种语言塞在同一个 texts 表里, 只有 en 段是原文;
+# 拉丁字母的德语/法语/西语段无法靠字符区分, 只能靠语言键认出来。
+_LUA_LANG_KEY_RE = re.compile(
+    r"""\[\s*["']([A-Za-z]{2})(?:[-_]([A-Za-z]{2,4}))?["']\s*\]\s*=\s*\{""")
 
 
 def _norm_lang(code):
@@ -191,6 +196,10 @@ def lang_sections(text):
         if not lang:
             continue
         hits.append((m.start(), lang))
+    for m in _LUA_LANG_KEY_RE.finditer(text):
+        lang = _norm_lang(m.group(1))
+        if lang:
+            hits.append((m.start(), lang))
     if len({h[1] for h in hits}) < 2:
         return []
     hits.sort()

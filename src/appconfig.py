@@ -5,7 +5,7 @@ import os
 import re
 import sys
 
-VERSION = "v2.38.2"
+VERSION = "v2.39.0"
 APP_DIR_NAME = "2077ModTranslator"
 
 TARGET_LANGS = ["简体中文", "繁體中文", "English", "日本語", "한국어",

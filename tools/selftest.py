@@ -2125,6 +2125,48 @@ def check_apply_ctx_backfill():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_lua_lang_sections():
+    """一个 lua 文件里按语言键塞了多套语言时, 只取源语言段(+目标语言段)。
+
+    QuickhackPanel 把 20 种语言放进同一个 texts 表: `["en-us"] = {...}` 一直到
+    `["th-th"] = {...}`。拉丁字母写成的德语、法语、西语段在字符层面和英文无法
+    区分, 以前会被整段当成待翻原文 —— 一个文件就多出 48 条外语长句, 点「翻译
+    全部」再应用会把模组的多语言支持整段写成中文。
+    """
+    text = (
+        'local texts = {\n'
+        '    ["en-us"] = {\n'
+        '        tab = "Quickhack Panel",\n'
+        '        desc = "How quickhacks are listed in the panel.",\n'
+        '    },\n'
+        '    ["de-de"] = {\n'
+        '        desc = "Reihenfolge der Quickhacks im Menue.",\n'
+        '    },\n'
+        '    ["fr-fr"] = {\n'
+        '        desc = "Ordre des piratages rapides dans le panneau.",\n'
+        '    },\n'
+        '    ["zh-cn"] = {\n'
+        '        desc = "面板中快速破解的排列顺序。",\n'
+        '    },\n'
+        '}\n'
+        'local after = "Outside Section Text Here"\n')
+    noise = {}
+    items = E._extract_lua(text, loose=True, noise=noise, target_locale="zh-CN")
+    origs = [it[3] for it in items]
+    # 源语言段照常提取
+    assert "How quickhacks are listed in the panel." in origs, origs
+    # 德语 / 法语段必须整段丢掉
+    assert not any("Reihenfolge" in o for o in origs), origs
+    assert not any("Ordre des" in o for o in origs), origs
+    # 段外的普通代码不受影响
+    assert "Outside Section Text Here" in origs, origs
+    assert noise.get(NOISE.FAMILY_LANG, 0) >= 2, noise
+    # 只有一套语言时不能触发(避免误伤普通表)
+    single = 'local t = {\n    ["en-us"] = {\n        desc = "Only One Language Here",\n    },\n}\n'
+    items2 = E._extract_lua(single, loose=True, target_locale="zh-CN")
+    assert "Only One Language Here" in [it[3] for it in items2], items2
+
+
 def check_identifier_guard():
     """标识符 / 本地化键守卫。
 
@@ -2448,6 +2490,8 @@ def main():
     print("   OK: 语言包按条目名回填 (缺条目留空 / 单词按钮 / 中文含斜杠)")
     check_apply_ctx_backfill()
     print("   OK: 应用时补条目名 (前端不带 ctx 也能按键写回)")
+    check_lua_lang_sections()
+    print("   OK: lua 多语言段 (只取 en + 目标语言 / 段外不受影响)")
     check_identifier_guard()
     print("   OK: 标识符/本地化键守卫 (n\"\" 引用与查表键不参与翻译)")
     res3 = check_resource_layer()
