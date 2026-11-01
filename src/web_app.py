@@ -1363,6 +1363,15 @@ class Api(object):
                     "errors": [str(ex)]}
 
         report = None
+        # 转换失败被跳过的资源：这些行没有进包，不能算「写入成功」。
+        skipped_res = [str(x) for x in (getattr(result, "skipped", []) or [])]
+        missed_files = set(skipped_res)
+        if missed_files:
+            missed = [it for it in items
+                      if str(it.get("file") or "") in missed_files]
+            n = max(0, n - len(missed))
+            self._log_failure("apply-resource-skip",
+                              "跳过资源: %s" % ", ".join(skipped_res[:5]))
         try:
             parts = getattr(result, "parts", None)
             if parts:
@@ -1395,6 +1404,11 @@ class Api(object):
                 tx.discard()
                 undo_id = ""
         problems = list(report.problems)
+        if missed_files:
+            problems.insert(0, self._tr(
+                "%d 个资源转换失败已跳过（对应 %d 条未写入）：%s")
+                % (len(skipped_res), len(missed),
+                   "、".join(sorted(missed_files)[:3])))
         # 组包并校验通过才写记忆。以前资源模式一条都不写，同一个 mod 再打开
         # 一次还得重新机翻一遍，官方基线也跟着白跑。
         saved = self._remember_applied(items, applied) if report.ok else 0

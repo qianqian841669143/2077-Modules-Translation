@@ -3489,6 +3489,73 @@ def check_deploy_and_manifest():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_build_skips_broken_resource():
+    """一个资源转换失败不能拖垮整包。
+
+    WolvenKit 的 `convert deserialize` 会**原生崩溃**（exit 0xC0000005，栈落在
+    System.CommandLine 上，跟输入无关：同一个 JSON 再跑一次就过）。线上那次
+    Equipment-EX 就栽在这上面：8 条译文全部记成失败，其实其它资源都好好的。
+    这里钉住三件事：失败重试一次、还不行只跳过那一个、.xl 里不许声明被跳过的。
+    """
+    import localization.builder as B
+
+    # 报错尾部要能捞到真正的异常，而不是每次一样的调用链
+    lines = ["[ 0: Information ] - Found 1 files to process.",
+             "Unhandled exception. System.NullReferenceException: Object reference",
+             "   at WolvenKit.Core.Cr2wFile.Write()",
+             "   at System.CommandLine.Invocation.InvocationPipeline.Invoke(...)"]
+    import localization.wkit as W
+    got = W._error_tail(lines)
+    assert "NullReferenceException" in got, got
+
+    calls = {"n": 0}
+
+    def fake_deser(cli, src, outdir, log=None, expect_name=None):
+        calls["n"] += 1
+        if "01_b" in str(src):
+            raise W.WkitError("WolvenKit convert 失败（exit 3221225477）", "boom")
+        from pathlib import Path
+        d = Path(outdir)
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / (expect_name or "x")
+        p.write_bytes(b"CR2W" + b"\0" * 16)
+        return p
+
+    def fake_pack(cli, folder, outdir, log=None):
+        from pathlib import Path
+        out = Path(outdir)
+        out.mkdir(parents=True, exist_ok=True)
+        p = out / (Path(folder).name + ".archive")
+        p.write_bytes(b"ARCHIVE")
+        return p
+
+    old_deser, old_pack = B.wkit.deserialize, B.wkit.pack
+    tmp = tempfile.mkdtemp(prefix="mt-skipres-")
+    try:
+        B.wkit.deserialize, B.wkit.pack = fake_deser, fake_pack
+        spec = B.make_spec("StubMod", extend="Stub.archive.xl")
+        spec.onscreens.append(B.Resource("l10n\\m\\zh-cn\\onscreens\\00_a.json",
+                                         {"a": 1}))
+        spec.onscreens.append(B.Resource("l10n\\m\\zh-cn\\onscreens\\01_b.json",
+                                         {"b": 2}))
+        res = B.build(spec, "cli", os.path.join(tmp, "work"), os.path.join(tmp, "out"))
+        assert res.skipped == ["l10n\\m\\zh-cn\\onscreens\\01_b.json"], res.skipped
+        assert res.resources == ["l10n\\m\\zh-cn\\onscreens\\00_a.json"], res.resources
+        assert calls["n"] == 3, calls            # 两个资源 + 失败那次重试
+        xl = io.open(res.xl_path, encoding="utf-8").read()
+        assert "00_a.json" in xl and "01_b.json" not in xl, xl
+        assert res.archive.is_file()
+        assert any("01_b.json" in w for w in res.warnings), res.warnings
+        # 现场要留下来：出错的 JSON + CLI 输出，便于拿同一份文件复现
+        faildir = os.path.join(tmp, "work", "StubMod", "failed")
+        assert os.path.isdir(faildir), faildir
+        names = os.listdir(faildir)
+        assert names and any("01_b" in n for n in names), names
+    finally:
+        B.wkit.deserialize, B.wkit.pack = old_deser, old_pack
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     print("== 回填自测 ==")
     check_apply_roundtrip()
@@ -3603,6 +3670,8 @@ def main():
     print("   OK: 自己的翻译包不被当源 / 只有产物时拒绝 / 归档预筛口径")
     check_deploy_and_manifest()
     print("   OK: 按文件覆盖 / 预演不写盘 / 清单记 added+sha1 / 还原后被重新读回")
+    check_build_skips_broken_resource()
+    print("   OK: 资源转换崩溃重试一次 / 只跳过那一个 / .xl 不声明被跳过的")
 
     if not os.path.isdir(VORTEX):
         print("\n未找到 Vortex 目录, 跳过真实模组测试: %s" % VORTEX)

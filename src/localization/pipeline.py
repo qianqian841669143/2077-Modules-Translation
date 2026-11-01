@@ -467,6 +467,14 @@ class GroupResult(object):
             out.extend(getattr(r, "warnings", []) or [])
         return out
 
+    @property
+    def skipped(self):
+        """转换失败被跳过的资源；调用方要据此把对应的行从「已写入」里扣掉。"""
+        out = []
+        for _s, r in self.parts:
+            out.extend(getattr(r, "skipped", []) or [])
+        return out
+
 
 class SessionGroup(object):
     """一个模组的多个归档会话，对外装作一个 Session。

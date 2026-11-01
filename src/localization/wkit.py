@@ -117,6 +117,29 @@ def _filter(output):
     return keep
 
 
+def _error_tail(lines, keep=8):
+    """从 CLI 输出里挑出真正有信息的那几行。
+
+    .NET 崩溃时末尾几行永远是 `System.CommandLine.Invocation...` 的调用链
+    （每次一字不差），真正的异常类型和消息写在前面。只取尾部等于把线索扔了，
+    这里优先捞「异常/error」行，再补尾部。
+    """
+    picked = []
+    for ln in lines or ():
+        low = ln.lower()
+        if ("exception" in low or "unhandled" in low
+                or low.strip().startswith("error") or "错误" in ln):
+            if ln not in picked:
+                picked.append(ln)
+        if len(picked) >= 3:
+            break
+    tail = list(lines or ())[-4:]
+    for ln in tail:
+        if ln not in picked:
+            picked.append(ln)
+    return "\n".join(picked[-keep:])
+
+
 def run(cli, args, timeout=DEFAULT_TIMEOUT, log=None):
     """执行一条 CLI 命令，返回过滤后的输出行列表。
 
@@ -144,7 +167,7 @@ def run(cli, args, timeout=DEFAULT_TIMEOUT, log=None):
         for line in lines:
             log(line)
     if proc.returncode != 0:
-        tail = "\n".join(lines[-8:])
+        tail = _error_tail(lines)
         raise WkitError(
             "WolvenKit %s 失败（exit %d）\n%s"
             % (args[0] if args else "", proc.returncode, tail),

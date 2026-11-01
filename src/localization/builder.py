@@ -37,6 +37,30 @@ def _safe_token(text, fallback="res"):
     return t[:60] or fallback
 
 
+def _save_failure(root, res, json_path, ex):
+    """把崩溃现场留下来：出错的 JSON + WolvenKit 的完整输出。
+
+    CLI 原生崩溃时，屏幕/日志上那几行是 System.CommandLine 的调用链，看不出
+    所以然。留一份 JSON 才能拿同一个文件再跑一次，或者报给 WolvenKit。
+    """
+    import time
+    try:
+        d = Path(root) / "failed" / ("%s_%s" % (
+            time.strftime("%Y%m%d-%H%M%S"),
+            _safe_token(res.rel.rsplit("\\", 1)[-1], "res")))
+        d.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(json_path, d / Path(json_path).name)
+        except OSError:
+            pass
+        out = getattr(ex, "output", "") or str(ex)
+        with open(d / "wolvenkit.log", "w", encoding="utf-8") as f:
+            f.write(str(out))
+        return str(d)
+    except Exception:
+        return ""
+
+
 class Resource(object):
     """一个要被写进归档的资源。
 
@@ -119,6 +143,9 @@ class BuildResult(object):
         self.resources = list(resources)
         self.xl_text = xl_text
         self.warnings = []
+        # 转换失败、被跳过的资源（相对归档根的路径）。调用方要按它把对应
+        # 的行从「已写入」里扣掉，否则会报成「8 条写入成功」而归档里没有。
+        self.skipped = []
 
     def files(self):
         return [p for p in (self.archive, self.xl_path) if p is not None]
@@ -190,7 +217,8 @@ def build(spec, cli, workdir, outdir, log=None):
                 child.unlink()
     stage.mkdir(parents=True, exist_ok=True)
 
-    result = BuildResult(name, None, None, [r.rel for r in resources])
+    staged = []          # 真正转换成功的资源（归档内相对路径）
+    failed = []          # [(rel, 说明, 现场目录)]
 
     for idx, res in enumerate(resources):
         say("序列化 %s" % res.rel)
@@ -200,16 +228,47 @@ def build(spec, cli, workdir, outdir, log=None):
         json_path = slot / (target_name + ".json")
         cr2w.save_doc(res.doc, json_path)
 
-        cr2w_path = wkit.deserialize(cli, json_path, cr2w_dir / ("%03d" % idx),
-                                     log=log, expect_name=target_name)
+        # WolvenKit 的 convert 偶尔会原生崩溃（exit 0xC0000005，栈落在
+        # System.CommandLine 上，跟输入无关——同一份 JSON 再跑一次就过）。
+        # 一次重试能把这类抖动吃掉；还不行就只跳过这一个资源，别把整包
+        # 连同其它几十条译文一起丢进失败。
+        try:
+            cr2w_path = wkit.deserialize(cli, json_path, cr2w_dir / ("%03d" % idx),
+                                         log=log, expect_name=target_name)
+        except Exception:
+            say("  转换失败，重试一次")
+            try:
+                cr2w_path = wkit.deserialize(
+                    cli, json_path, cr2w_dir / ("%03d" % idx),
+                    log=log, expect_name=target_name)
+            except Exception as ex2:
+                where = _save_failure(root, res, json_path, ex2)
+                failed.append((res.rel, str(ex2), where))
+                say("  仍然失败，跳过 %s（现场：%s）" % (res.rel, where or "-"))
+                continue
         dst = stage / res.rel.replace("\\", os.sep)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(cr2w_path, dst)
         if not cr2w.is_cr2w(dst):
-            raise BuildError("产物不是 CR2W：%s" % res.rel)
+            where = _save_failure(root, res, json_path,
+                                  BuildError("产物不是 CR2W：%s" % res.rel))
+            failed.append((res.rel, "产物不是 CR2W", where))
+            say("  产物不是 CR2W，跳过 %s" % res.rel)
+            continue
+        staged.append(res.rel)
         say("  → %s (%d 字节)" % (res.rel, dst.stat().st_size))
 
-    say("打包 %d 个资源" % len(resources))
+    if not staged:
+        detail = "；".join("%s: %s" % (rel, why) for rel, why, _w in failed[:3])
+        raise BuildError("没有可打包的资源%s" % (("（" + detail + "）") if detail else ""))
+
+    result = BuildResult(name, None, None, staged)
+    result.skipped = [rel for rel, _why, _w in failed]
+    for rel, why, where in failed:
+        result.warnings.append("转换失败已跳过 %s（%s）%s" % (
+            rel, why.splitlines()[0][:120], ("现场：" + where) if where else ""))
+
+    say("打包 %d 个资源" % len(staged))
     # pack 的输出名取自目录名，而目录名就是我们要的名字，所以直接落到 out
     archive = wkit.pack(cli, stage, out, log=log)
     final_archive = out / (name + ".archive")
@@ -219,16 +278,21 @@ def build(spec, cli, workdir, outdir, log=None):
 
     cfg = xlmod.L10nConfig()
     cfg.extend = spec.extend
+    ok = set(staged)
     for res in spec.onscreens:
-        cfg.add("onscreens", _lang_of(res.rel), res.rel)
+        if res.rel in ok:
+            cfg.add("onscreens", _lang_of(res.rel), res.rel)
     for res in spec.lipmaps:
-        cfg.add("lipmaps", _lang_of(res.rel), res.rel)
+        if res.rel in ok:
+            cfg.add("lipmaps", _lang_of(res.rel), res.rel)
     for res in spec.vomaps:
-        cfg.add("vomaps", _lang_of(res.rel), res.rel)
+        if res.rel in ok:
+            cfg.add("vomaps", _lang_of(res.rel), res.rel)
     for pair in spec.subtitles:
         # .xl 指向注册表，不指向文本 —— 这是 M0 最容易搞错的一点
         anchor = pair.map or pair.entries
-        cfg.add("subtitles", _lang_of(anchor.rel), anchor.rel)
+        if anchor.rel in ok:
+            cfg.add("subtitles", _lang_of(anchor.rel), anchor.rel)
 
     final_xl = out / xlmod.default_name(name)
     xlmod.save(final_xl, cfg)
@@ -236,11 +300,10 @@ def build(spec, cli, workdir, outdir, log=None):
     result.xl_text = xlmod.render(cfg)
 
     declared = set(cfg.all_paths())
-    staged = {r.rel for r in resources}
-    missing = sorted(declared - staged)
+    missing = sorted(declared - ok)
     if missing:
         result.warnings.append(".xl 声明了但归档里没有：%s" % ", ".join(missing))
-    unused = sorted(staged - declared)
+    unused = sorted(ok - declared)
     if unused:
         result.warnings.append("归档里有但 .xl 未声明：%s" % ", ".join(unused))
 
