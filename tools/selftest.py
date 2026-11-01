@@ -3217,6 +3217,131 @@ def check_mod_batch():
     shutil.rmtree(src, ignore_errors=True)
 
 
+def check_markup_repair():
+    """译文必须把 `<Rich ...>` / `</>` / `{占位符}` 带回来。
+
+    标记丢了只是少一段高亮，`{value}` 被写成 `%s` 却是弹窗里原样显示 `%s`。
+    位置固定（开头、结尾、关闭标记）的由工具补回去；补不回来的必须报出来，
+    由写回阶段按软失败拦下。
+    """
+    fixed, lost = E.repair_markup(
+        '<Rich color="X" style="Semi-Bold">-{int_0}% cost</> when hit',
+        "命中时 -{int_0}% 消耗。")
+    assert fixed.startswith('<Rich color="X"'), fixed
+    assert fixed.endswith("</>"), fixed
+    assert lost == [], lost
+
+    fixed, lost = E.repair_markup("Base game value: {value}", "游戏默认值：%s")
+    assert "{value}" in fixed and "%s" not in fixed, fixed
+    assert lost == [], lost
+
+    fixed, lost = E.repair_markup("A {x} B", "纯中文")
+    assert lost == ["{x}"], lost
+
+    # 句中两段不同颜色的标签补不回去：只丢配色，不拦。
+    fixed, lost = E.repair_markup(
+        'Hit for <Rich color="A">+{int_0}%</> and <Rich color="B">-{int_1}%</>',
+        "伤害 +{int_0}%，代价 -{int_1}%")
+    assert lost == [], lost
+
+    fixed, lost = E.repair_markup("plain sentence", "普通句子")
+    assert (fixed, lost) == ("普通句子", []), (fixed, lost)
+
+
+def check_apply_hygiene():
+    """批量写回：不留 `.bak`，不建撤销记录；标记丢失的那条不写。"""
+    import mod_batch as MB
+
+    class _NullMem(object):
+        def put(self, *a, **k):
+            return True
+
+        def save(self):
+            return True
+
+        def get(self, *a, **k):
+            return ""
+
+    tmp = tempfile.mkdtemp()
+    root = tempfile.mkdtemp()
+    try:
+        os.makedirs(os.path.join(tmp, "sub"))
+        for rel in ("a.reds.bak", "sub/b.lua.bak"):
+            with io.open(os.path.join(tmp, rel.replace("/", os.sep)),
+                         "w", encoding="utf-8") as f:
+                f.write("x")
+        with io.open(os.path.join(tmp, "keep.reds"), "w", encoding="utf-8") as f:
+            f.write("y")
+        assert MB.drop_backups(tmp) == 2
+        assert os.path.isfile(os.path.join(tmp, "keep.reds")), "清理把正文删了"
+
+        p = os.path.join(root, "sample.lua")
+        with io.open(p, "w", encoding="utf-8", newline="") as f:
+            f.write('Loc = {\n  hello = "Hello there",\n  tip = "<b>Hi</b>",\n'
+                    '  raw = "A {x} B",\n}\n')
+        api = web_app.Api()
+        api._memory = _NullMem()
+        api.rows = []
+        api.root = root
+        items = [
+            {"file": "sample.lua", "line": 2, "ctx": "hello", "orig": "Hello there",
+             "trans": "你好", "target": "", "kind": "text", "root": root},
+            {"file": "sample.lua", "line": 3, "ctx": "tip", "orig": "<b>Hi</b>",
+             "trans": "嗨", "target": "", "kind": "text", "root": root},
+            {"file": "sample.lua", "line": 4, "ctx": "raw", "orig": "A {x} B",
+             "trans": "纯中文", "target": "", "kind": "text", "root": root},
+        ]
+        res = api._do_apply(items, keep_backup=False, make_undo=False)
+        text = io.open(p, encoding="utf-8").read()
+        assert res["ok"] == 2 and res["fail"] == 1, res
+        assert res["undoId"] == "", "批量不该建撤销记录: %r" % res["undoId"]
+        assert "你好" in text and "<b>嗨</b>" in text, text
+        assert "A {x} B" in text, "占位符丢失的那条不该写进去"
+        assert not [n for n in os.listdir(root) if n.endswith(".bak")], "留了 .bak"
+        why = [f.get("reason") for f in res.get("failed") or []]
+        assert any("{x}" in w for w in why), why
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def check_package_class_langs():
+    """一个 .reds 里多个语言包类时，只取源语言那一段。"""
+    assert NOISE._class_lang("BNFTweaksLocalizationEnUs") == "en"
+    assert NOISE._class_lang("BNFTweaksLocalizationFrFr") == "fr"
+    assert NOISE._class_lang("JBlinkDashKorean") == "kr"
+    assert NOISE._class_lang("EnglishPackage") == "en"
+    assert NOISE._class_lang("Localization") == ""
+
+    text = (
+        "module X\n"
+        "import Codeware.Localization.*\n"
+        "public class EnUs extends ModLocalizationPackage {\n"
+        '  func F() { this.Text("k", "Hello there"); }\n'
+        "}\n"
+        "public class FrFr extends ModLocalizationPackage {\n"
+        '  func F() { this.Text("k", "Bonjour tout le monde"); }\n'
+        "}\n"
+    )
+    secs = NOISE.lang_sections(text)
+    assert len({s for _p, s in secs}) == 2, secs
+    keep = NOISE.keep_sections(secs, prefer=("en",))
+    assert keep is not None and len(keep) == 1, keep
+
+    tmp = tempfile.mkdtemp()
+    try:
+        p = os.path.join(tmp, "mixed.reds")
+        with io.open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        rows = locale_pack._text_pairs_ex(p, only_class="EnUs")
+        vals = [r[1] for r in rows]
+        assert vals == ["Hello there"], vals
+        rows = locale_pack._text_pairs_ex(p)
+        assert len(rows) == 2, rows      # 不指定类时保持原样（两段都算）
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     print("== 回填自测 ==")
     check_apply_roundtrip()
@@ -3321,6 +3446,12 @@ def main():
     print("   OK: 模型预热 (原生 /api/chat + keep_alive / 非 Ollama 后端不报错)")
     check_mod_batch()
     print("   OK: 批量复制 (跳过贴图/音频, 归档按需) / 名字清洗 / 会话隔离")
+    check_markup_repair()
+    print("   OK: 译文标记/占位符守恒 (<Rich ...>/</> 补回, %s 换回 {value}, 丢失拦下)")
+    check_apply_hygiene()
+    print("   OK: 批量写回不留 .bak / 不建撤销记录 / 标记丢失的行不写")
+    check_package_class_langs()
+    print("   OK: 多语言包类只取源语言段 / Provider 只取源语言类块")
 
     if not os.path.isdir(VORTEX):
         print("\n未找到 Vortex 目录, 跳过真实模组测试: %s" % VORTEX)

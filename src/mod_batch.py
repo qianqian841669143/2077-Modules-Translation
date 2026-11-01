@@ -185,6 +185,26 @@ def copy_mod(src, dst, with_archive=False, skip_assets=True, cancel=None):
     return stat
 
 
+def drop_backups(root):
+    """删掉副本里的 `*.bak`，返回删掉的个数。
+
+    副本里的 `.bak` 全是本工具写回时留的（复制阶段已经跳过源目录的 `.bak`），
+    所以这里可以无条件清：它不是模组内容，留着只会被一起部署进游戏目录。
+    撤销记录同理，批量里已经关掉了（见 `run_one` 里的 `_do_apply`）。
+    """
+    n = 0
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for fn in filenames:
+            if not fn.lower().endswith(".bak"):
+                continue
+            try:
+                os.remove(os.path.join(dirpath, fn))
+                n += 1
+            except OSError:
+                pass
+    return n
+
+
 # ---------------------------------------------------------------- 执行
 
 
@@ -281,7 +301,11 @@ def run_one(ctx, cand, r):
         r["machine"] = sum(1 for x in items
                            if (x.get("transSrc") or "") == "machine")
         if items:
-            res = w._do_apply(items)
+            # 批量写的是输出根里的副本：这份副本接下来会被整个部署进游戏目录，
+            # 所以不要 `.bak` 也不要撤销记录（两种情况都是 127 份冗余，实测
+            # 19 MB / 112 MB）。写错了重跑一次批量即可，撤销在这里没有落脚点。
+            res = w._do_apply(items, keep_backup=False, make_undo=False)
+            r["baks"] = drop_backups(dst)
             r["applied"] = int(res.get("ok") or 0)
             r["failed"] = int(res.get("fail") or 0)
             r["errors"] = [str(x) for x in (res.get("errors") or [])][:20]
@@ -322,7 +346,7 @@ def run(ctx, cands):
              "skipped": 0, "rows": 0, "todo": 0, "already": 0, "tm": 0,
              "machine": 0, "applied": 0, "failed": 0, "errors": [],
              "untouched": 0, "failReasons": {},
-             "undoId": "", "empty": False, "archive": "", "xl": ""}
+             "undoId": "", "empty": False, "archive": "", "xl": "", "baks": 0}
         try:
             run_one(ctx, cand, r)
         except Cancelled:

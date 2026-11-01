@@ -1822,6 +1822,85 @@ def looks_like_code_fragment(t):
     return bool(_CODEY_FRAGMENT_RE.search(s))
 
 
+# 译文必须把原文的标记和占位符带回来。
+#
+# Codeware 的 .reds 文案大量写成
+#   <Rich color="TooltipText.cyberwareDescriptionHighlightColor">+{int_0}%</>
+# 模型几乎总会把尖括号那一段当成 HTML 标记整段删掉（实测 DigitalVixenCore
+# 2 条），游戏里就只剩一行既没高亮也没配色的纯文本。把 `{value}` 换成 `%s`
+# 更糟：`%s` 不是 Codeware 的插值写法，弹窗会原样显示「游戏默认值：%s」。
+#
+# 开头/结尾的标签位置没有歧义，可以直接补回去；夹在句中、或者花括号占位符
+# 丢了，就没法安全插回——那种情况报出来按软失败拦下，宁可这一条留英文。
+_MARKUP_TAG_RE = re.compile(r"<[^<>\n]{1,400}>")
+_PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][^{}\n]{0,40}\}")
+_PCT_SPEC_RE = re.compile(r"%(?:\d+\$)?[-+0-9.]*[sdifqxX%]")
+
+
+def _count(seq):
+    out = {}
+    for x in seq:
+        out[x] = out.get(x, 0) + 1
+    return out
+
+
+def repair_markup(orig, trans):
+    """把译文丢掉的包裹标记补回来，返回 ``(译文, 补不回来的占位符列表)``。
+
+    能补的三种情况，位置都没有歧义：
+
+    * 原文开头那一串标签（``<Rich color=...>``）——补在译文最前面；
+    * 原文结尾那一串标签——补在译文最后面；
+    * 原文里的关闭标记（``</>``）在译文里没了——补在译文末尾。Rich 文本的
+      高亮本来可能只盖住半句，但补在末尾只是把高亮范围放大一点，不影响文案；
+    * 模型把 ``{value}`` 写成 ``%s``——两边各多一个、彼此都没有时，按顺序换回来。
+
+    其余丢失（句中标签、多出来的花括号）补不了，放进第二个返回值，由调用方
+    按软失败拦下：宁可这一条留英文，也不要把占位符写没。
+    """
+    if not orig or not trans or orig == trans:
+        return trans, []
+    m_lead = re.match(r"(?:<[^<>\n]{1,400}>)+", orig)
+    m_trail = re.search(r"(?:<[^<>\n]{1,400}>)+$", orig)
+    lead = m_lead.group(0) if m_lead else ""
+    trail = m_trail.group(0) if (m_trail and m_lead and
+                                 m_trail.start() >= m_lead.end()) else ""
+    if trail and trail == lead:
+        trail = ""                      # 只有一个自闭合标签, 不是包裹
+    fixed = trans
+    if lead and lead not in fixed:
+        fixed = lead + fixed
+    if trail and trail not in fixed:
+        fixed = fixed + trail
+
+    # 模型把 {value} 写成 %s：各多一个、彼此都没有，按顺序换回来。
+    want = _count(_PLACEHOLDER_RE.findall(orig))
+    have = _count(_PLACEHOLDER_RE.findall(fixed))
+    want_pct = _count(_PCT_SPEC_RE.findall(orig))
+    have_pct = _count(_PCT_SPEC_RE.findall(fixed))
+    lost_ph = [k for k, n in want.items() if have.get(k, 0) < n]
+    extra_pct = [k for k, n in have_pct.items() if want_pct.get(k, 0) < n]
+    if len(lost_ph) == 1 and len(extra_pct) == 1:
+        fixed = fixed.replace(extra_pct[0], lost_ph[0])
+        want = _count(_PLACEHOLDER_RE.findall(orig))
+        have = _count(_PLACEHOLDER_RE.findall(fixed))
+        lost_ph = [k for k, n in want.items() if have.get(k, 0) < n]
+
+    # 关闭标记补在末尾（只补一个，多个的话分不清该盖住哪几段）。
+    closes = [t for t in _MARKUP_TAG_RE.findall(orig) if t.startswith("</")]
+    if len(closes) == 1 and _MARKUP_TAG_RE.findall(fixed).count(closes[0]) == 0:
+        fixed = fixed + closes[0]
+
+    lost = list(lost_ph)
+    for name, n in want_pct.items():
+        if _count(_PCT_SPEC_RE.findall(fixed)).get(name, 0) < n:
+            lost.append(name)
+    # 句中标签（一句话里两段不同颜色的数值）位置不明，补不回去，但丢的只是一段
+    # 高亮配色，不影响文案能读：这类不拦，照常写回。真正会坏的只有占位符——
+    # 少了它运行时拿到的是字面的 {int_0} 或 %s。
+    return fixed, lost
+
+
 def _code_shape(toks):
     return [(t.kind, "" if t.kind == "str" else t.val) for t in toks]
 

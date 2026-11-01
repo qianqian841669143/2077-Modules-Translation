@@ -283,6 +283,37 @@ def _norm_lang(code):
     return c if c in LANG_CODES else ""
 
 
+# 国家/地区码: 单独出现时不能当语言用, 否则 class ...EnUs 会被认成 us。
+_REGION_CODES = {"us", "gb", "mx", "br", "cn", "tw"}
+_CAMEL_WORD_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+")
+
+
+def _class_lang(name):
+    """从语言包类名里认出语言。
+
+    ``public class German extends ModLocalizationPackage`` 这种直接就是语言名；
+    而 ``BNFTweaksLocalizationEnUs`` / ``JBlinkDashKorean`` / ``EnglishPackage``
+    只能按后缀和驼峰词去认。以前只认全名相等，于是这几个模组把同一份文件里的
+    英语段和法语/韩语段都当成「待翻译原文」，译文被同时写进两套语言包——中文
+    用户看不出来，但法语和韩语玩家的界面被改成了中文。
+    """
+    low = (name or "").strip().lower()
+    if not low:
+        return ""
+    if low in LANG_NAMES:
+        return LANG_NAMES[low]
+    for key in sorted(LANG_NAMES, key=len, reverse=True):
+        if len(key) >= 4 and low.endswith(key):
+            return LANG_NAMES[key]
+    words = [w.lower() for w in _CAMEL_WORD_RE.findall(name or "")]
+    for w in reversed(words[-2:]):
+        if w in LANG_NAMES:
+            return LANG_NAMES[w]
+        if w in LANG_CODES and w not in _REGION_CODES:
+            return w
+    return ""
+
+
 def lang_sections(text):
     """找出文件里的多语言分段 [(语言, 起始偏移), ...]。
 
@@ -299,7 +330,7 @@ def lang_sections(text):
             continue
         hits.append((m.start(), lang))
     for m in _CLASS_LANG_RE.finditer(text):
-        lang = LANG_NAMES.get(m.group(1).strip().lower(), "")
+        lang = _class_lang(m.group(1))
         if not lang:
             continue
         hits.append((m.start(), lang))

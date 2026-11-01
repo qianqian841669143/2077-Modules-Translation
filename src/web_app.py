@@ -669,7 +669,8 @@ class Api(object):
                     for pair in pairs:
                         try:
                             prows, pmeta = locale_pack.extract(
-                                root, [pair["source_entry"]], target)
+                                root, [pair["source_entry"]], target,
+                                only_class=pair.get("source_class", ""))
                         except Exception:
                             continue
                         skipped += int(pmeta.get("skipped_target", 0) or 0)
@@ -2584,23 +2585,32 @@ class Api(object):
         except Exception:
             pass
 
-    def _do_apply(self, items, allow_soft=False):
+    def _do_apply(self, items, allow_soft=False, keep_backup=True, make_undo=True):
         """按行的来源分流：归档资源行走组包，其余写回明文源文件。
 
         一个模组可能两层都有（.reds 里有硬编码文案，.archive 里有本地化表），
         必须各走各的路径，不能让一层的产物把另一层顶掉。
+
+        keep_backup / make_undo 只在批量里关掉：批量把整个模组复制到输出根、
+        在副本上写，写完这份副本就是交付物。留 633 个 `.bak`（19 MB）和 127 条
+        指向副本的撤销记录，既进不了游戏又白占磁盘；改错了重跑一遍就行。
         """
         if not items:
             return {"ok": 0, "fail": 0, "errors": []}
         res = [it for it in items if (it.get("kind") or "") == "resource"]
         src = [it for it in items if (it.get("kind") or "") != "resource"]
         if res and src:
-            return self._apply_mixed(res, src, allow_soft=allow_soft)
+            return self._apply_mixed(res, src, allow_soft=allow_soft,
+                                     keep_backup=keep_backup,
+                                     make_undo=make_undo)
         if res:
             return self._apply_resource(res)
-        return self._do_apply_source(src, allow_soft=allow_soft)
+        return self._do_apply_source(src, allow_soft=allow_soft,
+                                     keep_backup=keep_backup,
+                                     make_undo=make_undo)
 
-    def _apply_mixed(self, res_items, src_items, allow_soft=False):
+    def _apply_mixed(self, res_items, src_items, allow_soft=False,
+                     keep_backup=True, make_undo=True):
         """两层同时提交：资源层出新归档，源码层回写文件，结果分别上报。
 
         两层共用一个撤销事务。以前各建各的：一次混合应用留下两条记录，用户
@@ -2633,7 +2643,9 @@ class Api(object):
             out["canInstall"] = True
 
         try:
-            r2 = self._do_apply_source(src_items, tx=tx, allow_soft=allow_soft)
+            r2 = self._do_apply_source(src_items, tx=tx, allow_soft=allow_soft,
+                                       keep_backup=keep_backup,
+                                       make_undo=make_undo)
         except Exception as ex:
             r2 = {"ok": 0, "fail": len(src_items), "errors": [str(ex)]}
         out["ok"] += int(r2.get("ok") or 0)
@@ -2693,7 +2705,8 @@ class Api(object):
                 filled += 1
         return filled
 
-    def _do_apply_source(self, items, tx=None, allow_soft=False):
+    def _do_apply_source(self, items, tx=None, allow_soft=False,
+                         keep_backup=True, make_undo=True):
         import locale_pack
         import mod_text_engine as E
         import undo_store
@@ -2706,9 +2719,9 @@ class Api(object):
         created = []
         prepared_providers = []
         failed = []
-        backup = getattr(E, "backup_file", None)
+        backup = getattr(E, "backup_file", None) if keep_backup else None
         # 混合批次由 _apply_mixed 建一个事务、两层共用；单独走源码模式时自己建。
-        own_tx = tx is None
+        own_tx = tx is None and make_undo
         if own_tx:
             try:
                 tx = undo_store.ApplyTransaction(modroot, "应用到模组")
@@ -2759,6 +2772,27 @@ class Api(object):
 
         json_groups = {}
         text_groups = {}
+        # 译文得把原文的包装标记/占位符带回来。模型把 `<Rich ...>` 整段当 HTML
+        # 吞掉是常态，把 `{value}` 换成 `%s` 更坏（游戏里原样显示）。位置固定的
+        # 直接补回去；补不回来的这一条不写，记软失败，宁可留英文也别写坏。
+        rejected = {}
+        for it in items:
+            orig = str(it.get("orig") or "")
+            trans = str(it.get("trans") or "")
+            if not orig or not trans:
+                continue
+            fixed, lost = E.repair_markup(orig, trans)
+            if fixed != trans:
+                it["trans"] = fixed
+            if lost:
+                rejected[id(it)] = "标记/占位符丢失: " + " ".join(lost[:3])
+        if rejected:
+            fail += len(rejected)
+            for it in items:
+                why = rejected.get(id(it))
+                if why:
+                    add_fail(it, why, "soft")
+            items = [it for it in items if id(it) not in rejected]
         for it in items:
             if it.get("kind") == "json":
                 key = (it["file"], it.get("target") or it["file"])

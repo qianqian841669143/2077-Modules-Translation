@@ -239,12 +239,17 @@ def _assign_key(text, start):
     return m.group(1) or m.group(2) or ""
 
 
-def _text_pairs_ex(path):
+def _text_pairs_ex(path, only_class=""):
     """lua / reds: 用引擎的字面量扫描, 返回 (行号, 原文, key)。
 
     Codeware 的 this.Text("key", "value") 只提取第二个参数 value；
     第一个参数 key 会跳过并作为上下文显示。
     普通 `Name = "Value"` 条目用赋值名作 key, 供跨语言文件配对。
+
+    only_class 指定后只收这个语言包类块里的字面量：混写文件里的
+    ``@runtimeProperty`` 设置文案、逻辑字符串都不是语言包条目，按语言包
+    提取会让它们带着「写进 ChineseSimplified.reds」的目标去写回，永远匹配
+    不上（实测 INCF 5 条）。非语言包类的内容由源码层在原文件里就地处理。
     """
     try:
         with open(path, "r", encoding="utf-8-sig", newline="") as f:
@@ -256,9 +261,17 @@ def _text_pairs_ex(path):
         toks, lits = E.scan_source(text, lang)
     except Exception:
         return []
+    lo, hi = 0, len(text)
+    if only_class:
+        for name, start, end in _package_class_ranges(text):
+            if name == only_class:
+                lo, hi = start, end
+                break
     values, key_starts = E.codeware_text_calls(toks, lits)
     out = []
     for lit in lits:
+        if lit.start < lo or lit.start >= hi:
+            continue
         if lit.quote not in ("\"", "'"):
             continue
         if lit.start in key_starts:
@@ -586,11 +599,13 @@ def apply_text_target(path, rows):
     return written, fails
 
 
-def extract(root, entries, target_locale):
+def extract(root, entries, target_locale, only_class=""):
     """把选中的语言包抽成表格行; 目标文件已存在时顺带把已有译文带出来。
 
     已经是目标语言的文本会被跳过(中文/日文/韩文/俄文/阿拉伯文可按字符识别),
     避免把目标语言文件或源文件里已经翻好的内容再次当成原文。
+
+    only_class: 只取这个 Codeware 语言包类里的条目(Provider 配对时用)。
     """
     rows = []
     meta = {"files": 0, "types": {}, "locale": True, "skipped_target": 0}
@@ -616,7 +631,7 @@ def extract(root, entries, target_locale):
                              "ctx": key, "orig": val, "trans": cur,
                              "target": tgt, "kind": "json", "key": key})
         else:
-            pairs = _text_pairs_ex(os.path.join(root, rel))
+            pairs = _text_pairs_ex(os.path.join(root, rel), only_class=only_class)
             for idx, (line, val, key) in enumerate(pairs):
                 if E.is_target_language_text(val, target_locale):
                     meta["skipped_target"] += 1
@@ -1192,47 +1207,68 @@ def prepare_codeware_package(root, src_rel, tgt_rel, target_locale=None,
     return report
 
 
+def _package_class_ranges(text):
+    """列出文件里所有 Codeware 语言包类：``[(类名, 起始偏移, 结束偏移), ...]``。
+
+    括号配对时跳过字符串，因为 ``this.Text`` 的值里有 ``</>``、``{int_0}``
+    这类字符。同一份文件里可能有好几个语言包类（BNFTweaks 的 EnUs + FrFr、
+    DynamicEnemyMultiplier 的 English + Russian），逐个给出来才不会把法语/俄语
+    段当成原文。
+    """
+    text = text or ""
+    out = []
+    pos = 0
+    n = len(text)
+    while True:
+        m = CODEWARE_PACKAGE_RE.search(text, pos)
+        if not m:
+            break
+        brace = text.find("{", m.end())
+        if brace < 0:
+            break
+        depth, i = 0, brace
+        while i < n:
+            ch = text[i]
+            if ch in "\"'":
+                q = ch
+                i += 1
+                while i < n:
+                    if text[i] == "\\":
+                        i += 2
+                        continue
+                    if text[i] == q:
+                        break
+                    i += 1
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        if depth != 0:
+            break
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        out.append((m.group(1), line_start, i + 1))
+        pos = i + 1
+    return out
+
+
 def _package_class_block(text):
     """从一个「语言包 + 逻辑」混写的 .reds 里取出语言包类。
 
     返回 ``(类名, 类块文本, 头部文本)``；头部是 module 与 import 行。类块从
-    class 关键字所在行开始到配对的 ``}`` 为止，括号配对时跳过字符串，因为
-    ``this.Text`` 的值里有 ``</>``、``{int_0}`` 这类字符。
+    class 关键字所在行开始到配对的 ``}`` 为止，括号配对时跳过字符串。
     """
-    m = CODEWARE_PACKAGE_RE.search(text or "")
-    if not m:
+    ranges = _package_class_ranges(text)
+    if not ranges:
         return None
-    brace = text.find("{", m.end())
-    if brace < 0:
-        return None
-    depth, i, n = 0, brace, len(text)
-    while i < n:
-        ch = text[i]
-        if ch in "\"'":
-            q = ch
-            i += 1
-            while i < n:
-                if text[i] == "\\":
-                    i += 2
-                    continue
-                if text[i] == q:
-                    break
-                i += 1
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        i += 1
-    if depth != 0:
-        return None
-    line_start = text.rfind("\n", 0, m.start()) + 1
-    block = text[line_start:i + 1]
+    name, start, end = ranges[0]
     head = [ln for ln in (text or "").splitlines()
             if ln.strip().startswith("module ")
             or ln.strip().startswith("import ")]
-    return m.group(1), block, "\n".join(head)
+    return name, text[start:end], "\n".join(head)
+
 
 
 def ensure_target(root, entry_rel, target_rel_path):
