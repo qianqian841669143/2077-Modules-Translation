@@ -14,6 +14,7 @@ mod_text_engine.py —— 《赛博朋克 2077》模组设置文本提取/回填
     并做转义处理, 不会把双引号或反斜杠写坏。
 """
 import bisect
+import functools
 import os
 import re
 
@@ -56,6 +57,11 @@ LIST_HEAD_RE = re.compile(r"""([A-Za-z_]\w*)\s*=\s*\{[^{}]*$""")
 _ASSIGN_VAR_RE = re.compile(r"([A-Za-z_]\w*)\s*=\s*[^=;\n]*$")
 _ASSIGN_LINE_RE = re.compile(
     r"(?:^|\n)\s*(?:local\s+)?([A-Za-z_]\w*)\s*=\s*[^\n]*$")
+# 标识符拆词的三个(原来在 _name_segments 里每次重编译)。
+_UPPER_RUN_RE = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_CAMEL_BOUND_RE = re.compile(r"([a-z0-9])([A-Z])")
+_NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]+")
+_WS_RE = re.compile(r"\s")
 # 语言包文件: en_US.lua / zh-cn.lua / it-it.lua / English.reds / ChineseSimplified.reds
 LOCALE_FILE_RE = re.compile(r"(^|/)[a-z]{2}[-_][a-z]{2,4}\.(lua|reds|json)$", re.I)
 # GarageCoreLocalization_de.reds / strings_ko.lua: 「本地化字样 + 语言后缀」的文件名。
@@ -917,13 +923,19 @@ def _looks_like_log_call(callee):
     return any(s in _LOG_SEGMENTS for s in segs)
 
 
+@functools.lru_cache(maxsize=8192)
 def _name_segments(name):
-    """把 m_lastMessage / LastMessage / MBCInfo / last_message 拆成小写词片段。"""
+    """把 m_lastMessage / LastMessage / MBCInfo / last_message 拆成小写词片段。
+
+    结果缓存: 同一个 callee 名在一个文件里会重复出现几百次(TweakDB:GetFlat
+    这种), 每次重跑三遍 re.sub 纯属浪费。v2.42.4 之前这里也是「字符串 pattern
+    调 re.sub」, py-spy 抓到的卡死栈正好落在它的 _compile 上。
+    """
     if not name:
-        return []
-    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)   # MBCInfo -> MBC_Info
-    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s)         # lastMessage -> last_Message
-    return [p for p in re.split(r"[^A-Za-z0-9]+", s.lower()) if p]
+        return ()
+    s = _UPPER_RUN_RE.sub(r"\1_\2", name)      # MBCInfo -> MBC_Info
+    s = _CAMEL_BOUND_RE.sub(r"\1_\2", s)       # lastMessage -> last_Message
+    return tuple(p for p in _NON_ALNUM_RE.split(s.lower()) if p)
 
 
 def _diag_fragment(t):
@@ -1047,7 +1059,7 @@ def _is_name_literal(s):
     t = (s or "").strip()
     if not t or CJK_RE.search(t):
         return False
-    if re.search(r"\s", t):
+    if _WS_RE.search(t):
         return False
     if t[:1] in ("/", "#", "$"):
         return False
