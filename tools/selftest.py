@@ -8,6 +8,7 @@
 没有测试模组时只做「语法/基本行为」自检, 不会失败。
 """
 import io
+import json
 import os
 import shutil
 import sys
@@ -3752,6 +3753,192 @@ def check_mt_batch_retry():
     assert out == ["甲", "乙"], out
 
 
+def check_package_if_guard():
+    """抽语言包类时，import 紧贴的 `@if` 守卫必须一起带走。
+
+    CyberwareEx 那种「语言包 + 逻辑」混写文件，可选子模块的 import 是
+    `@if(ModuleExists(...))` 包着的。只保留 module/import 行会生成一个无保护的
+    import：缺装子模块的机器直接 UNRESOLVED_IMPORT，整层 REDscript 编译失败
+    （游戏日志里的 `CyberwareEx\\ChineseSimplified.reds:3:1`）。反过来也不能保留
+    所有 `@` 行——修饰 `public func` 的注解会变成悬空注解。
+    """
+    guard = '@if(ModuleExists("CyberwareEx.Customization"))'
+    text = (
+        "module CyberwareEx\n"
+        "import Codeware.Localization.*\n"
+        + guard + "\n"
+        "import CyberwareEx.Customization.*\n"
+        "\n"
+        + guard + "\n"
+        "public func IsCustomMode() -> Bool { return false; }\n"
+        "\n"
+        "public class EnUs extends ModLocalizationPackage {\n"
+        "  protected func DefineTexts() -> Void {\n"
+        '    this.Text("UI-a", "Hello there");\n'
+        "  }\n"
+        "}\n"
+    )
+    got = locale_pack._package_class_block(text)
+    assert got, "混写文件没抽出语言包类"
+    _name, _block, head = got
+    expect = ["module CyberwareEx",
+              "import Codeware.Localization.*",
+              guard,
+              "import CyberwareEx.Customization.*"]
+    assert head.splitlines() == expect, head
+
+    tmp = tempfile.mkdtemp()
+    try:
+        d = os.path.join(tmp, "r6", "scripts", "CyberwareEx")
+        os.makedirs(d)
+        src = os.path.join(d, "CyberwareEx.reds")
+        with io.open(src, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        out = locale_pack.ensure_target(
+            tmp, "r6/scripts/CyberwareEx/CyberwareEx.reds",
+            "r6/scripts/CyberwareEx/ChineseSimplified.reds")
+        body = io.open(out, encoding="utf-8-sig").read()
+        lines = body.splitlines()
+        assert lines[0] == "module CyberwareEx", lines[:3]
+        assert guard in lines[:6], "生成的副本里 `@if` 丢了: %r" % (lines[:6],)
+        idx = lines.index(guard)
+        assert lines[idx + 1].strip().startswith("import CyberwareEx."), lines[:6]
+        assert body.count(guard) == 1, "函数注解被一起搬进语言包: %r" % (body[:400],)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_json_label_words():
+    """json 语言包里的单个单词也要提取（车的颜色/部位名整片是英文的原因）。"""
+    tmp = tempfile.mkdtemp()
+    try:
+        src = os.path.join(tmp, "en-us.json")
+        data = {"All": "All", "Paint": "Paint", "Beige": "Beige",
+                "Desc": "Pick a paint", "weapon": "weapon",
+                "flag": "true", "num": "12"}
+        with io.open(src, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, ensure_ascii=False, indent=2))
+
+        files = locale_pack.detect(tmp, parse=True, target="zh-CN")
+        srcs = locale_pack.pick_sources(files, "zh-CN")
+        rows, _meta = locale_pack.extract(tmp, srcs, "zh-CN")
+        origs = {r["orig"] for r in rows}
+        for want in ("All", "Paint", "Beige", "Pick a paint"):
+            assert want in origs, "%r 没被提取: %r" % (want, sorted(origs))
+        for bad in ("weapon", "true", "12"):
+            assert bad not in origs, "%r 不该进待译行" % (bad,)
+        assert not any(r.get("inTarget") for r in rows)
+
+        mapping = {"All": "全部", "Paint": "漆面", "Beige": "米色",
+                   "Desc": "选择漆面"}
+        mapping = {r["key"]: mapping[r["orig"]] for r in rows
+                   if r["orig"] in mapping}
+        written, missing, err = locale_pack.write_json_target_ex(
+            tmp, "en-us.json", "zh-cn.json", mapping)
+        assert not err and not missing, (err, missing)
+        out = json.load(io.open(os.path.join(tmp, "zh-cn.json"), encoding="utf-8"))
+        assert out["All"] == "全部" and out["Beige"] == "米色", out
+        assert out["weapon"] == "weapon", "不可译的键不该被改"
+
+        # 目标已有全部叶子键 -> 允许跳过写回；源多了键 -> 必须写
+        assert not locale_pack.json_needs_fill(tmp, "en-us.json", "zh-cn.json")
+        with io.open(src, "w", encoding="utf-8") as f:
+            data["extra"] = "true"
+            f.write(json.dumps(data, ensure_ascii=False, indent=2))
+        assert locale_pack.json_needs_fill(tmp, "en-us.json", "zh-cn.json")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_settled_no_rewrite():
+    """译文本来就在目标文件里时不再重写它（第 11 轮 17,060 行的来源）。"""
+    class _NullMem(object):
+        def put(self, *a, **k):
+            return True
+
+        def save(self):
+            return True
+
+        def get(self, *a, **k):
+            return ""
+
+    root = tempfile.mkdtemp()
+    try:
+        en = os.path.join(root, "en.lua")
+        zh = os.path.join(root, "zh_CN.lua")
+        with io.open(en, "w", encoding="utf-8", newline="") as f:
+            f.write('Loc = {\n  hello = "Hello there",\n}\n')
+        with io.open(zh, "w", encoding="utf-8", newline="") as f:
+            f.write('Loc = {\n  hello = "你好",\n}\n')
+        before = io.open(zh, "rb").read()
+        st = os.stat(zh)
+
+        api = web_app.Api()
+        api._memory = _NullMem()
+        api.rows = []
+        api.root = root
+        items = [{"file": "en.lua", "target": "zh_CN.lua", "line": 2,
+                  "ctx": "hello", "orig": "Hello there", "trans": "你好",
+                  "target": "zh_CN.lua", "kind": "text", "root": root,
+                  "inTarget": 1}]
+        res = api._do_apply(items, keep_backup=False, make_undo=False)
+        assert res["ok"] == 1 and res["settled"] == 1, res
+        assert io.open(zh, "rb").read() == before, "目标文件被无谓重写了"
+        assert os.stat(zh).st_mtime_ns == st.st_mtime_ns, "mtime 不该变"
+
+        # 有一条是新译文 -> 整组照写
+        items[0]["inTarget"] = 0
+        items[0]["trans"] = "你好呀"
+        res = api._do_apply(items, keep_backup=False, make_undo=False)
+        assert res["ok"] == 1 and res["settled"] == 0, res
+        assert "你好呀" in io.open(zh, encoding="utf-8").read()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def check_retranslate_forget():
+    """「重译这个模组（丢弃本轮记忆）」：只删机翻/记忆来源，并删掉续跑记录那行。"""
+    import mod_deploy as MD
+
+    old_cfg = MD.config_dir
+    tmp = tempfile.mkdtemp(prefix="mt-forget-")
+    try:
+        MD.config_dir = lambda: os.path.join(tmp, "userdata")
+        root = os.path.join(tmp, "mod")
+        os.makedirs(root)
+        MD.record(root,
+                  files={"zh-cn.json": {"sha1": "x", "added": True}},
+                  pairs_list=[("Hello there", "你好"), ("Close", "关闭")])
+        calls = []
+
+        class _Mem(object):
+            def forget(self, src, lang):
+                calls.append((src, lang))
+                return src != "Close"     # 官方/手改那条删不掉, 不能算数
+
+        n = MD.forget_in(root, _Mem(), "简体中文")
+        assert n == 1 and calls[0] == ("Hello there", "简体中文"), (n, calls)
+        assert len(MD.pairs(root)) == 2, "清单里的译文对不该被删"
+
+        jp = os.path.join(tmp, "run.jsonl")
+        with io.open(jp, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"__sig": "abc"}) + "\n")
+            for k in ("Mod A", "Mod B"):
+                f.write(json.dumps({"key": k, "rows": 1}) + "\n")
+        api = web_app.Api()
+        api._mb_journal_path = lambda: jp
+        assert api._mb_journal_drop("Mod A") is True
+        left = [json.loads(x) for x in io.open(jp, encoding="utf-8",
+                                               errors="replace").read().splitlines()
+                if x.strip()]
+        assert [r.get("key") for r in left[1:]] == ["Mod B"], left
+        assert left[0].get("__sig") == "abc", left
+        assert api._mb_journal_drop("Nope") is False, "没这行也报删掉了"
+    finally:
+        MD.config_dir = old_cfg
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     print("== 回填自测 ==")
     check_apply_roundtrip()
@@ -3878,6 +4065,14 @@ def main():
     print("   OK: 目录缓存键扛得住复制（不带 mtime）/ 内容变则换键")
     check_mt_batch_retry()
     print("   OK: 批量解析失败先整批重试一次再逐条")
+    check_package_if_guard()
+    print("   OK: 抽语言包类保留 import 前的 @if 守卫 / 函数注解不搬")
+    check_json_label_words()
+    print("   OK: json 单个单词也提取 (数据值仍不收) / 缺键判断")
+    check_settled_no_rewrite()
+    print("   OK: 目标文件里已有的译文不再重写 (settled)")
+    check_retranslate_forget()
+    print("   OK: 重译按钮 (只删机翻记忆 / 删掉续跑记录那行)")
 
     if not os.path.isdir(VORTEX):
         print("\n未找到 Vortex 目录, 跳过真实模组测试: %s" % VORTEX)

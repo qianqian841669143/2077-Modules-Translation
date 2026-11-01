@@ -337,6 +337,7 @@ def run_one(ctx, cand, r):
             res = w._do_apply(items, keep_backup=False, make_undo=False)
             r["baks"] = drop_backups(dst)
             r["applied"] = int(res.get("ok") or 0)
+            r["settled"] = int(res.get("settled") or 0)
             r["failed"] = int(res.get("fail") or 0)
             r["errors"] = [str(x) for x in (res.get("errors") or [])][:20]
             # 失败原因必须能落到 journal 里。只有总数的话，881 条失败查不下去：
@@ -400,7 +401,7 @@ def run(ctx, cands):
         r = {"key": cand.get("key"), "name": name, "root": cand.get("root", ""),
              "ok": False, "error": "", "dst": "", "copied": 0, "bytes": 0,
              "skipped": 0, "own": 0, "rows": 0, "todo": 0, "already": 0, "tm": 0,
-             "machine": 0, "applied": 0, "failed": 0, "errors": [],
+             "machine": 0, "applied": 0, "settled": 0, "failed": 0, "errors": [],
              "untouched": 0, "untranslated": 0, "untranslatedSample": [],
              "failReasons": {}, "deploy": None,
              "undoId": "", "empty": False, "archive": "", "xl": "", "baks": 0}

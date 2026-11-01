@@ -280,7 +280,7 @@ textarea.input { height: auto; min-height: var(--ctl-h); max-height: 76px; paddi
 /* ================= 批量（复制后翻译） ================= */
 .queue-list { max-height: 44vh; overflow: auto; border: 1px solid var(--border);
   border-radius: 10px; margin: 10px 0; }
-.q-row { display: grid; grid-template-columns: 24px 1fr 62px 62px 74px 80px; gap: 6px;
+.q-row { display: grid; grid-template-columns: 24px 1fr 62px 62px 74px 80px 26px; gap: 6px;
   align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--border);
   font-size: 12px; cursor: pointer; }
 .q-row:last-child { border-bottom: 0; }
@@ -293,6 +293,10 @@ textarea.input { height: auto; min-height: var(--ctl-h); max-height: 76px; paddi
 .q-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .q-num { color: var(--muted); text-align: right; }
 .q-state { text-align: right; color: var(--muted); }
+/* 「重译」：只在部署过的行上出现，别让它抢走整行点击（勾选）的手感 */
+.q-forget { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 2px 0; }
+.q-forget:hover { color: var(--accent, #2f6fed); }
 .q-sub { grid-column: 2 / -1; color: var(--muted); font-size: 11px; }
 #q-progress { width: 100%; margin-top: 6px; }
 label.chk { display: inline-flex; align-items: center; gap: 4px; font-size: 12px;

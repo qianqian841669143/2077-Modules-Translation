@@ -206,6 +206,44 @@ def _json_pairs(path):
     return [(k, v) for k, v in _flatten(data) if k]
 
 
+def json_needs_fill(root, src_rel, tgt_rel):
+    """目标 json 是否缺源文件里的叶子键（决定「整组已译」时能不能直接跳过）。
+
+    只按「这一组的译文都是从目标文件读回来的」就跳过写回时，源文件新增的
+    **不可译** 键（`true` / 数字 / 单个小写词）不会出现在待译行里，跳过就再也
+    补不进目标文件。这里比一次叶子键集合：源的键都还在目标里才允许跳。
+    """
+    def leaves(obj):
+        out = set()
+
+        def walk(o, pre):
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    walk(v, "%s|%s" % (pre, k) if pre else str(k))
+            elif isinstance(o, list):
+                for i, v in enumerate(o):
+                    walk(v, "%s[%d]" % (pre, i))
+            else:
+                out.add(pre)
+
+        walk(obj, "")
+        return out
+
+    def load(rel):
+        try:
+            with open(os.path.join(root, rel.replace("/", os.sep)),
+                      "r", encoding="utf-8-sig") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    src = load(src_rel)
+    tgt = load(tgt_rel)
+    if src is None or tgt is None:
+        return True                     # 读不出来就照老路写一遍, 别赌
+    return bool(leaves(src) - leaves(tgt))
+
+
 # `Name = "Value"` 里字面量左边的条目名, 两种写法都认:
 #   Key = "Value"  /  ["Key"] = "Value"
 # 末尾允许一个引号: scan_source 给出的字面量起点在引号之后。
@@ -648,6 +686,10 @@ def extract(root, entries, target_locale, only_class=""):
     已经是目标语言的文本会被跳过(中文/日文/韩文/俄文/阿拉伯文可按字符识别),
     避免把目标语言文件或源文件里已经翻好的内容再次当成原文。
 
+    目标文件里已有该条目时, 行上的 ``inTarget`` 为真: 那条译文是**从目标文件
+    读回来的**, 再写回去是空操作。批量靠它跳过重写 (第 11 轮 104 个
+    ``todo=0`` 的模组里仍有 17,060 行被原样重写)。
+
     only_class: 只取这个 Codeware 语言包类里的条目(Provider 配对时用)。
     """
     rows = []
@@ -660,7 +702,12 @@ def extract(root, entries, target_locale, only_class=""):
         if fmt == "json":
             pairs = _json_pairs(os.path.join(root, rel))
             for key, val in pairs:
-                if not E.is_translatable(val):
+                # 单个单词的 UI 文案（All / Paint / Beige …）在 json 语言包里
+                # 一样是待译条目。is_translatable 只认「至少两个英文单词」，
+                # 这里不补判据的话车的部位名与颜色名会整片留在英文（Garage
+                # Manager 25 条 / Vehicle Core 20 条）。判据与 reds/lua 的
+                # _is_label_word 一致：首字母大写 + 其余小写 + 至少 3 个字母。
+                if not (E.is_translatable(val) or _is_label_word(val)):
                     continue
                 if E.is_target_language_text(val, target_locale):
                     meta["skipped_target"] += 1
@@ -672,7 +719,8 @@ def extract(root, entries, target_locale, only_class=""):
                         cur = v
                 rows.append({"file": rel, "disp": rel, "line": 0, "type": "语言包",
                              "ctx": key, "orig": val, "trans": cur,
-                             "target": tgt, "kind": "json", "key": key})
+                             "target": tgt, "kind": "json", "key": key,
+                             "inTarget": bool(cur)})
         else:
             pairs = _text_pairs_ex(os.path.join(root, rel), only_class=only_class)
             for idx, (line, val, key) in enumerate(pairs):
@@ -692,7 +740,8 @@ def extract(root, entries, target_locale, only_class=""):
                         cur = v
                 rows.append({"file": rel, "disp": rel, "line": line, "type": "语言包",
                              "ctx": key, "orig": val, "trans": cur,
-                             "target": tgt, "kind": "text"})
+                             "target": tgt, "kind": "text",
+                             "inTarget": bool(cur)})
         meta["files"] += 1
         meta["types"]["语言包"] = meta["types"].get("语言包", 0) + 1
     return rows, meta
@@ -751,7 +800,26 @@ def reds_is_pure_package(text):
         return False
     if len(REDS_TYPE_RE.findall(text)) != 1:
         return False
-    return not REDS_ANNOTATION_RE.search(text)
+    if REDS_ANNOTATION_RE.search(text):
+        return False
+    # 类块之外只允许 module / import / 空行 / 注释 / @if|@else。游离的
+    # `public func` 也算混写：整文件复制会让那个函数声明两遍 (SYM_REDEFINITION)。
+    # 实测 staging 里 692 个「纯语言包」0 个含游离行, 收紧不会误伤。
+    ranges = _package_class_ranges(text)
+    if not ranges:
+        return False
+    _name, start, end = ranges[0]
+    rest = (text[:start] or "") + "\n" + (text[end:] or "")
+    for ln in rest.splitlines():
+        s = ln.strip()
+        if (not s or s.startswith("//") or s.startswith("/*")
+                or s.startswith("*") or s.startswith("@if")
+                or s.startswith("@else")):
+            continue
+        if s.startswith("module ") or s.startswith("import "):
+            continue
+        return False
+    return True
 
 
 def _class_owners(root, module, class_name, exclude=None):
@@ -1297,20 +1365,60 @@ def _package_class_ranges(text):
     return out
 
 
+def _package_head(text):
+    """取出 module / import 头部；紧贴 import 的 ``@if`` / ``@else`` 一起保留。
+
+    多语言混写模组常把可选子模块的 import 写成带守卫的形式::
+
+        module CyberwareEx
+        import Codeware.Localization.*
+        @if(ModuleExists("CyberwareEx.Customization"))
+        import CyberwareEx.Customization.*
+
+    只保留以 ``module `` / ``import `` 开头的行会把守卫丢掉，生成的副本在没装
+    该子模块的机器上直接 ``UNRESOLVED_IMPORT``，随后 ``REDScript compilation
+    has failed``——整层脚本全不加载。反过来也不能保留所有 ``@`` 行：修饰
+    ``public func`` 的注解会变成悬空注解，所以只往回捡紧贴 import 的那几行
+    （中间只允许空行与 ``//`` 注释）。
+    """
+    lines = (text or "").splitlines()
+    head = []
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith("module "):
+            head.append(ln)
+            continue
+        if not s.startswith("import "):
+            continue
+        guard = []
+        j = i - 1
+        while j >= 0:
+            t = lines[j].strip()
+            if not t or t.startswith("//"):
+                j -= 1
+                continue
+            if t.startswith("@if") or t.startswith("@else"):
+                guard.insert(0, lines[j])
+                j -= 1
+                continue
+            break
+        head.extend(guard)
+        head.append(ln)
+    return "\n".join(head)
+
+
 def _package_class_block(text):
     """从一个「语言包 + 逻辑」混写的 .reds 里取出语言包类。
 
-    返回 ``(类名, 类块文本, 头部文本)``；头部是 module 与 import 行。类块从
+    返回 ``(类名, 类块文本, 头部文本)``；头部是 module 与 import 行（带
+    ``@if`` 守卫的 import 连守卫一起保留，见 ``_package_head``）。类块从
     class 关键字所在行开始到配对的 ``}`` 为止，括号配对时跳过字符串。
     """
     ranges = _package_class_ranges(text)
     if not ranges:
         return None
     name, start, end = ranges[0]
-    head = [ln for ln in (text or "").splitlines()
-            if ln.strip().startswith("module ")
-            or ln.strip().startswith("import ")]
-    return name, text[start:end], "\n".join(head)
+    return name, text[start:end], _package_head(text)
 
 
 

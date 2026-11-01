@@ -1758,6 +1758,9 @@ class Api(object):
                    # 事后无从判断是没匹配到原文、代码骨架被拒，还是目标 key 缺失。
                    "reasons": r.get("failReasons") or {},
                    "untouched": int(r.get("untouched") or 0),
+                   # 目标文件里本来就有的译文（这次没重写）。第 11 轮 17,060 行
+                   # 几乎全是这类，留在记录里才能看出「重跑变快」是不是它们省的。
+                   "settled": int(r.get("settled") or 0),
                    "errors": [str(x) for x in (r.get("errors") or [])][:5],
                    "at": time.strftime("%Y-%m-%d %H:%M:%S")}
             with open(p, "a", encoding="utf-8") as f:
@@ -1846,12 +1849,22 @@ class Api(object):
                 import mod_batch as MB
                 items = MB.list_dirs(root)
                 total = len(items)
+                # 部署清单只读一次：127 个模组各读一遍那份（可能上千条 pairs 的）
+                # json 会把预扫拖慢好几秒。面板靠它决定要不要给「重译」按钮。
+                try:
+                    import mod_deploy
+                    dep = {k for k, v in (mod_deploy.load().get("mods") or {}).items()
+                           if (v or {}).get("pairs")}
+                except Exception:
+                    dep = set()
                 keep = []
                 for i, it in enumerate(items):
                     if self._mb_cancel.is_set():
                         break
                     info = MB.probe_text(it["root"], target, measure=True)
                     it.update(info)
+                    it["deployed"] = (os.path.normcase(os.path.abspath(it["root"]))
+                                      in dep)
                     keep.append(it)
                     if i % 5 == 0 or i == total - 1:
                         self._mb_push({"type": "mb-scan", "done": i + 1,
@@ -2030,6 +2043,82 @@ class Api(object):
         except Exception as ex:
             return {"ok": False, "error": str(ex)}
         return {"ok": True, "path": d}
+
+    def batch_forget(self, key):
+        """丢弃这个模组上一轮写进翻译记忆的译文，并删掉它的续跑记录。
+
+        复原流程是「解压还原 → 重跑」，而还原只把文件换回原件：翻译记忆里那一
+        份（可能正是要丢掉的那份坏译文）还在，重跑会先命中 TM、原样搬回来，看着
+        像「改了没生效」。这里按部署清单记的 (原文, 译文) 对调 `forget()`，只删
+        machine/memory 来源，手改与官方语料不动；再把 run.jsonl 里这个模组那行
+        删掉，否则续跑还会整行跳过它。
+        """
+        if self._mb_running:
+            return {"ok": False, "error": self._tr("批量正在运行")}
+        key = str(key or "")
+        root = ""
+        for it in (self._mb_items or []):
+            if str(it.get("key")) == key:
+                root = it.get("root") or ""
+                break
+        if not root:
+            staging = (self.settings.get("staging_dir") or "").strip()
+            cand = os.path.join(staging, key) if staging and key else ""
+            if cand and os.path.isdir(cand):
+                root = cand
+        if not root or not os.path.isdir(root):
+            return {"ok": False, "error": self._tr("找不到这个模组目录")}
+        import mod_deploy
+        tgt = self.settings.get("target_lang", "简体中文")
+        try:
+            n = mod_deploy.forget_in(root, self._memory_store, tgt)
+        except Exception as ex:      # noqa: BLE001 - 记忆库坏了不该让面板崩
+            return {"ok": False, "error": str(ex)}
+        if n:
+            try:
+                self._memory_store.save()
+            except Exception:
+                pass
+        dropped = self._mb_journal_drop(key)
+        return {"ok": True, "forgotten": n, "journal": dropped,
+                "root": root, "pairs": len(mod_deploy.pairs(root))}
+
+    def _mb_journal_drop(self, key):
+        """把 run.jsonl 里这个模组那行删掉（续跑就不会再跳过它）。"""
+        p = self._mb_journal_path()
+        if not p or not os.path.isfile(p):
+            return False
+        key = str(key or "")
+        kept, hit = [], False
+        try:
+            with open(p, "r", encoding="utf-8-sig") as f:
+                for line in f:
+                    line = line.rstrip("\n")
+                    if not line.strip():
+                        continue
+                    if not line.lstrip().startswith("{"):
+                        kept.append(line)
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        kept.append(line)
+                        continue
+                    if "__sig" in rec:
+                        kept.append(line)
+                    elif str(rec.get("key")) == key:
+                        hit = True
+                    else:
+                        kept.append(line)
+            if not hit:
+                return False
+            tmp = p + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("\n".join(kept) + "\n")
+            os.replace(tmp, p)
+            return True
+        except Exception:
+            return False
 
     def batch_clear(self):
         """清空批量输出（下次重跑覆盖）。只清我们自己盖过章的目录。
@@ -2806,6 +2895,7 @@ class Api(object):
             out["undoAvailable"] = True
         out["failed"] = r2.get("failed") or []
         out["failedTotal"] = r2.get("failedTotal", 0)
+        out["settled"] = int(r2.get("settled") or 0)
         return out
 
     def _fill_ctx_from_rows(self, items):
@@ -2842,6 +2932,23 @@ class Api(object):
                 filled += 1
         return filled
 
+    def _drop_bak_if_same(self, path):
+        """写回前留的 `.bak` 与正文逐字节相同就删掉。
+
+        备份是在「知不知道有没有替换」之前就做了的：一条都没写进去时，副本里
+        会多出一份和正文完全相同的 `.bak`（实测 5 处），部署时会被一起拷进
+        游戏目录。批量里根本不建备份，这里只影响单模组模式。
+        """
+        bak = path + ".bak"
+        try:
+            if (os.path.exists(bak) and os.path.exists(path)
+                    and os.path.getsize(bak) == os.path.getsize(path)):
+                with open(bak, "rb") as f1, open(path, "rb") as f2:
+                    if f1.read() == f2.read():
+                        os.remove(bak)
+        except OSError:
+            pass
+
     def _do_apply_source(self, items, tx=None, allow_soft=False,
                          keep_backup=True, make_undo=True):
         import locale_pack
@@ -2851,7 +2958,7 @@ class Api(object):
         modroot = items[0].get("root") or self.root
         # 语言包行必须带回条目名, 否则写回会退回按行号(会错位)
         self._fill_ctx_from_rows(items)
-        ok = fail = 0
+        ok = fail = settled = 0
         errors = []
         created = []
         prepared_providers = []
@@ -2940,6 +3047,17 @@ class Api(object):
 
         for (src, tgt), group in json_groups.items():
             dst = os.path.join(modroot, tgt.replace("/", os.sep))
+            # 整组译文都是从目标文件里读回来的：写回去是空操作。批量重跑时
+            # 这类组占绝大多数（第 11 轮 104 个 todo=0 的模组，17,060 行），
+            # 每轮都重写一遍既慢又会让整份 json 的字节顺序被重排一次。
+            # 注意 group 是 {key: item}，要取 values()。
+            if (all(it.get("inTarget") for it in group.values())
+                    and os.path.exists(dst)):
+                # 源文件新增、目标里还没有的键（不可译的那些）仍得补
+                if not locale_pack.json_needs_fill(modroot, src, tgt):
+                    ok += len(group)
+                    settled += len(group)
+                    continue
             snapshot(dst)
             snapshot(dst + ".bak")
             mapping = {k: it["trans"] for k, it in group.items()}
@@ -3015,6 +3133,15 @@ class Api(object):
                     for it in group:
                         add_fail(it, ex)
                     continue
+            # 整组译文都是从目标文件里读回来的：上面 ensure_target / Provider
+            # 该补的已经补完，正文不必再写一遍（同 json 那条）。目标文件不存在
+            # 时不算空操作——那种情况正需要写回把条目填进去。
+            if (all(it.get("inTarget") for it in group)
+                    and os.path.exists(dst_path)):
+                self._drop_bak_if_same(dst_path)
+                ok += len(group)
+                settled += len(group)
+                continue
             if tgt != src and all(it.get("ctx") for it in group):
                 # 语言包: 目标文件与源文件的行号、条目数都不同 (AMM 的
                 # en_US.lua 1115 行 / zh_CN.lua 1113 行), 只能按 `Name =`
@@ -3059,15 +3186,7 @@ class Api(object):
             # 备份是在「知不知道有没有替换」之前就做了的：一条都没写进去时，
             # 副本里会多出一份和正文完全相同的 .bak（实测 5 处）。这里比一次
             # 字节，没变就撤掉，别把 20 MB 的垃圾一起部署进游戏目录。
-            _bak = dst_path + ".bak"
-            try:
-                if (os.path.exists(_bak) and os.path.exists(dst_path)
-                        and os.path.getsize(_bak) == os.path.getsize(dst_path)):
-                    with open(_bak, "rb") as f1, open(dst_path, "rb") as f2:
-                        if f1.read() == f2.read():
-                            os.remove(_bak)
-            except OSError:
-                pass
+            self._drop_bak_if_same(dst_path)
 
         undo_id = ""
         if own_tx and tx is not None:
@@ -3096,6 +3215,10 @@ class Api(object):
                     # 「已译」行是模组里本来就翻好的文本，原样写回时别把它
                     # 当成一次新的手改记进记忆库——那等于拿中文喂中文。
                     if it.get("already") and trans == orig:
+                        continue
+                    # 译文是从目标文件读回来的（这次根本没写它）：它本来就在
+                    # 记忆库该有的位置，不该被当成「本轮写回成功」重新记一遍。
+                    if it.get("inTarget"):
                         continue
                     # The row's origin travels with the item now. Falling back to
                     # _i keeps older front-ends working, but _i only lines up with
@@ -3130,6 +3253,7 @@ class Api(object):
                 "providers": sorted(set(prepared_providers)),
                 "undoId": undo_id, "undoAvailable": bool(undo_id),
                 "manualSaved": manual, "candidates": candidates,
+                "settled": settled,
                 "failed": failed[:2000], "failedTotal": len(failed)}
 
     def undo_last(self, root=""):

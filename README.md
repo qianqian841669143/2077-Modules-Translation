@@ -2,7 +2,49 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.45.0**
+当前版本：**v2.45.1**
+
+## v2.45.1 更新：语言包抽类不再拆掉 `@if` 守卫；JSON 里的单词也翻了
+
+**一、抽语言包类时把 `@if(ModuleExists(...))` 一起带走。** 「语言包 + 逻辑」混写的
+`.reds`（CyberwareEx 就是）在头部用 `@if` 包着可选子模块的 import。抽类时只保留
+`module` / `import` 行，守卫被丢掉，生成的 `ChineseSimplified.reds` 第 3 行就成了
+无保护的 import——缺装那个子模块的机器上 `UNRESOLVED_IMPORT`，随后
+`REDScript compilation has failed`，**整个脚本层的模组全都不加载**。现在按顺序走：
+
+    module CyberwareEx
+    import Codeware.Localization.*
+    @if(ModuleExists("CyberwareEx.Customization"))
+    import CyberwareEx.Customization.*
+
+反过来也不能保留所有 `@` 行——修饰 `public func` 的注解会变成悬空注解，所以只往回
+捡紧贴 import 的那几行。顺带把「纯语言包」的判据收紧：类块之外只允许 module /
+import / 空行 / 注释 / `@if`，游离的 `public func` 也算混写（整文件复制会让函数
+声明两遍）。staging 里 692 个纯语言包逐个复核，没有一个会被误判。
+
+**二、JSON 语言包里单个单词也算待译。** 车的部位名和颜色名整片是英文，是因为
+`extract()` 的 JSON 分支只认「至少两个英文单词」，而 reds/lua 分支另有
+`_is_label_word`（首字母大写 + 其余小写 + 至少 3 个字母）。两边判据统一后：
+
+    Garage Manager   62 行 → 83 行（新增 22 个单词：All / Paint / Body / Wheels / Settings …）
+    Vehicle Core     12 行 → 32 行（新增 20 个颜色名：Beige / Black / Charcoal / Gold …）
+
+`weapon`、`true`、`12` 这类小写或纯数字数据值仍然不收。
+
+**三、目标文件里本来就有的译文不再重写。** 重跑时语言包的译文是从目标文件读回来的
+（行上标 `inTarget`），写回去是空操作，却每轮都要重写一遍。现在整组都是这种行就
+直接跳过，也顺带不再把它们当成「本轮新写回」塞回翻译记忆；`json` 还会先比一次叶子
+键——源文件新增的不可译键仍要补进目标。
+
+    DigitalVixenCore  5071 行不再重写（apply 0.51 s → 0.32 s）
+    Mod Configuration Menu  294 行里跳过 293 行
+
+**四、批量面板每行多了「↻ 重译这个模组（丢弃本轮记忆）」。** 复原流程是「解压还原
+→ 重跑」，而还原只把文件换回原件，翻译记忆里那份坏译文还在，重跑会原样搬回来。
+这个按钮按部署清单记的 (原文, 译文) 对删掉机翻/记忆来源的条目（手改与官方语料
+不动），并删掉 `run.jsonl` 里这个模组的那行，重跑才会真重翻。
+
+**五、工具栏溢出：复核后确认已不溢出**（1280 与最小窗口 1000 都是整行装下）。
 
 ## v2.45.0 更新：批量翻译快一到两倍（时间花在 WolvenKit 上，不在模型上）
 

@@ -2261,6 +2261,11 @@ function renderQueue() {
       : (usable ? T("待翻译") : T("无需翻译")));
     const sub = done.detail || it.error
       || (it.alreadyRows ? T("已有中文 %d 行").replace("%d", it.alreadyRows) : "");
+    // 「重译」只给部署过的模组：还原之后重跑，翻译记忆里仍是上一轮那份（可能
+    // 正是要丢掉的），得先按部署清单把它的机翻记忆删掉，重跑才会真重翻。
+    const again = it.deployed
+      ? `<button class="q-forget" title="${esc(T("重译这个模组（丢弃本轮记忆）"))}">↻</button>`
+      : "";
     return `<div class="q-row ${cls}" data-key="${esc(key)}">
       <input type="checkbox" ${sel ? "checked" : ""} ${usable ? "" : "disabled"}>
       <span class="q-name" title="${esc(it.root || "")}">${esc(it.name || key)}</span>
@@ -2268,6 +2273,7 @@ function renderQueue() {
       <span class="q-num">${it.alreadyRows ? Number(it.alreadyRows).toLocaleString() : "-"}</span>
       <span class="q-num">${mbSize(it.bytes)}</span>
       <span class="q-state">${esc(stateText)}</span>
+      ${again || "<span></span>"}
       ${sub ? `<span class="q-sub">${esc(sub)}</span>` : ""}
     </div>`;
   });
@@ -2283,6 +2289,33 @@ function renderQueue() {
       if (state.mbSel.has(key)) state.mbSel.delete(key);
       else state.mbSel.add(key);
       renderQueue();
+    };
+  });
+  box.querySelectorAll(".q-forget").forEach((btn) => {
+    btn.onclick = async (ev) => {
+      ev.stopPropagation();
+      const row = btn.closest(".q-row");
+      const key = row ? row.dataset.key : "";
+      const it = state.mbItems.find((x) => String(x.key) === key);
+      const name = (it && it.name) || key;
+      if (!confirm(T("丢弃「%s」上一轮的机翻记忆？\n\n只删机翻与记忆条目（手改和官方语料不动），"
+        + "并删掉它的续跑记录。之后重跑这个模组会重新问模型。").replace("%s", name))) return;
+      btn.disabled = true;
+      try {
+        const r = await pywebview.api.batch_forget(key);
+        if (r && r.ok) {
+          toast(T("已丢弃 %d 条机翻记忆（清单里共 %d 对）")
+            .replace("%d", r.forgotten || 0).replace("%d", r.pairs || 0));
+          if (it) it.deployed = false;
+          renderQueue();
+        } else {
+          toast((r && r.error) || T("操作失败"), "err");
+        }
+      } catch (e) {
+        toast(String(e), "err");
+      } finally {
+        btn.disabled = false;
+      }
     };
   });
 }
