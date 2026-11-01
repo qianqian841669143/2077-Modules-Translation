@@ -4081,6 +4081,38 @@ def check_wkit_no_pipe_hang():
     assert time.time() - t0 < 15, "超时后没及时收手"
 
 
+def check_batch_flags_saved():
+    """批量面板的三个勾选必须能存进设置。
+
+    `save_settings` 是白名单式的：键不在名单里就丢掉。`batch_deploy` /
+    `batch_deploy_dry` / `batch_hide_todo` 曾经漏在名单外，于是「跑完覆盖回原模组」
+    勾上等于没勾——`batch_start` 读到的永远是默认 False，批量只产出副本、不回写。
+    """
+    old = web_app.save_settings
+    saved = {}
+    try:
+        web_app.save_settings = lambda cfg: saved.update(cfg)
+        api = web_app.Api()
+        res = api.save_settings({"batch_deploy": True, "batch_deploy_dry": False,
+                                 "batch_hide_todo": False})
+        assert res.get("ok"), res
+        assert saved.get("batch_deploy") is True, saved.get("batch_deploy")
+        assert saved.get("batch_deploy_dry") is False, saved.get("batch_deploy_dry")
+        assert saved.get("batch_hide_todo") is False, saved.get("batch_hide_todo")
+        assert api.settings.get("batch_deploy") is True, api.settings.get("batch_deploy")
+        # 名单外的键仍然不许进
+        api.save_settings({"whatever": "x"})
+        assert "whatever" not in saved, saved.get("whatever")
+
+        # 部署开关要算进续跑指纹：上一轮没开部署、这一轮开了，不能整行跳过
+        base = web_app.Api._mb_sig("st", False, True, "简体中文", "m", "out")
+        on = web_app.Api._mb_sig("st", False, True, "简体中文", "m", "out",
+                                 deploy=True, deploy_dry=False)
+        assert base != on, "部署开关没进参数指纹"
+    finally:
+        web_app.save_settings = old
+
+
 def main():
     print("== 回填自测 ==")
     check_apply_roundtrip()
@@ -4221,6 +4253,8 @@ def main():
     print("   OK: 预处理流水线 (S4)：下一个模组提前加载，结果与事件不变")
     check_wkit_no_pipe_hang()
     print("   OK: WolvenKit 输出不走管道 (孙进程占句柄也不挂) / 超时连树杀掉")
+    check_batch_flags_saved()
+    print("   OK: 批量面板三个勾选能存进设置 (覆盖回原模组/预演/折叠无需翻译)")
 
     if not os.path.isdir(VORTEX):
         print("\n未找到 Vortex 目录, 跳过真实模组测试: %s" % VORTEX)

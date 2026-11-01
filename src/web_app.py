@@ -315,7 +315,11 @@ class Api(object):
             if isinstance(cfg.get(k), str):
                 new[k] = cfg[k]
         for k in ("dark_mode", "use_tm", "res_skip_target", "verify_active",
-                  "official_weak", "use_official_tm", "local_model_enabled"):
+                  "official_weak", "use_official_tm", "local_model_enabled",
+                  # 这三个是批量面板上的勾选：以前漏在这张白名单外，前端存了也
+                  # 被丢掉，于是「跑完覆盖回原模组」永远读到默认的 False ——
+                  # 勾上等于没勾，批量只产出到副本，一个字节也不会回写。
+                  "batch_deploy", "batch_deploy_dry", "batch_hide_todo"):
             if isinstance(cfg.get(k), bool):
                 new[k] = cfg[k]
         new["api_base"] = normalize_api_base(new.get("api_base", ""))
@@ -1736,15 +1740,21 @@ class Api(object):
         return os.path.join(d, "run.jsonl")
 
     @staticmethod
-    def _mb_sig(staging, with_archive, skip_assets, target, model, out_root=""):
+    def _mb_sig(staging, with_archive, skip_assets, target, model, out_root="",
+                deploy=False, deploy_dry=True):
         """参数指纹：换了模型 / 目标语言 / 复制规则 / 输出目录，上次的续跑记录就作废。
 
         输出目录必须算进去：换个目录跑，journal 里那些条目指向旧目录, 但「换个
         目录接着续」会让用户以为新目录已经跑过一遍。
+
+        部署开关也要算进去：上一轮没开部署、这一轮开了，那些「已完成」只是把副本
+        写好了，还没回写原模组。不换指纹就会被整行跳过，于是勾了覆盖却什么都不发生
+        —— 正好是 v2.45.3 修的那个坑的同款症状。
         """
         raw = "|".join([staging or "", "1" if with_archive else "0",
                         "1" if skip_assets else "0", target or "", model or "",
-                        os.path.normcase(out_root or "")])
+                        os.path.normcase(out_root or ""),
+                        "1" if deploy else "0", "1" if deploy_dry else "0"])
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
     def _mb_journal(self, r):
@@ -1919,7 +1929,9 @@ class Api(object):
         # 续跑：同一套参数下已经跑完、产物目录还在的，直接跳过。
         # 崩溃 / 手动关掉之后再点一次「开始」就接着来，不用从头再等一小时。
         staging = (self.settings.get("staging_dir") or "").strip()
-        sig = self._mb_sig(staging, with_archive, skip_assets, tgt, model, out_root)
+        sig = self._mb_sig(staging, with_archive, skip_assets, tgt, model, out_root,
+                           deploy=bool(self.settings.get("batch_deploy")),
+                           deploy_dry=bool(self.settings.get("batch_deploy_dry", True)))
         done = self._mb_journal_open(sig, staging)
         cached = [it for it in items if str(it.get("key")) in done]
         if cached:
