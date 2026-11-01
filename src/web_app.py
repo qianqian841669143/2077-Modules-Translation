@@ -2797,10 +2797,12 @@ class Api(object):
             dst_path = os.path.join(modroot, tgt.replace("/", os.sep))
             snapshot(dst_path)
             snapshot(dst_path + ".bak")
+            made = False
             if tgt != src and not os.path.exists(dst_path):
                 try:
                     locale_pack.ensure_target(modroot, src, tgt)
                     created.append(tgt)
+                    made = True
                 except Exception as ex:
                     fail += len(group)
                     errors.append("%s (%s)" % (tgt, ex))
@@ -2824,6 +2826,19 @@ class Api(object):
                         raise RuntimeError(prep["error"])
                     prepared_providers.extend(prep.get("providers") or [])
                 except Exception as ex:
+                    # 这一步失败时，上面那句 ensure_target 刚复制出来的英文包必须
+                    # 收回去。留着它等于在同一个 module 里声明第二个 class English
+                    # （IAH 的 ChineseSimplified.reds 与 en-us.reds 就是逐字节相同），
+                    # REDscript 报 SYM_REDEFINITION，整个模组都加载不了。
+                    if made:
+                        for p in (dst_path, dst_path + ".bak"):
+                            try:
+                                if os.path.exists(p):
+                                    os.remove(p)
+                            except OSError:
+                                pass
+                        if tgt in created:
+                            created.remove(tgt)
                     fail += len(group)
                     errors.append("%s (Codeware Provider: %s)" % (tgt, ex))
                     for it in group:
@@ -2869,6 +2884,19 @@ class Api(object):
                     errors.append("%s (%s)" % (tgt, ex))
                     for it in group:
                         add_fail(it, ex)
+
+            # 备份是在「知不知道有没有替换」之前就做了的：一条都没写进去时，
+            # 副本里会多出一份和正文完全相同的 .bak（实测 5 处）。这里比一次
+            # 字节，没变就撤掉，别把 20 MB 的垃圾一起部署进游戏目录。
+            _bak = dst_path + ".bak"
+            try:
+                if (os.path.exists(_bak) and os.path.exists(dst_path)
+                        and os.path.getsize(_bak) == os.path.getsize(dst_path)):
+                    with open(_bak, "rb") as f1, open(dst_path, "rb") as f2:
+                        if f1.read() == f2.read():
+                            os.remove(_bak)
+            except OSError:
+                pass
 
         undo_id = ""
         if own_tx and tx is not None:

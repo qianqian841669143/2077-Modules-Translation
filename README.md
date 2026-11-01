@@ -2,7 +2,41 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.43.0**
+当前版本：**v2.43.1**
+
+## v2.43.1 更新：认模组自带的中文包、不再留下坏文件
+
+审计 `batch/out` 里 127 个模组时，654 条失败里 97% 落在四个根因上，另有 4 个模组
+「journal 全 ok、游戏里却没有中文」。这一版把它们一起修了。
+
+**一、认已有中文包，不再硬造。** 以前只认 `TARGET_NAMES` 算出的那一个文件名
+（reds 是 `ChineseSimplified.reds`）。模组自带的中文包叫 `zh-cn.reds`（IAH）、
+`zh_cn.reds`（Reinforcements）就认不出来，工具反而去复制英文包 → 类名冲突 → 跳过，
+229 条译文全丢。现在同目录的变体（`zh-cn` / `zh_cn` / `ChineseSimplified` /
+`SimpChinese`，大小写与 `-`/`_` 不敏感）都会认；多个命中时优先「有中文内容」「作者
+自己的命名」。lua 那边的 `zh_CN.lua` / `zh-cn.lua` 同理。
+
+**二、失败不留半成品。** 复制英文包之后如果接线失败，刚复制出来的那个文件会被删掉。
+以前留着它就是在同一个 module 里声明第二个 `class English`，REDscript 报
+`SYM_REDEFINITION`，整个模组加载不了。
+
+**三、Provider 不用 switch 也能接上。** SenSen 那几个模组写成
+`if Equals(language, n"en-us") { return new …; }`，以前插不进去就静默返回，中文包
+生成完没人引用。现在会插一条 `if Equals(language, n"zh-cn")`；实在插不进去就报错，
+不再出现「日志 ok 但没生效」。
+
+**四、目标包缺条目就补。** Redscript Config Framework 自带的
+`ChineseSimplified.reds` 只有 19 条（模板 stub），英文包 194 条。现在缺的条目追加到
+`DefineTexts` 末尾，174 条不再失败。
+
+**五、混写的 .reds 只抽语言包类。** Garage Core / Cyberware-EX / INCF-CORE 把语言包
+和 Provider、逻辑写在一个文件里。以前只能整份拒绝（236 条没写），现在把
+`class X extends ModLocalizationPackage` 那个类抽出来单独成文件，并给 Provider 的
+switch 补 `case n"zh-cn"`。抽取做了自检（恰好 1 个类 / `this.Text` 条数一致 /
+能当纯语言包用），不过关就拒绝，绝不写出编译不过的文件。
+
+**六、卫生。** `*.bak` 不再进副本（out 里 624 个 / 20 MB）；内容没变的文件不再留
+备份；`src/tmp_wa*.py` 清掉。
 
 ## v2.43.0 更新：批量输出目录可设置 + 批量跑起来上遮罩
 

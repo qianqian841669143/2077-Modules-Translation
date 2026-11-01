@@ -3120,13 +3120,28 @@ def check_locale_pack_copy_guard():
         ])
         _lp_write(root, "mono.reds", mono)
         assert not locale_pack.reds_is_pure_package(mono)
+        # v2.43.1 起不再直接拒绝: 把语言包那个类抽出来写成新文件, 逻辑与
+        # @addField 留在原文件里。抽出来的必须只有 1 个类、this.Text 条数一致。
+        out = locale_pack.ensure_target(root, "mono.reds", "ChineseSimplified.reds")
+        got = open(out, encoding="utf-8-sig").read()
+        assert locale_pack.reds_is_pure_package(got), got
+        assert len(locale_pack.CODEWARE_PACKAGE_RE.findall(got)) == 1, got
+        assert "RequirementsPopup" not in got, "逻辑类不该被抽进来"
+        assert "@addField" not in got, "注入注解不该被抽进来"
+        assert got.count("this.Text(") == mono.count("this.Text("), got
+        assert "class ChineseSimplified extends ModLocalizationPackage" in got, got
+        # 原文件一个字节都不能动
+        assert open(os.path.join(root, "mono.reds"), encoding="utf-8-sig").read() == mono
+
+        # 抽不出类时仍然拒绝, 且不留半成品
+        broken = "module X\n\npublic class Helper {}\n\n@wrapMethod(Foo)\nfunc Bar() {}\n"
+        _lp_write(root, "broken.reds", broken)
         try:
-            locale_pack.ensure_target(root, "mono.reds", "ChineseSimplified.reds")
-            assert False, "混写文件不该被复制"
+            locale_pack.ensure_target(root, "broken.reds", "Broken_zh.reds")
+            assert False, "没有语言包类时应当拒绝"
         except ValueError as ex:
-            assert "重复类型" in str(ex), ex
-        assert not os.path.exists(
-            os.path.join(root, "ChineseSimplified.reds")), "拒绝后不能留半成品"
+            assert "SYM_REDEFINITION" in str(ex), ex
+        assert not os.path.exists(os.path.join(root, "Broken_zh.reds")), "拒绝后不能留半成品"
 
         pure = "\n".join([
             "module Pure.Core",

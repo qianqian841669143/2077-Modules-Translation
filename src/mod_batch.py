@@ -158,6 +158,12 @@ def copy_mod(src, dst, with_archive=False, skip_assets=True, cancel=None):
             if cancel is not None and not (seen % 200) and cancel.is_set():
                 raise Cancelled()
             ext = os.path.splitext(fn.lower())[1]
+            # .bak 是上一轮写回时留的备份，不是模组内容。Cyberpunk 按 `*.reds`
+            # / `init.lua` 扫描，这些文件不生效，但会把副本撑大 20 MB 上下，
+            # 部署时还会被一起拷进游戏目录。
+            if ext == ".bak":
+                stat["skipped"] += 1
+                continue
             if skip_assets and ext in SKIP_ASSET_EXT:
                 stat["skipped"] += 1
                 continue

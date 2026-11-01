@@ -330,7 +330,79 @@ def detect(root, parse=True, target="zh-CN"):
     return found
 
 
-def target_rel(entry, target_locale):
+def _locale_markers(target_locale):
+    """目标语言在文件名里可能出现的写法（小写、去掉 - _ 与空格）。
+
+    模组自带的中文包几乎不叫 ``TARGET_NAMES`` 算出来的那个名字：IAH 是
+    ``zh-cn.reds``、Reinforcements 是 ``zh_cn.reds``、DigitalVixenCore 是
+    ``ChineseSimplified.reds``。只认一个名字就会去复制英文包，然后撞上
+    「类名已被占用」，翻译全丢，还留下一个同 module 同 class 的英文副本。
+    """
+    marks = []
+    for k, v in LOCALE_ALIASES.items():
+        if v == target_locale or (target_locale or "").lower() == v.lower():
+            n = re.sub(r"[-_\s]", "", k).lower()
+            if n and n not in marks:
+                marks.append(n)
+    for v in (TARGET_NAMES.get(target_locale) or {}).values():
+        n = re.sub(r"[-_\s]", "", str(v or "")).lower()
+        if n and n not in marks:
+            marks.append(n)
+    return marks
+
+
+_LANG_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _existing_target_variant(root, folder, canonical, target_locale, entry):
+    """同目录里已经有目标语言的变体名就用它，否则用 canonical。
+
+    多个命中的时候按「有中文内容 > 作者自己的命名 > 字数多」挑：上一轮跑出来
+    的 ``ChineseSimplified.reds`` 可能是英文副本，而 ``zh-cn.reds`` 才是模组
+    作者真正维护的那份。
+    """
+    if entry.get("variant"):
+        return canonical          # 带用途后缀（-sms）的不做变体匹配，别猜错文件
+    base = os.path.join(root, folder.replace("/", os.sep)) if folder else root
+    marks = _locale_markers(target_locale)
+    if not marks or not os.path.isdir(base):
+        return canonical
+    ext = os.path.splitext(canonical)[1].lower()
+    canon_name = os.path.basename(canonical)
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return canonical
+    hits = []
+    for fn in names:
+        if os.path.splitext(fn)[1].lower() != ext:
+            continue
+        if not os.path.isfile(os.path.join(base, fn)):
+            continue
+        stem = re.sub(r"[-_\s]", "", os.path.splitext(fn)[0]).lower()
+        if any(stem.endswith(m) for m in marks):
+            hits.append(fn)
+    if not hits:
+        return canonical
+    chosen = hits[0] if len(hits) == 1 else None
+    if chosen is None:
+        best = None
+        for fn in hits:
+            n = 0
+            try:
+                with open(os.path.join(base, fn), "r", encoding="utf-8-sig",
+                          errors="ignore") as f:
+                    n = len(_LANG_CHAR_RE.findall(f.read(65536)))
+            except OSError:
+                n = 0
+            key = (n > 0, fn != canon_name, n)
+            if best is None or key > best[0]:
+                best = (key, fn)
+        chosen = best[1]
+    return (folder + "/" + chosen).lstrip("/") if folder else chosen
+
+
+def target_rel(entry, target_locale, root=None):
     """算出目标语言文件的相对路径
 
     源文件的「用途变体」后缀要带过去：en-us-sms.json 的目标是 zh-cn-sms.json，
@@ -354,7 +426,11 @@ def target_rel(entry, target_locale):
     if variant:
         stem = stem + "-" + variant
     fn = stem + ext
-    return (folder + "/" + fn).lstrip("/") if folder else fn
+    canonical = (folder + "/" + fn).lstrip("/") if folder else fn
+    if root:
+        return _existing_target_variant(root, folder, canonical,
+                                        target_locale, entry)
+    return canonical
 
 
 def _existing_target(root, tgt):
@@ -378,6 +454,63 @@ def _existing_target(root, tgt):
         return out
     except Exception:
         return None
+
+
+def _append_reds_texts(text, rows):
+    """把目标语言包里没有的条目追加到 DefineTexts 末尾。
+
+    rows: [(条目名, 原文, 译文)] → (新文本, 没能追加的 rows)。
+    只在能可靠定位到「最后一条 this.Text(...)」时才动手（括号配对、跳过字符串），
+    定位不到就原样返回，让调用方照常报「目标语言包里没有这个条目」——宁可少写，
+    也不能把 this.Text 塞到语法奇怪的位置。
+    """
+    if not rows or "DefineTexts" not in text:
+        return 0, rows
+    seen, uniq, rest = set(), [], []
+    for k, o, t in rows:
+        if k in seen:
+            rest.append((k, o, t))
+            continue
+        seen.add(k)
+        uniq.append((k, t))
+    if not uniq:
+        return 0, rows
+    pos = text.rfind("this.Text(")
+    if pos < 0 or text.find("DefineTexts") > pos:
+        return 0, rows
+    i = pos + len("this.Text(")
+    depth, quote, n = 1, "", len(text)
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    if i >= n:
+        return 0, rows
+    semi = text.find(";", i)
+    eol = text.find("\n", semi) if semi >= 0 else -1
+    if semi < 0 or eol < 0:
+        return 0, rows
+    line_start = text.rfind("\n", 0, pos) + 1
+    indent = text[line_start:pos]
+    indent = indent[:len(indent) - len(indent.lstrip())]
+    nl = "\r\n" if "\r\n" in text else "\n"
+    add = nl.join('%sthis.Text("%s", "%s");'
+                  % (indent, k, E.escape_for(str(t or ""), '"'))
+                  for k, t in uniq) + nl
+    return text[:eol + 1] + add + text[eol + 1:], rest
 
 
 def apply_text_target(path, rows):
@@ -418,19 +551,31 @@ def apply_text_target(path, rows):
         if key and key not in index:
             index[key] = lit
 
-    edits, fails, written = [], [], 0
+    edits, fails, written, missing = [], [], 0, []
     for key, orig, trans in rows:
         k = str(key or "")
         lit = index.get(k) if k else None
         if lit is None:
-            fails.append((k, orig, "目标语言包里没有这个条目"
-                          if k else "缺少条目名, 无法定位"))
+            if k:
+                missing.append((k, orig, trans))
+            else:
+                fails.append((k, orig, "缺少条目名, 无法定位"))
             continue
         body = E.escape_for(str(trans or ""), lit.quote)
         edits.append((lit.start, lit.end, lit.quote + body + lit.quote))
         written += 1
-    if edits:
-        # 从后往前替换, 前面的偏移才不会被打乱
+    appended = 0
+    if missing:
+        # 目标语言包是模组自带的「模板 stub」时（RCF 的 ChineseSimplified.reds
+        # 只有 19 条，English.reds 有 194 条），缺的条目直接追加到 DefineTexts
+        # 末尾，别让它们变成 174 条失败。
+        added, rest = _append_reds_texts(text, missing) if lang == "reds" else (0, missing)
+        if added:
+            text, appended = added, len(missing) - len(rest)
+            written += appended
+        fails.extend((k, o, "目标语言包里没有这个条目") for k, o, _t in rest)
+    if edits or appended:
+        # 从后往前替换, 前面的偏移才不会被打乱（追加在替换之后做, 位置已算好）
         for start, end, new in sorted(edits, key=lambda x: x[0], reverse=True):
             text = text[:start] + new + text[end:]
         try:
@@ -451,7 +596,7 @@ def extract(root, entries, target_locale):
     meta = {"files": 0, "types": {}, "locale": True, "skipped_target": 0}
     for entry in entries:
         rel = entry["rel"]
-        tgt = target_rel(entry, target_locale)
+        tgt = target_rel(entry, target_locale, root)
         fmt = entry["format"]
         existing = _existing_target(root, tgt)
         if fmt == "json":
@@ -728,7 +873,7 @@ def discover_provider_pairs(root, target_locale):
             })
             continue
         entry = _reds_entry(root, pkg)
-        tgt_rel = target_rel(entry, target_locale)
+        tgt_rel = target_rel(entry, target_locale, root)
         tgt_class = _reds_class_for_target(tgt_rel, target_locale)
         pair = {
             "id": "%s:%s" % (pkg.get("module") or pkg["rel"], pkg["class"]),
@@ -870,7 +1015,24 @@ def _add_provider_case(text, locale, class_name):
             default_indent = line[:len(line) - len(line.lstrip())]
             break
     if default_idx is None:
-        return text, False
+        # 有的 Provider 不用 switch，而是逐条 `if Equals(language, n"en-us")`。
+        # SenSen 那几个模组就是这样：中文包生成了、翻译也写进去了，但没有任何
+        # 代码引用它，游戏里永远显示英文，journal 还全是 ok。
+        eqblk = re.search(
+            r'^([ \t]*)if\s+Equals\s*\(\s*language\s*,\s*n"[^"]*"\s*\)[ \t]*\{[ \t]*\r?\n'
+            r'([ \t]*)return\s+new\s+[A-Za-z_]\w*\s*\(\s*\)\s*;',
+            text, re.M)
+        ret_null = None
+        for mm in re.finditer(r'^([ \t]*)return\s+null\s*;[ \t]*\r?$', text, re.M):
+            ret_null = mm
+        if not eqblk or not ret_null:
+            return text, False
+        nl = "\r\n" if "\r\n" in text else "\n"
+        head = ("%sif Equals(language, n\"%s\") {%s%s  return new %s();%s%s}%s"
+                % (eqblk.group(1), tag, nl, eqblk.group(1), class_name,
+                   nl, eqblk.group(1), nl))
+        cut = ret_null.start()
+        return text[:cut] + head + text[cut:], True
     indent = case_indent or default_indent
     nl = "\r\n" if "\r\n" in text else "\n"
     new_line = '%scase n"%s": return new %s();%s' % (
@@ -1011,25 +1173,79 @@ def prepare_codeware_package(root, src_rel, tgt_rel, target_locale=None,
                 pass
             write_text(prov_path, new_text)
             report["provider_changed"] = True
-        has_target_case = bool(re.search(
-            r'\bcase\s+n"' + re.escape((locale or "").lower()) + r'"\s*:',
-            new_text, re.I))
-        if exact_rels and not has_target_case:
-            report["error"] = "Provider 中没有可插入语言的 switch/default 分支: %s" % (
-                os.path.relpath(prov_path, root).replace("\\", "/"))
+        tag = re.escape((locale or "").lower())
+        has_target_case = bool(
+            re.search(r'\bcase\s+n"' + tag + r'"\s*:', new_text, re.I)
+            or re.search(r'Equals\s*\(\s*language\s*,\s*n"' + tag + r'"\s*\)',
+                         new_text, re.I))
+        # 接不上就报错。以前只有 exact_rels（用户显式指定 Provider）时才报，
+        # 自动发现的 Provider 没接上也算成功 → 中文包生成了但没人引用，
+        # 游戏里永远显示英文，而 journal 全 ok。
+        if candidates and not has_target_case:
+            report["error"] = (
+                "Provider 里没有可插入语言的分支（switch/default 或 "
+                "if Equals）: %s"
+                % os.path.relpath(prov_path, root).replace("\\", "/"))
         if changed_case or new_text != prov_text:
             report["providers"].append(
                 os.path.relpath(prov_path, root).replace("\\", "/"))
     return report
 
 
+def _package_class_block(text):
+    """从一个「语言包 + 逻辑」混写的 .reds 里取出语言包类。
+
+    返回 ``(类名, 类块文本, 头部文本)``；头部是 module 与 import 行。类块从
+    class 关键字所在行开始到配对的 ``}`` 为止，括号配对时跳过字符串，因为
+    ``this.Text`` 的值里有 ``</>``、``{int_0}`` 这类字符。
+    """
+    m = CODEWARE_PACKAGE_RE.search(text or "")
+    if not m:
+        return None
+    brace = text.find("{", m.end())
+    if brace < 0:
+        return None
+    depth, i, n = 0, brace, len(text)
+    while i < n:
+        ch = text[i]
+        if ch in "\"'":
+            q = ch
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    i += 2
+                    continue
+                if text[i] == q:
+                    break
+                i += 1
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    if depth != 0:
+        return None
+    line_start = text.rfind("\n", 0, m.start()) + 1
+    block = text[line_start:i + 1]
+    head = [ln for ln in (text or "").splitlines()
+            if ln.strip().startswith("module ")
+            or ln.strip().startswith("import ")]
+    return m.group(1), block, "\n".join(head)
+
+
 def ensure_target(root, entry_rel, target_rel_path):
     """目标文件不存在时, 从源文件复制一份
 
     ``.reds`` 只允许复制「纯语言包」文件。模组把语言包和逻辑写在同一个
-    .reds 里时 (INCF-CORE 就是), 整文件复制会把 CompatibilityManager /
-    RequirementsPopup / @addField 全部声明两遍, REDscript 报
-    SYM_REDEFINITION, 整个脚本层都加载不了。
+    .reds 里时 (Garage Core / INCF-CORE 就是), 整文件复制会把 Provider 与
+    @addField 全部声明两遍, REDscript 报 SYM_REDEFINITION, 整个脚本层都
+    加载不了。这种情况改为**只把语言包那个类抽出来**写成新文件。
+
+    抽取结果必须自检通过（恰好 1 个 package 类、括号平衡、this.Text 条数与
+    源文件一致），任何一条不过就报错拒绝——宁可少翻一个模组，也不能写出
+    编译不过的文件。
     """
     src = os.path.join(root, entry_rel.replace("/", os.sep))
     dst = os.path.join(root, target_rel_path.replace("/", os.sep))
@@ -1041,9 +1257,30 @@ def ensure_target(root, entry_rel, target_rel_path):
         except Exception as ex:
             raise ValueError("读取源文件失败: %s" % ex)
         if not reds_is_pure_package(text):
-            raise ValueError(
-                "该文件把语言包和模组逻辑写在同一个 .reds 里, 整文件复制会产生"
-                "重复类型 (REDscript SYM_REDEFINITION), 已拒绝; 请用源码模式改写")
+            got = _package_class_block(text)
+            if not got:
+                raise ValueError(
+                    "该文件把语言包和模组逻辑写在同一个 .reds 里, 抽不出语言包类;"
+                    " 整文件复制会产生重复类型 (REDscript SYM_REDEFINITION),"
+                    " 已拒绝")
+            old_cls, block, head = got
+            new_cls = _reds_class_for_target(target_rel_path)
+            if not new_cls or new_cls == old_cls:
+                new_cls = old_cls + "_Localized"
+            body = re.sub(r"\bclass\s+" + re.escape(old_cls) + r"\b",
+                          "class " + new_cls, block, count=1)
+            out = (head + "\n\n" if head else "") + body.strip() + "\n"
+            n_text = len(re.findall(r"this\.Text\(", text))
+            if (len(CODEWARE_PACKAGE_RE.findall(out)) != 1
+                    or len(REDS_TYPE_RE.findall(out)) != 1
+                    or len(re.findall(r"this\.Text\(", out)) != n_text
+                    or not reds_is_pure_package(out)):
+                raise ValueError(
+                    "语言包类抽取自检未通过（类数/this.Text 条数/括号对不上）, 已拒绝")
+            os.makedirs(os.path.dirname(dst) or root, exist_ok=True)
+            with open(dst, "w", encoding="utf-8", newline="") as f:
+                f.write(out)
+            return dst
     os.makedirs(os.path.dirname(dst) or root, exist_ok=True)
     shutil.copy2(src, dst)
     return dst
