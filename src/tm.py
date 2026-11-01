@@ -37,6 +37,7 @@ class Memory(object):
         self.limit = limit
         self.entries = {}
         self._dirty = False
+        self._last_save = 0.0
         self.load()
 
     # ------------------------------------------------------------ 磁盘
@@ -53,6 +54,13 @@ class Memory(object):
     def save(self, force=False):
         if not self._dirty and not force:
             return
+        # json 改走纯 Python 编码器之后(appconfig 里的补丁), 17 万条要将近 1 秒,
+        # 而 _run_translate 每补翻一条就 save 一次 —— 必须节流, 否则时间全花在
+        # 反复序列化同一份字典上。force=True(显式保存/退出)不受限制。
+        now = time.time()
+        if not force and now - self._last_save < 3.0:
+            return
+        self._last_save = now
         try:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             tmp = self.path + ".tmp"

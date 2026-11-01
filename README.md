@@ -2,7 +2,22 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.42.4**
+当前版本：**v2.42.5**
+
+## v2.42.5 更新：绕开 json 的 C 编码器，修闪退
+
+v2.42.4 之后批量跑到第 44 个 mod 时**闪退**（`0xc0000005`，`python314.dll+0x5283f`）。
+崩溃栈是 `tm.py:60` 的 `json.dump` → `json/encoder.py:389 yield _encoder(key)`，
+而 `_encoder` 正是 C 实现的 `c_encode_basestring`。这是**第三次**栽在 CPython 的
+`_json` C 编码器上（前两次是 `c_make_encoder` 的参数行），访问违例在 Python 层
+接不住，只能绕开 C 实现。
+
+- **json 全部改走纯 Python 编码**：`appconfig` 导入时把 `c_make_encoder` 置空、
+  `encode_basestring(_ascii)` 换成 `py_encode_basestring(_ascii)`。
+  代价实测可忽略：18727 条 / 3.5 MB 的 `memory.json` 序列化 0.105 s。
+- **TM 落盘加 3 秒节流**：原来 `_run_translate` 每补翻一条就写一次盘，
+  绕开 C 之后会反复序列化同一份字典。
+- 已排除并发：700 万次 `put` + 400 次并发 `save` 零异常。
 
 ## v2.42.4 更新：提取正则预编译，批量不再卡在某个模组
 

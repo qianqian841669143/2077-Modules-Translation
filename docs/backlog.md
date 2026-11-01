@@ -53,6 +53,15 @@ v2.42 把批量换成单模组流程之后，批量跑一遍就会把单模组�
    （如 `name + " (zh)"`）避开同名冲突，不要覆盖已存在的同名目录。
    待定：以上风险里哪些算「不能替换」、要不要让用户逐个确认，开工前定。
 
+## 已修（v2.42.5）
+
+| 条目 | 做法 |
+|---|---|
+| 批量跑到第 44 个 mod **闪退**（`0xc0000005` / `python314.dll+0x5283f`，WER 16:36:44，dump `21708.dmp`） | 崩溃栈落在 `tm.py:60 save()` → `json.dump` → `json/encoder.py:389 yield _encoder(key)`，而 `_encoder` 就是 C 的 `c_encode_basestring`。这已经是第三次栽在 CPython `_json` 的 C 编码器上（前两次是 `c_make_encoder` 的参数行），访问违例在 Python 层接不住，只能绕开 C 实现：`appconfig` 导入时把 `c_make_encoder` 置 None、`encode_basestring(_ascii)` 换成 `py_*` 版本 |
+| 绕开 C 编码器后的开销 | 实测可忽略：18727 条 / 3.5 MB 的 `memory.json`，纯 Python 序列化 0.105 s（C 版约 0.02 s） |
+| TM 每条补翻都写一次盘 | `Memory.save()` 加 3 秒节流（`force=True` 不限），`_run_translate` 里连续补翻不再反复序列化同一份字典 |
+| 并发是否可疑 | 已排除：700 万次 `put` + 400 次并发 `save` 零异常（`put` 的 `_trim()` 会整体替换 `entries`，但旧 dict 有引用计数保护） |
+
 ## 已修（v2.42.4）
 
 | 条目 | 做法 |

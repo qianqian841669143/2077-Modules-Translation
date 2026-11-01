@@ -5,7 +5,23 @@ import os
 import re
 import sys
 
-VERSION = "v2.42.4"
+# ---------------------------------------------------------------- json 补丁
+# 三次 0xc0000005(2026-11-01) 全落在 CPython _json 的 C 编码器里:
+#   * json/encoder.py:256  c_make_encoder(...) 的参数行
+#   * json/encoder.py:389  yield _encoder(key) -> c_encode_basestring
+# 访问违例在 Python 层接不住(try/except 无效, 进程直接消失), 只能绕开 C 实现,
+# 改用 json/encoder.py 自带的纯 Python 版本。代价是序列化慢一点, TM 落盘另有
+# 节流(tm.Memory.save), 实际感觉不到。
+try:
+    import json.encoder as _jenc
+
+    _jenc.c_make_encoder = None
+    _jenc.encode_basestring = _jenc.py_encode_basestring
+    _jenc.encode_basestring_ascii = _jenc.py_encode_basestring_ascii
+except Exception:                      # 老版本 Python 没有这些名字, 忽略即可
+    pass
+
+VERSION = "v2.42.5"
 APP_DIR_NAME = "2077ModTranslator"
 
 TARGET_LANGS = ["简体中文", "繁體中文", "English", "日本語", "한국어",
