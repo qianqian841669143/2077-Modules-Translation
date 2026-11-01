@@ -4,7 +4,6 @@ web_app.py —— pywebview 版前端(HTML/CSS/JS) + Python 后端
 
 界面在 web/ 下, 通过 js_api 调用这里的方法; 长任务用 evaluate_js 回推事件。
 """
-import collections
 import faulthandler
 import hashlib
 import json
@@ -18,6 +17,7 @@ import time
 import webview
 
 import i18n
+import evbus
 from appconfig import (VERSION, DEFAULT_SETTINGS, TARGET_LANGS, config_dir,
                        config_file, load_settings, save_settings,
                        normalize_api_base, disp_path)
@@ -122,9 +122,14 @@ class Api(object):
         self._mb_results = []
         self._mb_items = []
         self._mb_worker = None
-        # 批量/扫描的事件队列：后台线程只往里塞，前端 batch_poll 取走。
-        # 直接 evaluate_js 是跨线程碰 WebView2，跑几十个 mod 会偶发 0xc0000005。
-        self._mb_q = None
+        # 批量/扫描的事件队列：后台线程只往里塞，前端从 evbus 的只读 HTTP
+        # 端口取走（fetch）。不再走 pywebview 的 JS 桥——桥每调一次都要新开
+        # 线程再 evaluate_js 回写，跑到几十个 mod 会偶发 0xc0000005。
+        # batch_poll 保留为兜底（fetch 被拦时前端退回它），两者共用这条 deque。
+        self._bus = evbus.EventBus()
+        self._bus.set_running_probe(lambda: bool(self._mb_running or
+                                                 self._mb_scanning))
+        self._mb_q = self._bus.q
         # Vortex 三层映射（下载包 / 安装缓存 / 游戏部署）的扫描缓存。
         # 目录一变就作废；只读不写，不会影响 Vortex。
         self._vmap = None
@@ -273,6 +278,8 @@ class Api(object):
             "targetLangs": TARGET_LANGS,
             "configFile": config_file(),
             "initialPath": self.initial_path,
+            # 批量事件的只读本机端口（fetch 用）。起不来就是空串，前端退回桥。
+            "pollUrl": self._bus.start(),
         }
 
     def set_language(self, code):
@@ -1664,7 +1671,7 @@ class Api(object):
             return {"ok": False,
                     "error": self._tr("请先在设置里指定 Vortex 安装缓存目录")}
         target = locale_pack.target_code(self.settings.get("target_lang", "简体中文"))
-        self._mb_q = collections.deque(maxlen=20000)
+        self._bus.clear()
         self._mb_scanning = True
         self._mb_push({"type": "busy", "on": True,
                        "text": i18n.tr("正在预扫模组目录 ...")})
@@ -1742,7 +1749,7 @@ class Api(object):
 
         self._mb_running = True
         self._mb_cancel.clear()
-        self._mb_q = collections.deque(maxlen=20000)
+        self._bus.clear()
         self._mb_results = []
         self._mb_worker = None
 

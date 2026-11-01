@@ -78,6 +78,7 @@ async function _boot() {
   state.lang = d.lang;
   state.version = d.version;
   state.configFile = d.configFile;
+  _mbPollUrl = d.pollUrl || "";   // 批量事件的只读本机端口
   $("app-ver").textContent = d.version;
   applyTheme();
   applyI18n();
@@ -1985,17 +1986,20 @@ window.__evt = onEvt;
 
 /* 批量/扫描的事件走轮询而不是后端推过来。
  *
- * 后端以前在批处理线程里直接调 window.evaluate_js，那是跨线程碰 WebView2 的
- * UI 线程：单次没事，连着跑几十个 mod 会偶发 0xc0000005（2026-11-01 两次整窗
- * 消失，转储里最后一条事件就是 mb-item）。现在后端只把事件塞进 deque，
- * 由这里定时取走，后端线程完全不碰 COM。
+ * 走过的两个坑：最初后端在批处理线程里直接调 window.evaluate_js，那是跨线程
+ * 碰 WebView2 的 UI 线程，连着几十个 mod 就 0xc0000005；改成 pywebview 的
+ * batch_poll 之后，桥每调一次仍要新开线程再 evaluate_js 回写（util.py 的
+ * js_bridge_call），跑到第 54 个 mod 又崩了。
+ * 现在后端把事件放进 deque，由一个只读的本机 HTTP 端口（boot 里下发的
+ * pollUrl）供这里 fetch 取走——整条路径不经过 COM。fetch 起不来时退回桥。
  */
 let _mbPollTimer = null;
 let _mbPollBusy = false;
+let _mbPollUrl = "";            // 后端的只读事件端口，空串表示退回桥
 
 function startMbPoll() {
   if (_mbPollTimer) return;
-  _mbPollTimer = setInterval(pollMbEvents, 150);
+  _mbPollTimer = setInterval(pollMbEvents, 200);
 }
 
 function stopMbPoll() {
@@ -2006,10 +2010,16 @@ function stopMbPoll() {
 }
 
 async function pollMbEvents() {
-  if (_mbPollBusy) return;      // 上一次还没回来，别叠加桥调用
+  if (_mbPollBusy) return;      // 上一次还没回来，别叠加请求
   _mbPollBusy = true;
   try {
-    const r = await pywebview.api.batch_poll();
+    let r;
+    if (_mbPollUrl) {
+      const resp = await fetch(_mbPollUrl, { cache: "no-store" });
+      r = await resp.json();
+    } else {
+      r = await pywebview.api.batch_poll();
+    }
     if (!r || !r.ok) { stopMbPoll(); return; }
     const evs = r.events || [];
     evs.forEach(onEvt);
@@ -2017,7 +2027,8 @@ async function pollMbEvents() {
     // 否则预扫一开始就会被这里停掉。
     if (!evs.length && !r.running) stopMbPoll();
   } catch (_) {
-    stopMbPoll();
+    if (_mbPollUrl) { _mbPollUrl = ""; }   // 端口被拦/关掉：退回桥，别停轮询
+    else stopMbPoll();
   } finally {
     _mbPollBusy = false;
   }
