@@ -9,29 +9,64 @@ tab/subcategory、赋值式包装函数声明、键守卫）**不做**：全量 
 （`settings.category("reward money", …)`）再加键守卫，那时它才是硬需求。
 
 v2.43.0（批量输出目录 + 遮罩）、v2.43.1（M1–M6 译文层修复）、v2.43.2（遮罩层级）
-与 v2.43.3（批量产物卫生 + 标记守恒）都已发布，见下「已修」。
-v2.44.0（批量跑完自动部署 + 归档层多归档 / 自家产物）已实现，见下「已修」。
+v2.43.3（批量产物卫生 + 标记守恒）、v2.44.0（自动部署 + 归档层）、v2.45.0（机翻提速）
+都已发布，见下「已修」。
 
-## 待办：v2.44.0 剩下没做的
+## 待办（v2.45.1 起）
 
-A/B 两组已实现，见下「已修（v2.44.0）」。还剩这些：
+1. **抽语言包类时丢掉 `@if(ModuleExists(...))`，会让整层 REDscript 编译失败**（v2.45.1 修）。
+   `CyberwareEx.reds` 这类「语言包 + 逻辑」混写文件，头部是：
 
-1. **`run.jsonl` 部署后打 `deployed` 标记**（原 B9）：部署过的模组在同一套参数下
+   ```reds
+   module CyberwareEx
+   import Codeware.Localization.*
+   @if(ModuleExists("CyberwareEx.Customization"))
+   import CyberwareEx.Customization.*
+   ```
+
+   `_package_class_block()` 抽语言包类时只保留以 `module ` / `import ` 开头的行
+   （`src/locale_pack.py:1310`），`@if` 被丢掉 → 生成的
+   `CyberwareEx\ChineseSimplified.reds` 第 3 行是无保护的
+   `import CyberwareEx.Customization.*`。缺装那个可选子模块的玩家这里直接
+   `UNRESOLVED_IMPORT`（游戏日志 `redscript_rCURRENT*.log` 实测：
+   `At …\CyberwareEx\ChineseSimplified.reds:3:1: module 'CyberwareEx.Customization'
+   has no members or does not exist`），然后
+   `REDScript compilation has failed` —— **整个脚本层所有模组都不加载**。
+
+   影响面：全量 1949 个 `.reds` 里指向不存在 module 的 import 有 50 条，未加 `@if`
+   的只有这 1 条（用户 06:21 已手工补上）；「同一 module 别处加了 `@if`、语言包里
+   没加」的潜伏形态 0 处。用当前代码现场跑 `_package_class_block()` 仍会吐 3 行头，
+   所以**删掉那个语言包重新生成就会复发**。
+
+   修法：`_package_class_block` 的头部改成「按顺序走，`module`/`import` 保留；
+   遇到 `import` 时往回捡紧贴着的 `@if` / `@else`（跳过空行与 `//` 注释）」。
+   不能简单保留所有 `@` 开头的行——同文件里修饰 `public func`
+   （`@if(ModuleExists("CyberwareEx.Customization"))` + `public func IsCustomMode()`）
+   的注解会变成悬空注解。配套自测：源文件带 `@if` 守卫的 import，抽出的新文件里
+   必须仍带着它；并断言「头部里每个 import 在原文件里被 `@if` 包着时，新文件也包着」。
+
+2. **`run.jsonl` 部署后打 `deployed` 标记**（原 B9）：部署过的模组在同一套参数下
    重跑会被当成「已完成」整行跳过，得先「清空输出」。复原流程只要走清空就没问题，
    所以先不做；真出现「我只想重跑这一个」再加按模组的作废。
-2. **「重译这个模组（丢弃本轮记忆）」入口**（原 B10）。`mod_deploy.forget_in()`
+3. **「重译这个模组（丢弃本轮记忆）」入口**（原 B10）。`mod_deploy.forget_in()`
    已经能按清单里的 `(orig, tgt)` 调 `Memory.forget()`，缺的是面板上那个按钮。
    在这之前，还原后重跑仍会先命中 TM、拿回同一份坏译文——这是复原流程里唯一的坑。
-3. **工具栏溢出**（v2.42.1 记）：工具条那一行按钮不换行，窗口窄的时候右侧会被裁。
+4. **工具栏溢出**（v2.42.1 记）：工具条那一行按钮不换行，窗口窄的时候右侧会被裁。
    已把「导出 Excel」收进「更多」，还剩 6 个（浏览 / 加载·提取 / 应用到模组 /
    撤销上次应用 / 批量翻译 / 设置 / 更多）+ 一个 grow 输入框。
    根治要么给 `.row` 加 `flex-wrap`，要么继续往菜单里收。
    判据：窗口宽 1280 时整行不溢出。
-4. **dry-run 跑一轮真实清单**：`batch_deploy_dry` 默认开，第一次真部署之前先看
+5. **dry-run 跑一轮真实清单**：`batch_deploy_dry` 默认开，第一次真部署之前先看
    `userdata\batch\deploy-<时间>.csv` 对不对。
-5. **全量 127 模组重跑复验**：`.bak`=0、撤销记录=0、部署清单核对
-   （v2.43.3 只在 3 个模组上验过，v2.44.0 的部署更是只跑了自测）。
-6. **删旧构建** `dist\2077ModTranslator.exe.old`（13,485,201 B，10-31）。
+6. **全量 127 模组重跑复验**：`.bak`=0、撤销记录=0、部署清单核对
+   （v2.43.3 只在 3 个模组上验过，v2.44.0 的部署更是只跑了自测）；
+   顺便量一次 v2.45.0 提速后的真实总时长。
+7. **机翻提速的下一步**（v2.45.0 只做了 S1/S2/S5）：
+   - S3「没有待译行就不重写」：第 11 轮 104 个 `todo=0` 的模组里仍有 17,060 行被
+     重写回文件，归档还要重建重打包；
+   - S4「加载与机翻流水线重叠」：19.5 min 里 11.8 min 加载 + 7.7 min 机翻，两者
+     本可并行，预估再省 30%，但改动大、要处理内存与取消路径；
+   - S6「复跑整模组跳过」：指纹与 TM 版本都没变就跳过，20 分钟 → 1–2 分钟。
 
 **不做**：`copy_mod` 逐文件记 `mtime_ns` 指纹判「跑完后原件被改过」（原 B5）。
 还原就是被允许的动作，改了也照覆盖，记一份指纹只是给清单加一列备注，不值当。
