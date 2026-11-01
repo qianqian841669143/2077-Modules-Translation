@@ -327,10 +327,12 @@ function bind() {
     $("btn-q-cancel").style.display = "none";
     await pywebview.api.batch_cancel();
   };
-  $("btn-q-out").onclick = async () => {
+  $("btn-q-out-pick").onclick = () => pickMbOutDir();
+  $("btn-q-out-open").onclick = async () => {
     const r = await pywebview.api.batch_open_output();
     if (!r.ok) toast(r.error || "error", "err");
   };
+  $("q-out").oninput = () => syncQueueStart();
   $("btn-q-clear").onclick = () => clearQueueOut();
   $("btn-copy-apply-errors").onclick = () => {
     const text = state.applyErrors.map((x) => [
@@ -379,13 +381,18 @@ function bind() {
   };
   // 机翻期间这个按钮被遮罩挡住，停止入口在遮罩里（btn-tr-stop）。
   $("btn-tr-all").onclick = () => translateRows(null);
+  // 遮罩上的这颗按钮是两个流程共用的出口：机翻走 stop_translate，批量走
+  // batch_cancel（由 enterBatchMask 切 data-mode）。
   $("btn-tr-stop").onclick = async () => {
     const b = $("btn-tr-stop");
+    const mode = b && b.dataset.mode;
     if (b) b.disabled = true;
     $("ov-count").textContent = T("正在停止...");
     setStatus(T("正在停止..."));
-    await pywebview.api.stop_translate();
+    if (mode === "batch") await pywebview.api.batch_cancel();
+    else await pywebview.api.stop_translate();
   };
+  $("btn-ov-panel").onclick = () => openModal("modal-queue");
 
   document.querySelectorAll("[data-close]").forEach((b) => {
     b.onclick = () => b.closest(".mask").classList.remove("on");
@@ -427,6 +434,10 @@ function bind() {
   $("btn-pick-downloads").onclick = async () => {
     const p = await pywebview.api.pick_folder();
     if (p) $("set-downloads").value = p;
+  };
+  $("btn-pick-batch-out").onclick = async () => {
+    const p = await pywebview.api.pick_folder();
+    if (p) $("set-batch-out").value = p;
   };
   $("btn-vortex-detect").onclick = detectVortexDirs;
   $("btn-vortex-scan").onclick = async () => {
@@ -1897,6 +1908,8 @@ function onEvt(e) {
   if (e.type === "error" && (e.action === "mb" || e.action === "mb-scan")) {
     state.mbRunning = false;
     $("btn-q-cancel").style.display = "none";
+    exitBatchMask();          // worker 崩了没发 mb-done，遮罩得在这里收
+    syncQueueStart();
     $("q-summary").textContent = e.message || "";
     toast(e.message || "error", "err");
     return;
@@ -2067,7 +2080,61 @@ function openQueue() {
   openModal("modal-queue");
   refreshQueueInfo();
   if (state.mbItems.length) renderQueue();
+  if (state.mbRunning) enterBatchMask();   // 面板可能在跑的时候被关掉过
   startMbPoll();   // 面板一打开就开始取事件：后面可能已经有一轮在跑
+}
+
+/* 批量遮罩：和机翻同一个思路，跑的时候整块界面盖住，停止入口在遮罩里。
+ *
+ * 批量面板本身是 .mask，开着的时候已经挡住主界面——问题是它能被随手关掉，
+ * 关掉之后主界面就活了，还能点出第二次批量。所以遮罩独立于面板存在：
+ * 面板开着时给它加 .mask.top(300) 浮在遮罩(80) 之上，关掉面板后遮罩仍在。
+ */
+function enterBatchMask() {
+  const ov = $("overlay");
+  if (!ov) return;
+  ov.classList.add("on", "batch");
+  const t = $("overlay-text");
+  if (t) t.textContent = T("批量翻译进行中…");
+  const cnt = $("ov-count");
+  if (cnt && !state.mbIndex) cnt.textContent = "0 / " + Number(state.mbTotal || 0);
+  const st = $("btn-tr-stop");
+  if (st) { st.dataset.mode = "batch"; st.textContent = T("停止批量"); st.disabled = false; }
+  if ($("btn-ov-panel")) $("btn-ov-panel").style.display = "";
+  const qm = $("modal-queue");
+  if (qm) qm.classList.add("top");
+  const app = document.querySelector("main.app");
+  if (app) app.inert = true;
+  state.busy = true;
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+}
+
+function exitBatchMask() {
+  const ov = $("overlay");
+  if (ov) ov.classList.remove("on", "batch");
+  const st = $("btn-tr-stop");
+  if (st) { delete st.dataset.mode; st.textContent = T("停止机翻"); st.disabled = false; }
+  if ($("btn-ov-panel")) $("btn-ov-panel").style.display = "none";
+  const qm = $("modal-queue");
+  if (qm) qm.classList.remove("top");
+  const app = document.querySelector("main.app");
+  if (app) app.inert = false;
+  state.busy = false;
+}
+
+async function pickMbOutDir() {
+  const p = await pywebview.api.pick_folder();
+  if (p) { $("q-out").value = p; syncQueueStart(); }
+}
+
+/* 输出目录为空 = 不允许跑。按钮状态跟着输入框走，避免点了才报错。 */
+function syncQueueStart() {
+  const btn = $("btn-q-start");
+  if (!btn) return;
+  const hasOut = !!($("q-out").value || "").trim();
+  if (state.mbRunning) { btn.disabled = true; return; }
+  btn.disabled = !hasOut;
+  btn.title = hasOut ? "" : T("请先设置批量输出目录");
 }
 
 async function refreshQueueInfo() {
@@ -2075,9 +2142,12 @@ async function refreshQueueInfo() {
     const r = await pywebview.api.batch_info();
     if (!r || !r.ok) return;
     if (!$("q-staging").value) $("q-staging").value = r.staging || "";
+    if (!$("q-out").value) $("q-out").value = r.outRoot || (state.settings || {}).batch_out_dir || "";
+    syncQueueStart();
     if (r.running) {
       state.mbRunning = true;
       $("btn-q-cancel").style.display = "";
+      enterBatchMask();
     }
   } catch (_) {}
 }
@@ -2173,6 +2243,9 @@ function onMbStart(e) {
     msg += " " + T("（跳过上次已完成的 %d 个）").replace("%d", state.mbCached);
   }
   $("q-summary").textContent = msg;
+  enterBatchMask();
+  $("ov-count").textContent = "0 / " + Number(state.mbTotal || 0).toLocaleString();
+  syncQueueStart();
 }
 
 function onMbItem(e) {
@@ -2184,6 +2257,9 @@ function onMbItem(e) {
     state.mbDone[key] = { state: "", text: T("处理中 ...") };
     renderQueue();
     $("q-bar").style.width = Math.round(((e.index || 0) / total) * 100) + "%";
+    $("ov-bar").style.width = Math.round(((e.index || 0) / total) * 100) + "%";
+    $("ov-count").textContent = (Number(e.index || 0) + 1).toLocaleString()
+      + " / " + Number(e.total || 0).toLocaleString();
     $("q-summary").textContent = T("(%d/%d) 正在处理 %s")
       .replace("%d", (e.index || 0) + 1).replace("%d", e.total || 0)
       .replace("%s", e.name || key);
@@ -2206,6 +2282,9 @@ function onMbItem(e) {
   state.mbDone[key] = { state: st, text: txt, detail: bits.join(" · ") };
   renderQueue();
   $("q-bar").style.width = Math.round(((e.done || 0) / total) * 100) + "%";
+  $("ov-bar").style.width = Math.round(((e.done || 0) / total) * 100) + "%";
+  $("ov-count").textContent = Number(e.done || 0).toLocaleString()
+    + " / " + Number(e.total || 0).toLocaleString();
 }
 
 function onMbDone(e) {
@@ -2213,6 +2292,7 @@ function onMbDone(e) {
   $("btn-q-cancel").style.display = "none";
   $("q-progress").classList.remove("on");
   $("q-bar").style.width = "0%";
+  exitBatchMask();
   const rs = e.results || [];
   const ok = rs.filter((r) => r.ok && !r.error).length;
   const err = rs.filter((r) => r.error && r.error !== "cancelled").length;
@@ -2229,6 +2309,12 @@ function onMbDone(e) {
 
 async function startQueue() {
   if (state.mbRunning) return;
+  const outDir = ($("q-out").value || "").trim();
+  if (!outDir) {
+    toast(T("请先设置批量输出目录（留空则不进行翻译）"), "err");
+    $("q-out").focus();
+    return;
+  }
   const keys = [...state.mbSel];
   if (!keys.length) { toast(T("请先勾选要翻译的 mod"), "err"); return; }
   const withArchive = $("q-archive").checked;
@@ -2236,6 +2322,14 @@ async function startQueue() {
   const msg = T("将要处理 %d 个 mod：先复制到输出目录，再翻译、写回副本。\n同名目录会被覆盖。继续？")
     .replace("%d", keys.length);
   if (!confirm(msg)) return;
+  // 面板里改的输出目录要落盘：后端 batch_start 读的是 settings，不先保存就是
+  // 「填了 A、跑的还是 B」。
+  const saved = await pywebview.api.save_settings({ batch_out_dir: outDir });
+  if (!saved || !saved.ok) {
+    toast((saved && saved.error) || T("输出目录保存失败"), "err");
+    return;
+  }
+  state.settings = saved.settings;
   const r = await pywebview.api.batch_start(keys, withArchive, skipAssets);
   if (!r || !r.ok) {
     toast((r && r.error) || "error", "err");
@@ -2804,6 +2898,7 @@ function openSettings() {
   $("set-wkit").value = state.settings.wkit_path || "";
   $("set-staging").value = state.settings.staging_dir || "";
   $("set-downloads").value = state.settings.downloads_dir || "";
+  $("set-batch-out").value = state.settings.batch_out_dir || "";
   $("set-verify-active").checked = state.settings.verify_active !== false;
   $("vmap-info").textContent = state.vmap ? (state.vmap.summary || "") : "";
   $("set-src-lang").value = state.settings.res_source_lang || "en-us";
@@ -2833,6 +2928,7 @@ async function saveSettings(opts) {
     wkit_path: $("set-wkit").value.trim(),
     staging_dir: $("set-staging").value.trim(),
     downloads_dir: $("set-downloads").value.trim(),
+    batch_out_dir: $("set-batch-out").value.trim(),
     verify_active: $("set-verify-active").checked,
     res_source_lang: $("set-src-lang").value.trim() || "en-us",
     res_skip_target: $("set-skip-target").checked,

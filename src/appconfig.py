@@ -21,7 +21,7 @@ try:
 except Exception:                      # 老版本 Python 没有这些名字, 忽略即可
     pass
 
-VERSION = "v2.42.6"
+VERSION = "v2.43.0"
 APP_DIR_NAME = "2077ModTranslator"
 
 TARGET_LANGS = ["简体中文", "繁體中文", "English", "日本語", "한국어",
@@ -40,6 +40,10 @@ DEFAULT_SETTINGS = {
     # ---- Vortex 活动映射（下载包 → 安装缓存 → 游戏部署）----
     "staging_dir": "",                         # 安装缓存目录（工具实际改写的那一层）
     "downloads_dir": "",                       # 下载包目录（只读，作版本锚）
+    # ---- 批量翻译 ----
+    # 产物根目录。留空 = 不进行批量翻译（用户明确要求的出口）：
+    # 目录写错就会 rmtree 到模组本体，宁可不跑也不要猜一个位置。
+    "batch_out_dir": "",
     "verify_active": True,                     # 加载时提示该目录是否在部署清单里
     "res_source_lang": "en-us",                # 原始语言
     "res_skip_target": True,                   # 目标语言已存在则跳过
@@ -104,16 +108,27 @@ def config_file():
 def load_settings():
     """读取设置; 不存在或损坏时返回默认值"""
     cfg = dict(DEFAULT_SETTINGS)
+    raw = None
     try:
         with open(config_file(), "r", encoding="utf-8-sig") as f:   # 容忍 BOM
-            data = json.load(f)
-        if isinstance(data, dict):
+            raw = json.load(f)
+        if isinstance(raw, dict):
             for k, default in DEFAULT_SETTINGS.items():
-                if isinstance(data.get(k), type(default)):
-                    cfg[k] = data[k]
+                if isinstance(raw.get(k), type(default)):
+                    cfg[k] = raw[k]
     except Exception:
-        pass
+        raw = None
+    # v2.43.0 把批量输出目录改成可配置项。老配置里没有这个键，补上旧路径
+    # （userdata\batch\out），升级后第一次点「开始」不会被空白挡住；用户主动
+    # 清空之后才是真的「空 = 不跑」，这里不再自动补回去。
+    if not isinstance(raw, dict) or "batch_out_dir" not in raw:
+        cfg["batch_out_dir"] = os.path.join(config_dir(), "batch", "out")
     return cfg
+
+
+def legacy_batch_out_dir():
+    """v2.43.0 之前的固定批量输出目录。迁移与「盖章」都要认它。"""
+    return os.path.join(config_dir(), "batch", "out")
 
 
 def save_settings(cfg):

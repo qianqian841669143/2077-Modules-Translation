@@ -206,6 +206,23 @@ class Ctx(object):
 def run_one(ctx, cand, r):
     """跑一个 mod：复制 → 提取 → 机翻 → 写回副本。"""
     dst = os.path.join(ctx.out_root, safe_name(cand.get("name")))
+    # 输出目录自 v2.43.0 起由用户指定，下面这句 rmtree 就可能落到模组本体上
+    # （目录填成 staging / 游戏目录）。界面层已经按「不与 staging、游戏目录重叠」
+    # 校验过，这里再按路径关系挡一次：目标必须在输出目录内部，且不能与源目录
+    # 互为祖先/后代——out_root 指到 staging 时，dst 恰好就是那个模组本身。
+    out_n = os.path.normcase(os.path.abspath(ctx.out_root))
+    dst_n = os.path.normcase(os.path.abspath(dst))
+    src_n = os.path.normcase(os.path.abspath(cand.get("root") or ""))
+    bad = (not out_n) or (not dst_n.startswith(out_n + os.sep))
+    if not bad and src_n:
+        bad = (dst_n == src_n or dst_n.startswith(src_n + os.sep)
+               or src_n.startswith(dst_n + os.sep)
+               # 输出目录是整个安装缓存的祖先（甚至就是缓存根）：dst 会落在
+               # 缓存里，清空输出 / 重跑都会删到别的模组
+               or src_n == out_n or src_n.startswith(out_n + os.sep))
+    if bad:
+        raise RuntimeError("输出目录校验失败: %s 会覆盖源目录 %s"
+                           % (dst, cand.get("root") or ""))
     if os.path.isdir(dst):
         shutil.rmtree(dst, ignore_errors=True)
 

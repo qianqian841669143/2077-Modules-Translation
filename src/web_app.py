@@ -20,7 +20,7 @@ import i18n
 import evbus
 from appconfig import (VERSION, DEFAULT_SETTINGS, TARGET_LANGS, config_dir,
                        config_file, load_settings, save_settings,
-                       normalize_api_base, disp_path)
+                       normalize_api_base, disp_path, legacy_batch_out_dir)
 
 
 def web_dir():
@@ -297,7 +297,7 @@ class Api(object):
         new = dict(self.settings)
         for k in ("api_base", "model", "lang", "target_lang",
                   "game_dir", "wkit_path", "res_source_lang",
-                  "staging_dir", "downloads_dir"):
+                  "staging_dir", "downloads_dir", "batch_out_dir"):
             if isinstance(cfg.get(k), str):
                 new[k] = cfg[k]
         for k in ("dark_mode", "use_tm", "res_skip_target", "verify_active",
@@ -306,7 +306,8 @@ class Api(object):
                 new[k] = cfg[k]
         new["api_base"] = normalize_api_base(new.get("api_base", ""))
         # 路径字段去掉首尾空白与包裹的引号（用户常直接从资源管理器复制带引号）
-        for k in ("game_dir", "wkit_path", "staging_dir", "downloads_dir"):
+        for k in ("game_dir", "wkit_path", "staging_dir", "downloads_dir",
+                  "batch_out_dir"):
             v = (new.get(k) or "").strip().strip('"').strip("'")
             new[k] = os.path.normpath(v) if v else ""
         try:
@@ -1500,14 +1501,87 @@ class Api(object):
     # 现在批量跑的就是单模组那条路：复制目录 → 三层提取 → 机翻 → 写回副本，
     # 每个 mod 一个独立会话（见 spawn_worker），原目录全程只读。
 
-    def _batch_out_root(self):
-        """批量产物根目录。固定 latest：每次跑都覆盖同一批子目录。"""
-        d = os.path.join(config_dir(), "batch", "out")
+    def _batch_out_problem(self, d):
+        """输出目录能不能用：返回空串表示可用, 否则返回给用户看的原因。
+
+        这些校验不是客套: ``mod_batch.run_one`` 一开头就
+        ``shutil.rmtree(out_root/<mod 名>)``。目录一旦能自由设置, 指到 staging
+        或游戏目录就等于删模组本体, 指到盘根就等于清盘。
+        """
+        base = os.path.abspath(d)
+        drive, tail = os.path.splitdrive(base)
+        if not (tail or "").strip("\\/"):
+            return self._tr("不能直接用盘根目录, 请新建一个子目录")
+        cfgd = os.path.normcase(os.path.abspath(config_dir()))
+        if os.path.normcase(base) == cfgd:
+            return self._tr("不能指向程序自己的数据目录")
+
+        def _inside(a, b):
+            a = os.path.normcase(os.path.abspath(a))
+            b = os.path.normcase(os.path.abspath(b))
+            return a == b or a.startswith(b + os.sep)
+
+        for key, label in (("staging_dir", "安装缓存目录"),
+                           ("game_dir", "游戏目录")):
+            other = (self.settings.get(key) or "").strip()
+            if not other or not os.path.isabs(other):
+                continue
+            if _inside(base, other) or _inside(other, base):
+                return self._tr("不能和%s重叠").replace("%s", self._tr(label))
+        return ""
+
+    def _batch_out_mark(self, d):
+        """给产物目录盖章 (``.mb-out-root``)。
+
+        「清空输出」是递归删除, 只能清我们自己盖章过的目录: 用户把输出目录填成
+        某个已经有东西的文件夹时, 宁可拒绝也不要删别人的文件。旧版固定目录
+        (userdata\\batch\\out) 本来就是我们建的, 直接认领。
+        """
+        p = os.path.join(d, ".mb-out-root")
+        if os.path.isfile(p):
+            return True
         try:
-            os.makedirs(d, exist_ok=True)
+            legacy = os.path.abspath(legacy_batch_out_dir())
+            if os.path.normcase(os.path.abspath(d)) != os.path.normcase(legacy):
+                if os.listdir(d):
+                    return False
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("2077ModTranslator batch output\n")
+            return True
         except Exception:
-            return ""
-        return d
+            return False
+
+    def _batch_out_check(self, create=True):
+        """返回 (目录, 错误)。目录为空串时错误说明原因。"""
+        raw = (self.settings.get("batch_out_dir") or "").strip().strip('"').strip("'")
+        if not raw:
+            return "", self._tr("还没有设置批量输出目录 (留空 = 不进行批量翻译)")
+        try:
+            d = os.path.abspath(os.path.normpath(raw))
+        except Exception:
+            return "", self._tr("输出目录路径无效")
+        why = self._batch_out_problem(d)
+        if why:
+            return "", why
+        if create:
+            try:
+                os.makedirs(d, exist_ok=True)
+            except Exception as ex:
+                return "", self._tr("输出目录创建失败: %s").replace("%s", str(ex))
+        elif not os.path.isdir(d):
+            return "", self._tr("输出目录不存在")
+        if not create:
+            return d, ""
+        self._batch_out_mark(d)
+        return d, ""
+
+    def _batch_out_root(self):
+        """批量产物根目录; 不可用时返回空串。
+
+        v2.43.0 起改为读设置 ``batch_out_dir``, 空值就是「不跑」——
+        不再有固定的兜底目录, 否则用户以为没在跑, 文件却悄悄写进 userdata。
+        """
+        return self._batch_out_check()[0]
 
     # ---------------------------------------------------------- 批量事件 / 续跑
     #
@@ -1579,10 +1653,15 @@ class Api(object):
         return os.path.join(d, "run.jsonl")
 
     @staticmethod
-    def _mb_sig(staging, with_archive, skip_assets, target, model):
-        """参数指纹：换了模型 / 目标语言 / 复制规则，上次的续跑记录就作废。"""
+    def _mb_sig(staging, with_archive, skip_assets, target, model, out_root=""):
+        """参数指纹：换了模型 / 目标语言 / 复制规则 / 输出目录，上次的续跑记录就作废。
+
+        输出目录必须算进去：换个目录跑，journal 里那些条目指向旧目录, 但「换个
+        目录接着续」会让用户以为新目录已经跑过一遍。
+        """
         raw = "|".join([staging or "", "1" if with_archive else "0",
-                        "1" if skip_assets else "0", target or "", model or ""])
+                        "1" if skip_assets else "0", target or "", model or "",
+                        os.path.normcase(out_root or "")])
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
     def _mb_journal(self, r):
@@ -1732,16 +1811,16 @@ class Api(object):
         if not base:
             return {"ok": False,
                     "error": self._tr("还没有填写本地模型 API 地址。\n现在打开设置吗?")}
-        out_root = self._batch_out_root()
+        out_root, out_why = self._batch_out_check()
         if not out_root:
-            return {"ok": False, "error": self._tr("批量输出目录不可用")}
+            return {"ok": False, "error": out_why}
         tgt = self.settings.get("target_lang", "简体中文")
         model = self.settings.get("model", "").strip()
 
         # 续跑：同一套参数下已经跑完、产物目录还在的，直接跳过。
         # 崩溃 / 手动关掉之后再点一次「开始」就接着来，不用从头再等一小时。
         staging = (self.settings.get("staging_dir") or "").strip()
-        sig = self._mb_sig(staging, with_archive, skip_assets, tgt, model)
+        sig = self._mb_sig(staging, with_archive, skip_assets, tgt, model, out_root)
         done = self._mb_journal_open(sig, staging)
         cached = [it for it in items if str(it.get("key")) in done]
         if cached:
@@ -1806,18 +1885,20 @@ class Api(object):
 
     def batch_info(self):
         """面板打开时取一次：staging 目录、输出根、上次扫描结果。"""
+        out, out_why = self._batch_out_check(create=False)
         return {"ok": True,
                 "staging": (self.settings.get("staging_dir") or "").strip(),
-                "outRoot": self._batch_out_root(),
+                "outRoot": out,
+                "outError": out_why,
                 "running": self._mb_running,
                 "usable": len([x for x in (self._mb_items or []) if x.get("todo")]),
                 "scanned": len(self._mb_items or []),
                 "target": self.settings.get("target_lang", "简体中文")}
 
     def batch_open_output(self):
-        d = self._batch_out_root()
+        d, why = self._batch_out_check(create=False)
         if not d:
-            return {"ok": False, "error": self._tr("输出目录不可用")}
+            return {"ok": False, "error": why}
         try:
             os.startfile(d)
         except Exception as ex:
@@ -1825,16 +1906,30 @@ class Api(object):
         return {"ok": True, "path": d}
 
     def batch_clear(self):
-        """清空批量输出（固定 latest，下次重跑覆盖）。"""
+        """清空批量输出（下次重跑覆盖）。只清我们自己盖过章的目录。
+
+        目录可配置之后, 这段代码就是「递归删任意用户指定的目录」, 必须先确认
+        那目录是本工具建的: 没有 ``.mb-out-root`` 标记就拒绝。
+        """
         if self._mb_running:
             return {"ok": False, "error": self._tr("批量正在运行")}
-        d = self._batch_out_root()
+        d, why = self._batch_out_check(create=False)
         if not d:
-            return {"ok": False, "error": self._tr("输出目录不可用")}
+            return {"ok": False, "error": why}
+        if not os.path.isfile(os.path.join(d, ".mb-out-root")):
+            # 旧版固定目录本来就是我们建的, 直接认领; 其余目录一律拒绝。
+            if os.path.normcase(d) != os.path.normcase(
+                    os.path.abspath(legacy_batch_out_dir())):
+                return {"ok": False,
+                        "error": self._tr("这个目录里没有批量产物标记 ("
+                                          ".mb-out-root), 已拒绝清空")}
+            self._batch_out_mark(d)
         import shutil
         n = 0
         try:
             for name in os.listdir(d):
+                if name == ".mb-out-root":
+                    continue
                 p = os.path.join(d, name)
                 try:
                     if os.path.isdir(p):

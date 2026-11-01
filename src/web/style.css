@@ -349,9 +349,13 @@ label.chk input { margin: 0; }
 .overlay-text { color: #fff; font-size: 13px; text-shadow: 0 1px 3px rgba(0,0,0,.45); }
 /* 机翻：全遮盖，进度与停止都在遮罩里；不用禁用控件，遮罩本身挡住一切 */
 .overlay.tr { background: rgba(10, 15, 25, .88); backdrop-filter: blur(2px); }
+/* 批量：同样的盖法。面板本身是 .mask(50)，运行时加 .mask.top(300) 浮在遮罩上，
+   用户把面板关掉也不影响遮罩继续挡住主界面。 */
+.overlay.batch { background: rgba(10, 15, 25, .88); backdrop-filter: blur(2px); }
 .ov-progress { display: none; flex-direction: column; gap: 10px;
                width: min(420px, 72vw); }
 .overlay.tr .ov-progress { display: flex; }
+.overlay.batch .ov-progress { display: flex; }
 .ovbar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.18); overflow: hidden; }
 .ovbar-fill { height: 100%; width: 0; background: var(--success); transition: width .25s; }
 .ovrow { display: flex; align-items: center; justify-content: space-between;

@@ -26,7 +26,9 @@ VORTEX = r"E:\Vortex Mods\cyberpunk2077"
 
 CASES = [
     # (目录名关键字, 期望条数 或 None, 说明)
-    ("Anti-Tracking Breach-27505", 67, "REDscript @runtimeProperty"),
+    # 67 是 v1.x 的数; staging 里现在是 2.0 版, 同一份代码抽出 56 条
+    # (HEAD vs 工作区各跑一次都是 56, 不是回归)。
+    ("Anti-Tracking Breach-27505", 56, "REDscript @runtimeProperty"),
     ("Mod Configuration Menu 31640", None, "MCM 框架: .reds 应为 0 条误报"),
 ]
 

@@ -158,6 +158,12 @@
         <button class="btn" id="btn-q-scan" data-i18n="扫描">扫描</button>
       </div>
       <div class="row gap">
+        <input class="input grow" id="q-out"
+               data-i18n-ph="批量输出目录（留空则不进行翻译）">
+        <button class="btn" id="btn-q-out-pick" data-i18n="选择目录">选择目录</button>
+        <button class="btn" id="btn-q-out-open" data-i18n="打开">打开</button>
+      </div>
+      <div class="row gap">
         <button class="btn primary" id="btn-q-start" data-i18n="开始批量翻译">开始批量翻译</button>
         <button class="btn" id="btn-q-cancel" data-i18n="取消" style="display:none">取消</button>
         <div class="spacer"></div>
@@ -170,7 +176,6 @@
       <p class="hint stall" id="q-stall" style="display:none"></p>
     </div>
     <div class="modal-foot">
-      <button class="btn" id="btn-q-out" data-i18n="打开输出目录">打开输出目录</button>
       <button class="btn" id="btn-q-clear" data-i18n="清空输出">清空输出</button>
       <div class="spacer"></div>
       <button class="btn" data-close data-i18n="关闭">关闭</button>
@@ -221,6 +226,12 @@
         <button class="btn" id="btn-l10n-check" data-i18n="检测资源模式环境">检测资源模式环境</button>
         <span class="hint" id="l10n-check-result"></span>
       </div>
+      <div class="divider"></div>
+      <p class="hint" data-i18n="批量翻译：产物写到这个目录，原目录只读。留空则不进行批量翻译。">
+        批量翻译：产物写到这个目录，原目录只读。留空则不进行批量翻译。</p>
+      <div class="field"><label data-i18n="批量输出目录">批量输出目录</label>
+        <input class="input grow" id="set-batch-out" placeholder="D:\MTT\batch-out">
+        <button class="btn" id="btn-pick-batch-out" data-i18n="浏览">浏览</button></div>
       <div class="divider"></div>
       <p class="hint" data-i18n="Vortex 活动映射：安装缓存目录是工具实际改写的文件（Vortex 用硬链接把它和游戏目录连起来）；下载包目录只读，用来判断装的是哪个版本。">
         Vortex 活动映射：安装缓存目录是工具实际改写的文件（Vortex 用硬链接把它和游戏目录连起来）；下载包目录只读，用来判断装的是哪个版本。</p>
@@ -421,6 +432,7 @@
     <div class="ovbar"><div class="ovbar-fill" id="ov-bar"></div></div>
     <div class="ovrow">
       <span id="ov-count">0 / 0</span>
+      <button class="btn" id="btn-ov-panel" data-i18n="显示面板" style="display:none">显示面板</button>
       <button class="btn danger" id="btn-tr-stop" data-i18n="停止机翻">停止机翻</button>
     </div>
   </div>
