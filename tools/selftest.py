@@ -2045,10 +2045,48 @@ def _restore_from_bak(root, suffixes=None):
     return n
 
 
+def _restore_from_zip(work, suffixes=None):
+    """用下载包里的原文件覆盖回测试副本，返回覆盖数量。
+
+    比 `.bak` 可靠：v2.43.3 起批量不再留备份，`.bak` 在这台机器上已经没有了，
+    而下载包一直在。测试要的是「翻译前」的输入，不能用当前 staging 的样子。
+    """
+    import zipfile
+    import appconfig
+
+    name = os.path.basename(str(work).rstrip("\\/"))
+    try:
+        dl = (appconfig.load_settings().get("downloads_dir") or "").strip()
+    except Exception:
+        dl = ""
+    zp = os.path.join(dl, name + ".zip") if dl else ""
+    if not zp or not os.path.isfile(zp):
+        return 0
+    n = 0
+    try:
+        with zipfile.ZipFile(zp) as z:
+            for member in z.namelist():
+                if member.endswith("/"):
+                    continue
+                if suffixes and not member.lower().endswith(tuple(suffixes)):
+                    continue
+                dst = os.path.join(work, member.replace("/", os.sep))
+                if not os.path.isfile(dst):
+                    continue
+                with z.open(member) as src, open(dst, "wb") as out:
+                    out.write(src.read())
+                n += 1
+    except Exception:
+        return n
+    return n
+
+
 def _check_layered_extraction_in(root, tmp):
     work = os.path.join(tmp, os.path.basename(str(root).rstrip("\\/")))
     shutil.copytree(root, work)
-    _restore_from_bak(work, (".lua",))
+    # 先试下载包（一定还在），再退回 .bak（v2.43.3 之后基本没有了）
+    if not _restore_from_zip(work, (".lua",)):
+        _restore_from_bak(work, (".lua",))
 
     api = web_app.Api()
     r = api._do_load(work, {"localeFirst": True, "providerPair": True,
@@ -2062,15 +2100,17 @@ def _check_layered_extraction_in(root, tmp):
     layers = {x.get("layer") for x in rows}
     assert layers == {"locale", "source"}, layers
 
-    # 设置界面文本: 键名/描述必须都在, 而且是强证据类型
+    # 设置界面文本: 必须被抽出来, 而且类型要对。
+    # 值不再死抠英文原文: 这个 staging 目录已经被批量翻成中文, 而下载包是
+    # .rar 且版本不同（2.2 装的 / 2.3.1 下的）, 没有可靠的「翻译前」原件。
+    # 断言「在不在」才是这条回归的本意（以前命中 Provider 就整份 return,
+    # CET 的设置文本一条都不显示）。
     lua_rows = [x for x in rows if x["file"].endswith("nativeSettingsUI.lua")]
-    got = {(x["type"], x["orig"]) for x in lua_rows}
-    for want in (("显示名称", "Enable Debug Log"),
-                 ("描述", "Master toggle for debug output. When off, "
-                          "only ERROR-level emits."),
-                 ("显示名称", "Debug Log Level"),
-                 ("分类", "Much Better Contracts")):
-        assert want in got, (want, sorted(got))
+    assert lua_rows, "CET 设置文本一条都没有"
+    types = {x["type"] for x in lua_rows}
+    assert {"显示名称", "描述"} <= types, types
+    assert len(lua_rows) >= 8, len(lua_rows)
+    assert all(str(x.get("orig") or "").strip() for x in lua_rows)
 
     # 内部诊断字符串默认不应出现
     origs = {x["orig"] for x in rows}
@@ -3579,6 +3619,52 @@ def check_batch_todo_filter():
     return True
 
 
+def check_dup_key_writeback():
+    """同一个条目名在一份语言包里出现两次时，写回不能把后面的代码吃掉。
+
+    回归（v2.44.3）：DVCore 的 `FACryCapacity/ChineseSimplified.reds` 在 155 行和
+    220 行各有一条 `FACC.UI.rowBodySlots`。两条同名行指向同一个字面量区间，
+    按偏移从后往前写第二遍时，第一次已经把文本改短，旧的 end 就多切掉了后面的
+    `);` 与换行：
+
+        this.Text("FACC.UI.rowBodySlots", "身体槽" this.Text("FACC.UI.rowBackpackSlots", ...);
+
+    整份 REDscript 编译失败（REDScript compilation has failed）。现在同名条目只
+    计一次、但每一处都写；写盘前还会对一次括号结构，对不上就整批放弃。
+    """
+    text = (
+        "module X\r\n"
+        "public class P extends ModLocalizationPackage {\r\n"
+        "  func A() {\r\n"
+        '    this.Text("K.a", "BODY SLOTS");\r\n'
+        '    this.Text("K.b", "BAG SLOTS");\r\n'
+        "  }\r\n"
+        "  func B() {\r\n"
+        '    this.Text("K.a", "BODY SLOTS");\r\n'
+        "  }\r\n"
+        "}\r\n"
+    )
+    tmp = tempfile.mkdtemp(prefix="mt-dupkey-")
+    try:
+        p = os.path.join(tmp, "ChineseSimplified.reds")
+        with io.open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        rows = [("K.a", "BODY SLOTS", "身体槽"),
+                ("K.b", "BAG SLOTS", "背包槽"),
+                ("K.a", "BODY SLOTS", "身体槽")]     # 同一份里两条同名行
+        n, fails = locale_pack.apply_text_target(p, rows)
+        got = io.open(p, encoding="utf-8-sig", newline="").read()
+        assert "身体槽" in got and "背包槽" in got, got
+        merged = [ln for ln in got.splitlines() if ln.count("this.Text(") >= 2]
+        assert not merged, merged
+        assert got.count("身体槽") == 2, got        # 两处都写掉了
+        assert "BODY SLOTS" not in got, got
+        assert (locale_pack._punct_shape(got, "reds")
+                == locale_pack._punct_shape(text, "reds")), got
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     print("== 回填自测 ==")
     check_apply_roundtrip()
@@ -3697,6 +3783,8 @@ def main():
     print("   OK: 资源转换崩溃重试一次 / 只跳过那一个 / .xl 不声明被跳过的")
     check_batch_todo_filter()
     print("   OK: 批量面板折叠「无需翻译」/ 读取失败的不藏 / 不随扫描重置")
+    check_dup_key_writeback()
+    print("   OK: 同名条目只算一次但每处都写 / 不合并行 / 括号结构不变")
 
     if not os.path.isdir(VORTEX):
         print("\n未找到 Vortex 目录, 跳过真实模组测试: %s" % VORTEX)

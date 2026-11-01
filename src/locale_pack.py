@@ -561,21 +561,33 @@ def apply_text_target(path, rows):
             key = _assign_key(text, lit.start)
         else:
             continue
-        if key and key not in index:
-            index[key] = lit
+        if key:
+            # 同一个条目名在一份语言包里可能出现多次（DVCore 的 FACC 在 155 行
+            # 和 220 行各有一处 `FACC.UI.rowBodySlots`）。以前这里只留第一处，
+            # 但 rows 里两条同名行各自生成了一条**同一个区间**的编辑；按偏移
+            # 从后往前写第二遍时，第一次写入已经把文本改短，旧的 end 就多切
+            # 掉了后面的 `);` 与换行——FACryCapacity 的语法错误就是这么来的
+            # （实测 653 个改过的 .reds 里只有这一个结构被破坏）。
+            index.setdefault(key, []).append(lit)
 
     edits, fails, written, missing = [], [], 0, []
+    done_keys = set()
     for key, orig, trans in rows:
         k = str(key or "")
-        lit = index.get(k) if k else None
-        if lit is None:
+        targets = index.get(k) if k else None
+        if not targets:
             if k:
                 missing.append((k, orig, trans))
             else:
                 fails.append((k, orig, "缺少条目名, 无法定位"))
             continue
-        body = E.escape_for(str(trans or ""), lit.quote)
-        edits.append((lit.start, lit.end, lit.quote + body + lit.quote))
+        if k in done_keys:
+            # 同名条目：第一条已经把这份文件里每一处都写掉了
+            continue
+        done_keys.add(k)
+        for lit in targets:
+            body = E.escape_for(str(trans or ""), lit.quote)
+            edits.append((lit.start, lit.end, lit.quote + body + lit.quote))
         written += 1
     appended = 0
     if missing:
@@ -588,15 +600,46 @@ def apply_text_target(path, rows):
             written += appended
         fails.extend((k, o, "目标语言包里没有这个条目") for k, o, _t in rest)
     if edits or appended:
+        before = _punct_shape(text, lang)
         # 从后往前替换, 前面的偏移才不会被打乱（追加在替换之后做, 位置已算好）
+        seen = set()
         for start, end, new in sorted(edits, key=lambda x: x[0], reverse=True):
+            if (start, end) in seen:      # 同一个字面量被写了两遍，跳过
+                continue
+            seen.add((start, end))
             text = text[:start] + new + text[end:]
+        # 写盘前对一次结构：括号数量必须与写之前一致（追加的每一行自带一对）。
+        # 偏移算错、切掉 `);` 这类事故在 REDscript 里是整份脚本编译失败，
+        # 一旦发生就得靠人从压缩包恢复，所以宁可这一批不写。
+        after = _punct_shape(text, lang)
+        want = (None if before is None or after is None
+                else (before[0] + appended, before[1] + appended,
+                      before[2], before[3]))
+        if want is not None and after != want:
+            return 0, [(k, o, "写回会破坏括号结构（%s -> %s），已放弃"
+                        % (before, after)) for k, o, _t in rows]
         try:
             with open(path, "w", encoding="utf-8", newline="") as f:
                 f.write(text)
         except Exception as ex:  # noqa: BLE001
             return 0, [(k, o, "写入失败: %s" % ex) for k, o, _t in rows]
     return written, fails
+
+
+def _punct_shape(text, lang):
+    """去掉字符串字面量后的 ( ) { } 个数，用来在写盘前对结构。"""
+    try:
+        _toks, lits = E.scan_source(text, lang)
+    except Exception:
+        return None
+    out, pos = [], 0
+    for lit in lits:
+        out.append(text[pos:lit.start])
+        pos = lit.end
+    out.append(text[pos:])
+    body = "".join(out)
+    return (body.count("("), body.count(")"),
+            body.count("{"), body.count("}"))
 
 
 def extract(root, entries, target_locale, only_class=""):
