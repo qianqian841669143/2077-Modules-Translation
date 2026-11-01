@@ -508,7 +508,29 @@ def is_cr2w_file(path):
         return False
 
 
-def candidate_json(files):
+_LANG_SEG_RE = re.compile(r"^[a-z]{2}[-_][a-z]{2}$", re.I)
+
+
+def lang_of_rel(rel):
+    """从归档内路径猜语言码。
+
+        equipment_ex\\localization\\en-us.json          → en-us
+        base\\localization\\en-us\\onscreens\\x.json   → en-us
+        kiki_buttercup_dress_localization.json         → ""（认不出）
+
+    认不出时返回空串：调用方必须把这类文件**全部保留**，因为它们可能装的就是
+    源语言文本（作者命名毫无规律，实测有 `translation_strings.json`）。
+    """
+    for part in re.split(r"[\\/]", str(rel or "")):
+        if not part:
+            continue
+        stem = part.rsplit(".", 1)[0]
+        if _LANG_SEG_RE.match(stem):
+            return stem.lower().replace("_", "-")
+    return ""
+
+
+def candidate_json(files, langs=None):
     """列出归档里值得当本地化资源检查的文件。
 
     为什么不用路径分类：实测 mod 的文件命名毫无规律——
@@ -520,11 +542,20 @@ def candidate_json(files):
 
     可靠的做法：游戏里以 .json 结尾的 CR2W 资源基本只有本地化，
     所以「.json 且 CR2W」就是候选，真正的类型交给 cr2w.kind_of() 判断。
+
+    langs 给定时按路径里的语言码再筛一道：我们只读源语言和目标语言（前者是
+    原文，后者用来复用作者已有的译文），其余十几种语言序列化一次要 2.8 秒
+    （进程启动占大头），纯粹白等。语言码认不出的文件一律保留。
     """
     out = []
+    want = tuple(x.lower().replace("_", "-") for x in (langs or ()))
     for rel, path in files.items():
         if not rel.lower().endswith(".json"):
             continue
+        if want:
+            lg = lang_of_rel(rel)
+            if lg and lg not in want:
+                continue
         if is_cr2w_file(path):
             out.append(rel)
     return sorted(out)

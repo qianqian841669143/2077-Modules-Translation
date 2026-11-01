@@ -22,11 +22,14 @@
 from __future__ import annotations
 
 import glob
+import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 # unbundle 大归档（官方中文包 ~2 GB 解压）可能跑几分钟
@@ -231,20 +234,101 @@ def localization_files(files):
     return out
 
 
-def has_localization(cli, archive, timeout=180):
+_TOC_MEM = {}
+_TOC_LOCK = threading.Lock()
+
+
+def _toc_key(archive):
+    """缓存键：文件名 + 大小 + 开头 64 KB 的 sha1。
+
+    不能带绝对路径也不能带 mtime：批量每次都把模组复制到输出目录，副本的路径
+    和修改时间全变了 —— 那样等于永远不命中（实测第二轮还是 51 秒）。用「名字 +
+    大小 + 头部指纹」既扛得住复制，也不会因为一个文件换了版本就复用旧结论。
+    """
+    try:
+        st = Path(archive).stat()
+        with open(archive, "rb") as f:
+            head = f.read(65536)
+    except OSError:
+        return ""
+    h = hashlib.sha1(head).hexdigest()[:16]
+    return "%s|%d|%s" % (Path(archive).name.lower(), st.st_size, h)
+
+
+def _toc_cache_path():
+    try:
+        from appconfig import config_dir
+        return Path(config_dir()) / "cache" / "archive_toc.json"
+    except Exception:
+        return None
+
+
+def _toc_cached(key):
+    with _TOC_LOCK:
+        if key in _TOC_MEM:
+            return _TOC_MEM[key]
+        p = _toc_cache_path()
+        if p is None:
+            return None
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        val = data.get(key)
+        if isinstance(val, bool):
+            _TOC_MEM[key] = val
+            return val
+    return None
+
+
+def _toc_remember(key, val):
+    with _TOC_LOCK:
+        _TOC_MEM[key] = val
+        p = _toc_cache_path()
+        if p is None:
+            return
+        try:
+            data = {}
+            if p.is_file():
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+            data[key] = bool(val)
+            if len(data) > 4000:      # 别让它无限长
+                for k in list(data)[: len(data) - 4000]:
+                    data.pop(k, None)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(data), encoding="utf-8")
+        except Exception:
+            pass
+
+
+def has_localization(cli, archive, timeout=180, cache=True):
     """预筛：归档里有没有可能是本地化表的 json。拿不准就返回 True。
 
     这里只是省一次解包，**不能当结论**：目录里有 localization 目录、里面却
     没有条目（AMM 的 `AMM_Patches.archive` 就是这样）也会返回 True。
     真正的判据是解包后扫出来的行数，为 0 时由调用方报 `no_rows`。
+
+    读一次目录是 2 秒的固定开销（WolvenKit 进程启动占大头），一个 72 归档的
+    模组就要 147 秒。所以结果按「路径 + 大小 + mtime」缓存，第二遍直接命中。
     """
+    key = _toc_key(archive) if cache else ""
+    if key:
+        hit = _toc_cached(key)
+        if hit is not None:
+            return hit
     try:
         files = list_archive(cli, archive, timeout=timeout)
     except Exception:
         return True
     if not files:
-        return True
-    return bool(localization_files(files))
+        return True          # 拿不准，不缓存，下次再试
+    val = bool(localization_files(files))
+    if key:
+        _toc_remember(key, val)
+    return val
 
 
 def unbundle(cli, archive, outdir, pattern=None, timeout=DEFAULT_TIMEOUT, log=None):
@@ -266,6 +350,10 @@ def unbundle(cli, archive, outdir, pattern=None, timeout=DEFAULT_TIMEOUT, log=No
 def serialize(cli, src, outdir, timeout=600, log=None):
     """CR2W → WolvenKit JSON（*.json.json）。返回产出文件路径。"""
     src = Path(src)
+    # 输入不存在时 WolvenKit 会直接 0xC0000005 崩掉（不是报错），日志上只剩一串
+    # System.CommandLine 调用链。这种显而易见的错自己先拦住。
+    if not src.is_file():
+        raise WkitError("待转换的文件不存在：%s" % src)
     out = _ensure_dir(outdir)
     before = set(out.rglob("*.json.json"))
     run(cli, ["convert", "serialize", str(src), "-o", str(out)], timeout=timeout, log=log)
@@ -283,6 +371,8 @@ def deserialize(cli, src, outdir, timeout=600, log=None, expect_name=None):
     expect_name 用于在目录里有多个产物时挑选目标（按文件名匹配）。
     """
     src = Path(src)
+    if not src.is_file():
+        raise WkitError("待转换的 JSON 不存在：%s" % src)
     out = _ensure_dir(outdir)
     before = set(out.rglob("*"))
     run(cli, ["convert", "deserialize", str(src), "-o", str(out)], timeout=timeout, log=log)

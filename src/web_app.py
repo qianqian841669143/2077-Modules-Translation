@@ -961,20 +961,37 @@ class Api(object):
             return [], None, {"skipped": "no_archive"}
 
         sessions, rows, used, empty_arch = [], [], [], []
-        for target in targets:
-            # 先只读目录：归档里没有 localization 就不必解包（几百 MB 的归档
-            # 解一遍要几十秒，只为确认"这里没有可翻的东西"太亏）。这一步只是
-            # 预筛，目录里有 localization 目录却没条目也会放行，最终以行数为准。
+
+        # 先只读目录：归档里没有 localization 就不必解包（几百 MB 的归档解一遍
+        # 要几十秒，只为确认"这里没有可翻的东西"太亏）。这一步只是预筛，目录里
+        # 有 localization 目录却没条目也会放行，最终以行数为准。
+        #
+        # 读一次目录是 2 秒的固定开销（CLI 进程启动占大头），一个 72 归档的模组
+        # 串行读要 147 秒。并行 4 路 + `has_localization` 自带的结果缓存，
+        # 第一轮约 25 秒、第二轮 0 秒。
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _toc(target):
             try:
-                if not Lwkit.has_localization(cli, target.archive_path):
-                    continue
+                return bool(Lwkit.has_localization(cli, target.archive_path))
             except Exception:
-                pass
+                return True
+
+        try:
+            with ThreadPoolExecutor(max_workers=min(4, len(targets))) as ex:
+                checks = list(ex.map(_toc, targets))
+        except Exception:
+            checks = [True] * len(targets)
+
+        for target, has_loc in zip(targets, checks):
+            if not has_loc:
+                continue
 
             work = os.path.join(
                 config_dir(), "work",
                 re.sub(r"[^A-Za-z0-9_.-]+", "_", target.name)[:60] or "mod")
-            sess = Lpipe.Session(target, cli, work, lang="zh-cn", log=None)
+            sess = Lpipe.Session(target, cli, work, lang="zh-cn", log=None,
+                                source_lang=cfg["source_lang"])
             try:
                 sess.scan()
             except Exception:
@@ -1186,7 +1203,8 @@ class Api(object):
 
         work = os.path.join(config_dir(), "work",
                             re.sub(r"[^A-Za-z0-9_.-]+", "_", target.name)[:60] or "mod")
-        sess = Lpipe.Session(target, cli, work, lang="zh-cn", log=None)
+        sess = Lpipe.Session(target, cli, work, lang="zh-cn", log=None,
+                                source_lang=cfg["source_lang"])
         try:
             sess.scan()
         except Exception as ex:
@@ -2270,7 +2288,11 @@ class Api(object):
             return
 
         done = len(hits) + kept
-        batch = 8
+        # 批大小：短文本 8 条一批（实测 0.11 秒/行），长文本降到 4 条。
+        # 长文本一批的输出更容易超预算，一旦解析失败要退化成逐条，代价是 4~8 倍。
+        avg_len = (sum(len(str(rows[i].get("orig") or "")) for i in misses)
+                   / max(1, len(misses)))
+        batch = 4 if avg_len > 160 else 8
 
         # 2) 按原文去重：同一句话只发给模型一次。
         #
@@ -2320,8 +2342,16 @@ class Api(object):
         self._emit({"type": "progress", "done": done, "total": len(targets),
                     "memory": len(hits),
                     "note": self._tr("正在载入本地模型（首次约需 1 分钟）…")})
+        # 一轮批量里每个模组都会走到这里。模型已经载入、keep_alive 2 小时，
+        # 再 warmup 一次就是白花一次往返（127 个模组 = 127 次）。同一对
+        # (接口, 模型) 半小时内只热一次。
         try:
-            mt_client.warmup(base, mdl)
+            now = time.time()
+            warm = (getattr(self, "_mt_warm_key", None), getattr(self, "_mt_warm_at", 0))
+            if warm[0] != (base, mdl) or (now - warm[1]) > 1800:
+                mt_client.warmup(base, mdl)
+                self._mt_warm_key = (base, mdl)
+                self._mt_warm_at = now
         except Exception:
             pass
 

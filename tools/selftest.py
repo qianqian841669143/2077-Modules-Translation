@@ -3665,6 +3665,93 @@ def check_dup_key_writeback():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_archive_lang_filter():
+    """归档里只序列化源语言 + 目标语言（其余十几种语言一次 2.8 秒，全白等）。
+
+    Nearby Auto Loot 有 19 个语言 json，加载 58.8 秒；筛到 2 个后约 8 秒。
+    语言码认不出来的文件必须保留——作者的命名毫无规律。
+    """
+    import localization.archive as Larch
+
+    assert Larch.lang_of_rel("equipment_ex\\localization\\en-us.json") == "en-us"
+    assert Larch.lang_of_rel("base\\localization\\en-us\\onscreens\\x.json") == "en-us"
+    assert Larch.lang_of_rel("Localization\\ZH_CN.json") == "zh-cn"
+    assert Larch.lang_of_rel("kiki\\kiki_buttercup_dress_localization.json") == ""
+    assert Larch.lang_of_rel("base\\yv\\axl\\02_s15_local.json") == ""
+
+    tmp = tempfile.mkdtemp(prefix="mt-langf-")
+    try:
+        rels = ["loc\\en-us.json", "loc\\zh-cn.json", "loc\\de-de.json",
+                "loc\\ja-jp.json", "loc\\translation_strings.json"]
+        files = {}
+        for i, rel in enumerate(rels):
+            p = os.path.join(tmp, "%d.json" % i)
+            with open(p, "wb") as f:
+                f.write(b"CR2W" + b"\0" * 8)
+            files[rel] = p
+        got = Larch.candidate_json(files, langs=("en-us", "zh-cn"))
+        assert "loc\\en-us.json" in got, got
+        assert "loc\\zh-cn.json" in got, got
+        assert "loc\\de-de.json" not in got, got
+        assert "loc\\ja-jp.json" not in got, got
+        # 认不出语言的一律保留
+        assert "loc\\translation_strings.json" in got, got
+        # 不传 langs 时保持原样（全部候选）
+        assert len(Larch.candidate_json(files)) == 5
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_toc_cache_key():
+    """归档目录读取的缓存键必须扛得住「复制到输出目录」。
+
+    批量每次都把模组复制一份再扫，路径和 mtime 全变。第一版缓存键带了 mtime，
+    第二轮还是 51 秒——等于没缓存。
+    """
+    import localization.wkit as W
+
+    tmp = tempfile.mkdtemp(prefix="mt-toc-")
+    try:
+        a = os.path.join(tmp, "A.archive")
+        b = os.path.join(tmp, "A.archive")     # 同名同内容、不同目录
+        os.makedirs(os.path.join(tmp, "copy"), exist_ok=True)
+        with open(a, "wb") as f:
+            f.write(b"CR2W" + b"x" * 1000)
+        dst = os.path.join(tmp, "copy", "A.archive")
+        shutil.copy2(a, dst)
+        os.utime(dst, (1, 1))                   # 模拟复制后 mtime 变了
+        assert W._toc_key(a) == W._toc_key(dst), (W._toc_key(a), W._toc_key(dst))
+        # 内容变了就必须换键
+        with open(dst, "r+b") as f:
+            f.seek(0)
+            f.write(b"XXXX")
+        assert W._toc_key(a) != W._toc_key(dst)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_mt_batch_retry():
+    """整批解析失败先整批重试一次，再退化成逐条（8 倍代价）。"""
+    import mt_client as M
+
+    calls = {"n": 0}
+
+    def fake_chat(*_a, **_kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "抱歉，我只能输出解释，不能保证格式"
+        return '["甲", "乙"]'
+
+    old = M.chat
+    M.chat = fake_chat
+    try:
+        out = M.translate_batch("http://127.0.0.1:1/v1", "m", ["a", "b"])
+    finally:
+        M.chat = old
+    assert calls["n"] == 2, calls          # 恰好：首次 + 一次整批重试
+    assert out == ["甲", "乙"], out
+
+
 def main():
     print("== 回填自测 ==")
     check_apply_roundtrip()
@@ -3785,6 +3872,12 @@ def main():
     print("   OK: 批量面板折叠「无需翻译」/ 读取失败的不藏 / 不随扫描重置")
     check_dup_key_writeback()
     print("   OK: 同名条目只算一次但每处都写 / 不合并行 / 括号结构不变")
+    check_archive_lang_filter()
+    print("   OK: 归档只序列化源/目标语言 / 认不出语言的保留")
+    check_toc_cache_key()
+    print("   OK: 目录缓存键扛得住复制（不带 mtime）/ 内容变则换键")
+    check_mt_batch_retry()
+    print("   OK: 批量解析失败先整批重试一次再逐条")
 
     if not os.path.isdir(VORTEX):
         print("\n未找到 Vortex 目录, 跳过真实模组测试: %s" % VORTEX)

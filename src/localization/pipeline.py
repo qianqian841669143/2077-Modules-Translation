@@ -142,11 +142,13 @@ class Session(object):
     lang     目标语言，默认 zh-cn
     """
 
-    def __init__(self, target, cli, workdir, lang=DEFAULT_LANG, log=None):
+    def __init__(self, target, cli, workdir, lang=DEFAULT_LANG, log=None,
+                 source_lang="en-us"):
         self.target = target
         self.cli = cli
         self.workdir = Path(workdir)
         self.lang = lang or DEFAULT_LANG
+        self.source_lang = (source_lang or "en-us").strip() or "en-us"
         self.log = log
 
         self.docs = {}          # rel -> doc（原始，未改）
@@ -182,8 +184,12 @@ class Session(object):
 
         self._say("解包 %s" % self.target.name)
         files = archmod.unpack(self.cli, self.target, raw, log=None)
-        cands = archmod.candidate_json(files)
-        self._say("本地化候选 %d 个" % len(cands))
+        # 只读源语言 + 目标语言：其余十几种语言序列化一次要 2.8 秒（进程启动
+        # 占大头），而它们从来不参与配对，纯属白等。实测 Nearby Auto Loot
+        # 19 个语言文件 → 2 个，加载 58.8 s → 约 8 s。
+        langs = (self.source_lang, self.lang)
+        cands = archmod.candidate_json(files, langs=langs)
+        self._say("本地化候选 %d 个（语言 %s）" % (len(cands), "/".join(langs)))
 
         # 每个候选只序列化一次，doc 留在内存里复用
         docs = {}

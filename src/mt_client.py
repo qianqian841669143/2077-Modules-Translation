@@ -315,14 +315,26 @@ def translate_batch(api_base, model, texts, timeout=180, api_key="", on_retry=No
         sys_prompt += "\n\n" + glossary
     payload = json.dumps(texts, ensure_ascii=False)
     budget = int(max_tokens) if max_tokens else output_budget(texts)
-    raw = chat(api_base, model,
-               [{"role": "system", "content": sys_prompt},
-                {"role": "user", "content": payload}],
+    msgs = [{"role": "system", "content": sys_prompt},
+            {"role": "user", "content": payload}]
+    raw = chat(api_base, model, msgs,
                temperature=0.2, timeout=timeout, api_key=api_key,
                max_tokens=budget)
     out = parse_json_array(raw, len(texts))
     if out is None:
         out = _parse_lines(raw, len(texts))
+    if out is None:
+        # 整批解析不出来（多数是输出被截断）时，先原样重试一次再退化成逐条。
+        # 逐条重发是 8 次请求，整批重试是 1 次，代价差一个数量级。
+        try:
+            raw = chat(api_base, model, msgs,
+                       temperature=0.2, timeout=timeout, api_key=api_key,
+                       max_tokens=max(budget, output_budget(texts) + 256))
+            out = parse_json_array(raw, len(texts))
+            if out is None:
+                out = _parse_lines(raw, len(texts))
+        except Exception:
+            out = None
     if out is None:
         if on_retry:
             on_retry()
