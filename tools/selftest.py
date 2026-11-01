@@ -3146,6 +3146,60 @@ def check_locale_pack_copy_guard():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def check_mod_batch():
+    """批量（单模组功能）：复制规则 / 名字清洗 / 会话隔离。"""
+    import mod_batch as MB
+
+    # 名字清洗：Windows 非法字符压平，空名有兜底
+    assert MB.safe_name("A/B:C*D") == "A_B_C_D", MB.safe_name("A/B:C*D")
+    assert MB.safe_name("") == "mod"
+    assert MB.safe_name("  . ") == "mod"
+
+    src = tempfile.mkdtemp(prefix="mb_src_")
+    dst = os.path.join(src, "out")
+    os.makedirs(os.path.join(src, "sub"))
+    os.makedirs(os.path.join(src, ".git"))
+    for rel, body in (("a.reds", "class A {}"),
+                      ("b.lua", "local x = 1"),
+                      ("c.dds", "x"),
+                      ("d.wav", "x"),
+                      ("e.archive", "x"),
+                      ("sub/f.json", "{}"),
+                      (".git/HEAD", "ref: refs/heads/main")):
+        p = os.path.join(src, rel.replace("/", os.sep))
+        with io.open(p, "w", encoding="utf-8") as f:
+            f.write(body)
+
+    st = MB.copy_mod(src, dst)
+    got = set()
+    for dirpath, _dirs, files in os.walk(dst):
+        for fn in files:
+            got.add(os.path.relpath(os.path.join(dirpath, fn), dst)
+                    .replace(os.sep, "/"))
+    assert "a.reds" in got and "b.lua" in got, got
+    assert "sub/f.json" in got, "目录结构没保留: %s" % sorted(got)
+    assert "c.dds" not in got and "d.wav" not in got, "贴图/音频没跳过: %s" % sorted(got)
+    assert "e.archive" not in got, "归档层没开却复制了 .archive"
+    assert not any(g.startswith(".git") for g in got), ".git 不该被复制"
+    assert st["files"] == 3 and st["skipped"] == 3, st
+
+    dst2 = os.path.join(src, "out2")
+    MB.copy_mod(src, dst2, with_archive=True)
+    assert os.path.isfile(os.path.join(dst2, "e.archive")), "开了归档层却没复制"
+
+    # 会话隔离：worker 有自己的 rows/settings，但共享翻译记忆
+    api = web_app.Api()
+    api.rows = [{"file": "x", "line": 1, "orig": "A", "trans": ""}]
+    w = api.spawn_worker()
+    assert w.rows is not api.rows, "worker 和主会话共用一份 rows"
+    assert w.settings is not api.settings, "worker 改设置会污染主会话"
+    assert w._memory is api._memory_store, "worker 没共享翻译记忆"
+    w.rows = []
+    assert len(api.rows) == 1, "worker 清空 rows 把主会话的表格也清了"
+
+    shutil.rmtree(src, ignore_errors=True)
+
+
 def main():
     print("== 回填自测 ==")
     check_apply_roundtrip()
@@ -3248,6 +3302,8 @@ def main():
     print("   OK: 输出上限 (每请求必带 max_tokens / 随长度伸缩 / 单条也有)")
     check_mt_warmup()
     print("   OK: 模型预热 (原生 /api/chat + keep_alive / 非 Ollama 后端不报错)")
+    check_mod_batch()
+    print("   OK: 批量复制 (跳过贴图/音频, 归档按需) / 名字清洗 / 会话隔离")
 
     if not os.path.isdir(VORTEX):
         print("\n未找到 Vortex 目录, 跳过真实模组测试: %s" % VORTEX)

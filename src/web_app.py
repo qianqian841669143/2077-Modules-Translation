@@ -110,12 +110,13 @@ class Api(object):
         self._busy = False
         self._stop = threading.Event()
         self._maxed = False
-        # 批量队列：与单 mod 会话完全独立，用单独的事件与取消标志，
-        # 免得批量跑的时候把表格里的 self.rows 改乱。
-        self._queue_cancel = threading.Event()
-        self._queue_running = False
-        self._queue_results = []
-        self._queue_items = []
+        # 批量（单模组功能）：每个 mod 派生一个独立会话（spawn_worker），
+        # 表格那边的 self.rows 完全不受影响；这里只留队列自己的标志。
+        self._mb_cancel = threading.Event()
+        self._mb_running = False
+        self._mb_results = []
+        self._mb_items = []
+        self._mb_worker = None
         # Vortex 三层映射（下载包 / 安装缓存 / 游戏部署）的扫描缓存。
         # 目录一变就作废；只读不写，不会影响 Vortex。
         self._vmap = None
@@ -1478,232 +1479,193 @@ class Api(object):
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True, "started": True}
 
-    # ------------------------------------------------------------ 批量队列
+    # ------------------------------------------------------------ 批量（单模组功能）
     #
-    # 批量跑的是「游戏里已经装好的 mod」，与表格里那一个会话互不影响：
-    # 队列自己开 Session、自己填译、自己组包，结果只写输出目录。
-    # 版本迁移靠 per-mod 的 entryId 快照（batch.State），mod 更新后
-    # 没变的条目直接复用旧译文，只翻新增/改动的。
+    # v2.42 起，原来那套「扫游戏目录 .xl、只写输出目录」的批量队列整个删掉了。
+    # 现在批量跑的就是单模组那条路：复制目录 → 三层提取 → 机翻 → 写回副本，
+    # 每个 mod 一个独立会话（见 spawn_worker），原目录全程只读。
 
-    def _batch_paths(self):
-        base = os.path.join(config_dir(), "batch")
+    def _batch_out_root(self):
+        """批量产物根目录。固定 latest：每次跑都覆盖同一批子目录。"""
+        d = os.path.join(config_dir(), "batch", "out")
         try:
-            os.makedirs(base, exist_ok=True)
+            os.makedirs(d, exist_ok=True)
         except Exception:
-            pass
-        return (os.path.join(base, "index.json"),
-                os.path.join(base, "state.json"),
-                os.path.join(base, "work"))
+            return ""
+        return d
 
-    def _batch_state(self):
-        from localization import batch as Lbatch
-        _idx, state, _work = self._batch_paths()
-        return Lbatch, Lbatch.State(state)
+    def spawn_worker(self):
+        """派生一个独立会话，给批量在副本上跑单模组流程。
 
-    def queue_info(self):
-        """面板打开时先取这份：环境、缓存、已有快照数。"""
-        try:
-            from localization import archive as Larch
-            from localization import wkit as Lwkit
-        except Exception as ex:
-            return {"ok": False, "error": "批量引擎加载失败: %s" % ex}
-        cfg = self._l10n_cfg()
-        cli = Lwkit.find_cli(cfg["wkit_path"] or None)
-        game = Larch.find_game(cfg["game_dir"] or None)
-        if not cli or not game:
+        会话状态（rows / root / meta / l10n_session / _stop / _busy）全挂在
+        Api 实例上，新开一个实例就天然隔离；翻译记忆与术语表必须共享实例，
+        否则每个 mod 都要重读一遍磁盘上的 JSON。
+        """
+        w = Api()
+        w._window = None
+        w.settings = dict(self.settings)
+        w._memory = self._memory_store
+        w._glossary = self._glossary_store
+        w._terms = self._terms
+        w._emit = lambda obj: None
+        return w
+
+    def batch_scan(self, staging=""):
+        """异步：列出 staging 下的一级目录并预扫行数。不复制、不翻译。"""
+        import locale_pack
+        if self._mb_running:
+            return {"ok": False, "error": self._tr("批量正在运行")}
+        root = (staging or self.settings.get("staging_dir") or "").strip()
+        if not root or not os.path.isdir(root):
             return {"ok": False,
-                    "error": self._tr("请先在设置里指定游戏目录与 WolvenKit.CLI")}
-        Lbatch, state = self._batch_state()
-        idx_path, _s, _w = self._batch_paths()
-        try:
-            index = Lbatch.Index(idx_path)
-        except Exception:
-            index = None
-        mods = len(state.data)
-        return {
-            "ok": True,
-            "game": game,
-            "cli": str(cli),
-            "outputDir": self.l10n_output_dir(),
-            "stateMods": mods,
-            "snapshots": sum(len((v or {}).get("entries") or {})
-                             for v in state.data.values()),
-            "cached": len(index.data) if index is not None else 0,
-            "running": self._queue_running,
-            "target": cfg["source_lang"],
-        }
-
-    def queue_scan(self, refresh=False):
-        """异步探测游戏里装了哪些含本地化资源的 mod。"""
-        if self._queue_running:
-            return {"ok": False, "error": self._tr("队列正在运行")}
-        cfg = self._l10n_cfg()
+                    "error": self._tr("请先在设置里指定 Vortex 安装缓存目录")}
+        target = locale_pack.target_code(self.settings.get("target_lang", "简体中文"))
         self._emit({"type": "busy", "on": True,
-                    "text": i18n.tr("正在探测已安装的 mod ...")})
+                    "text": i18n.tr("正在预扫模组目录 ...")})
 
         def work():
             try:
-                from localization import archive as Larch
-                from localization import batch as Lbatch
-                from localization import wkit as Lwkit
-
-                cli = Lwkit.find_cli(cfg["wkit_path"] or None)
-                game = Larch.find_game(cfg["game_dir"] or None)
-                if not cli or not game:
-                    raise RuntimeError(self._tr("请先在设置里指定游戏目录与 WolvenKit.CLI"))
-                idx_path, _state, work_root = self._batch_paths()
-                index = None if refresh else Lbatch.Index(idx_path)
-                if refresh:
-                    index = Lbatch.Index(idx_path)
-                    index.data.clear()
-
-                def prog(done, total, label):
-                    self._emit({"type": "busy", "on": True,
-                                "text": "%s (%d/%d)" % (label or "", done, total)})
-
-                items = Lbatch.list_candidates(game, cli, work_root, index,
-                                               progress=prog,
-                                               cancel=self._queue_cancel)
-                self._queue_items = items
-                usable = [it for it in items if it.get("total")]
-                self._emit({"type": "queue-scanned", "items": items,
-                            "usable": len(usable), "total": len(items)})
+                import mod_batch as MB
+                items = MB.list_dirs(root)
+                total = len(items)
+                keep = []
+                for i, it in enumerate(items):
+                    if self._mb_cancel.is_set():
+                        break
+                    info = MB.probe_text(it["root"], target, measure=True)
+                    it.update(info)
+                    keep.append(it)
+                    if i % 5 == 0 or i == total - 1:
+                        self._emit({"type": "mb-scan", "done": i + 1,
+                                    "total": total, "name": it["name"]})
+                self._mb_items = keep
+                usable = [x for x in keep if x.get("todo")]
+                self._emit({"type": "mb-scanned", "items": keep,
+                            "total": len(keep), "usable": len(usable),
+                            "rows": sum(int(x.get("todo") or 0) for x in keep),
+                            "staging": root})
             except Exception as ex:
                 import traceback
                 traceback.print_exc()
-                self._emit({"type": "error", "action": "queue-scan",
+                self._emit({"type": "error", "action": "mb-scan",
                             "message": str(ex)})
             finally:
                 self._emit({"type": "busy", "on": False})
 
-        self._queue_cancel.clear()
+        self._mb_cancel.clear()
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True, "started": True}
 
-    def _batch_translate_factory(self, base, model, tgt):
-        """造一个「喂一批原文、还一批译文」的函数，提示词逻辑与单条机翻一致。"""
-        import mt_client
-        mdl = mt_client.resolve_model(base, model)
-
-        glossary = self._glossary_store
-        use_official = bool(self.settings.get("use_official_tm", True))
-        hints = self._term_hints if use_official else None
-        warmed = {"done": False}
-
-        def translate_texts(texts):
-            # 队列路径的第一批同样会白付一次 35-80 秒的载入。这里预热一次并
-            # 把 keep_alive 拉长；失败（非 Ollama 后端）只当没做，不重试。
-            if not warmed["done"]:
-                warmed["done"] = True
-                try:
-                    mt_client.warmup(base, mdl)
-                except Exception:
-                    pass
-            terms = glossary.relevant(texts)
-            gloss = glossary.prompt_block(terms)
-            if hints is not None:
-                try:
-                    skip = {str(t.get("src", "")).strip().lower()
-                            for t in (terms or []) if t.get("src")}
-                    extra = hints.prompt_block(texts, skip=skip)
-                    if extra:
-                        gloss = (gloss + "\n\n" + extra).strip()
-                except Exception:
-                    pass
-            return mt_client.translate_batch(base, mdl, texts, target=tgt,
-                                             glossary=gloss)
-
-        return translate_texts
-
-    def queue_start(self, keys):
-        """异步跑队列。keys 为空时跑全部「有本地化资源」的候选。"""
-        if self._queue_running:
-            return {"ok": False, "error": self._tr("队列已在运行")}
-        cfg = self._l10n_cfg()
-        items = [it for it in (self._queue_items or []) if it.get("total")]
+    def batch_start(self, keys, with_archive=False, skip_assets=True):
+        """异步跑批量：复制 → 提取 → 机翻 → 写回副本。"""
+        if self._mb_running:
+            return {"ok": False, "error": self._tr("批量已在运行")}
+        items = [it for it in (self._mb_items or []) if it.get("todo")]
         if keys:
             want = {str(k) for k in keys}
-            items = [it for it in items if it.get("key") in want]
+            items = [it for it in items if str(it.get("key")) in want]
         if not items:
             return {"ok": False,
                     "error": self._tr("没有可跑的 mod，请先扫描或勾选条目")}
-
         base = normalize_api_base(self.settings.get("api_base", ""))
-        tgt = self.settings.get("target_lang", "简体中文")
-        model = self.settings.get("model", "").strip()
         if not base:
             return {"ok": False,
                     "error": self._tr("还没有填写本地模型 API 地址。\n现在打开设置吗?")}
-        outdir = self.l10n_output_dir()
-        if not outdir:
-            return {"ok": False, "error": self._tr("输出目录不可用")}
+        out_root = self._batch_out_root()
+        if not out_root:
+            return {"ok": False, "error": self._tr("批量输出目录不可用")}
+        tgt = self.settings.get("target_lang", "简体中文")
+        model = self.settings.get("model", "").strip()
 
-        self._queue_running = True
-        self._queue_cancel.clear()
-        self._queue_results = []
+        self._mb_running = True
+        self._mb_cancel.clear()
+        self._mb_results = []
+        self._mb_worker = None
+
+        def spawn():
+            w = self.spawn_worker()
+            self._mb_worker = w
+            return w
 
         def work():
             try:
-                from localization import batch as Lbatch
-                from localization import official_tm as Lotm
-                from localization import wkit as Lwkit
-
-                cli = Lwkit.find_cli(cfg["wkit_path"] or None)
-                _idx, state_path, work_root = self._batch_paths()
-                official = None
-                if self.settings.get("use_official_tm", True):
-                    try:
-                        tm = Lotm.OfficialTM()
-                        official = tm if tm.exists() else None
-                    except Exception:
-                        official = None
-
-                ctx = Lbatch.Ctx(
-                    cli=cli, workdir=work_root, outdir=outdir,
-                    source_lang=cfg["source_lang"],
-                    skip_target=cfg["skip_target"],
-                    memory=self._memory_store, memory_lang=tgt,
-                    official=official,
-                    translate_texts=self._batch_translate_factory(base, model, tgt),
-                    state=Lbatch.State(state_path),
-                    on_event=self._emit,
-                    on_progress=lambda key, done, total: self._emit(
-                        {"type": "queue-progress", "key": key,
-                         "done": done, "total": total}),
-                    cancel=self._queue_cancel,
-                )
-                self._queue_results = Lbatch.run(ctx, items)
+                import mod_batch as MB
+                ctx = MB.Ctx(spawn_worker=spawn, out_root=out_root,
+                             with_archive=bool(with_archive),
+                             skip_assets=bool(skip_assets),
+                             base=base, model=model, target=tgt,
+                             on_event=self._emit, cancel=self._mb_cancel)
+                self._mb_results = MB.run(ctx, items)
             except Exception as ex:
                 import traceback
                 traceback.print_exc()
-                self._emit({"type": "error", "action": "queue",
+                self._emit({"type": "error", "action": "mb",
                             "message": str(ex)})
             finally:
-                self._queue_running = False
+                self._mb_running = False
+                self._mb_worker = None
 
         threading.Thread(target=work, daemon=True).start()
-        return {"ok": True, "started": True, "total": len(items)}
+        return {"ok": True, "started": True, "total": len(items),
+                "outRoot": out_root}
 
-    def queue_cancel(self):
-        self._queue_cancel.set()
+    def batch_cancel(self):
+        self._mb_cancel.set()
+        w = getattr(self, "_mb_worker", None)
+        if w is not None:
+            try:
+                w._stop.set()
+            except Exception:
+                pass
         return {"ok": True}
 
-    def queue_results(self):
-        return {"ok": True, "running": self._queue_running,
-                "results": self._queue_results}
+    def batch_results(self):
+        return {"ok": True, "running": self._mb_running,
+                "results": self._mb_results}
 
-    def queue_forget(self, key):
-        """丢掉某个 mod 的迁移快照（下次当作首次翻译）。"""
+    def batch_info(self):
+        """面板打开时取一次：staging 目录、输出根、上次扫描结果。"""
+        return {"ok": True,
+                "staging": (self.settings.get("staging_dir") or "").strip(),
+                "outRoot": self._batch_out_root(),
+                "running": self._mb_running,
+                "usable": len([x for x in (self._mb_items or []) if x.get("todo")]),
+                "scanned": len(self._mb_items or []),
+                "target": self.settings.get("target_lang", "简体中文")}
+
+    def batch_open_output(self):
+        d = self._batch_out_root()
+        if not d:
+            return {"ok": False, "error": self._tr("输出目录不可用")}
         try:
-            Lbatch, state = self._batch_state()
-            state.drop(str(key))
-            state.save()
+            os.startfile(d)
         except Exception as ex:
             return {"ok": False, "error": str(ex)}
-        return {"ok": True}
+        return {"ok": True, "path": d}
 
-    def queue_open_output(self):
-        return self.l10n_open_output()
+    def batch_clear(self):
+        """清空批量输出（固定 latest，下次重跑覆盖）。"""
+        if self._mb_running:
+            return {"ok": False, "error": self._tr("批量正在运行")}
+        d = self._batch_out_root()
+        if not d:
+            return {"ok": False, "error": self._tr("输出目录不可用")}
+        import shutil
+        n = 0
+        try:
+            for name in os.listdir(d):
+                p = os.path.join(d, name)
+                try:
+                    if os.path.isdir(p):
+                        shutil.rmtree(p, ignore_errors=True)
+                    else:
+                        os.remove(p)
+                    n += 1
+                except OSError:
+                    pass
+        except Exception as ex:
+            return {"ok": False, "error": str(ex)}
+        return {"ok": True, "removed": n}
 
     # ------------------------------------------------------------ 语言包
     def locale_scan(self):

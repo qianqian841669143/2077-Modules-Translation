@@ -40,7 +40,7 @@
       <button class="btn primary" id="btn-apply" data-i18n="应用到模组">应用到模组</button>
       <button class="btn" id="btn-undo" data-i18n="撤销上次应用">撤销上次应用</button>
       <button class="btn" id="btn-export" data-i18n="导出 Excel">导出 Excel</button>
-      <button class="btn" id="btn-queue" data-i18n="批量队列">批量队列</button>
+      <button class="btn" id="btn-queue" data-i18n="批量翻译">批量翻译</button>
       <button class="btn" id="btn-settings" data-i18n="设置">设置</button>
       <div class="menu-wrap">
         <button class="btn" id="btn-more" data-i18n="更多" title="更多操作">更多 ▾</button>
@@ -142,23 +142,27 @@
   </footer>
 </main>
 
-<!-- ============ 批量队列 ============ -->
+<!-- ============ 批量（复制后翻译） ============ -->
 <div class="mask" id="modal-queue">
   <div class="modal wide">
     <div class="modal-head">
-      <h3 data-i18n="批量队列">批量队列</h3>
+      <h3 data-i18n="批量翻译（复制后翻译）">批量翻译（复制后翻译）</h3>
       <button class="winbtn close" data-close>✕</button>
     </div>
     <div class="modal-body">
-      <p class="hint" data-i18n="扫描游戏里已安装的 mod，勾选后一次跑完：填译 → 机翻 → 组包。产物只写输出目录，不会自动装进游戏。">
-        扫描游戏里已安装的 mod，勾选后一次跑完：填译 → 机翻 → 组包。产物只写输出目录，不会自动装进游戏。</p>
+      <p class="hint" data-i18n="按单模组那套流程批量处理：每个 mod 先复制到输出目录，再提取三层文本、翻译、写回副本。原目录只读，不会被改动。">
+        按单模组那套流程批量处理：每个 mod 先复制到输出目录，再提取三层文本、翻译、写回副本。原目录只读，不会被改动。</p>
       <div class="row gap">
-        <button class="btn" id="btn-q-scan" data-i18n="扫描已装 mod">扫描已装 mod</button>
-        <button class="btn" id="btn-q-rescan" data-i18n="重新探测">重新探测</button>
+        <input class="input grow" id="q-staging" data-i18n-ph="Vortex 安装缓存目录">
+        <button class="btn" id="btn-q-pick" data-i18n="选择目录">选择目录</button>
+        <button class="btn" id="btn-q-scan" data-i18n="扫描">扫描</button>
+      </div>
+      <div class="row gap">
         <button class="btn primary" id="btn-q-start" data-i18n="开始批量翻译">开始批量翻译</button>
         <button class="btn" id="btn-q-cancel" data-i18n="取消" style="display:none">取消</button>
         <div class="spacer"></div>
-        <span class="hint" id="q-info"></span>
+        <label class="chk"><input type="checkbox" id="q-archive"><span data-i18n="包含归档层（慢）">包含归档层（慢）</span></label>
+        <label class="chk"><input type="checkbox" id="q-assets"><span data-i18n="连同贴图/音频">连同贴图/音频</span></label>
       </div>
       <div class="progress" id="q-progress"><div class="bar" id="q-bar"></div></div>
       <div class="queue-list" id="q-list"></div>
@@ -166,6 +170,7 @@
     </div>
     <div class="modal-foot">
       <button class="btn" id="btn-q-out" data-i18n="打开输出目录">打开输出目录</button>
+      <button class="btn" id="btn-q-clear" data-i18n="清空输出">清空输出</button>
       <div class="spacer"></div>
       <button class="btn" data-close data-i18n="关闭">关闭</button>
     </div>

@@ -275,10 +275,10 @@ textarea.input { height: auto; min-height: var(--ctl-h); max-height: 76px; paddi
 
 .report { margin: 0; font: 12px/1.7 Consolas, monospace; white-space: pre-wrap; }
 
-/* ================= 批量队列 ================= */
+/* ================= 批量（复制后翻译） ================= */
 .queue-list { max-height: 44vh; overflow: auto; border: 1px solid var(--border);
   border-radius: 10px; margin: 10px 0; }
-.q-row { display: grid; grid-template-columns: 24px 1fr 68px 88px 84px; gap: 6px;
+.q-row { display: grid; grid-template-columns: 24px 1fr 62px 62px 74px 80px; gap: 6px;
   align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--border);
   font-size: 12px; cursor: pointer; }
 .q-row:last-child { border-bottom: 0; }
@@ -293,6 +293,9 @@ textarea.input { height: auto; min-height: var(--ctl-h); max-height: 76px; paddi
 .q-state { text-align: right; color: var(--muted); }
 .q-sub { grid-column: 2 / -1; color: var(--muted); font-size: 11px; }
 #q-progress { width: 100%; margin-top: 6px; }
+label.chk { display: inline-flex; align-items: center; gap: 4px; font-size: 12px;
+  color: var(--muted); cursor: pointer; white-space: nowrap; }
+label.chk input { margin: 0; }
 
 /* ================= Toast ================= */
 #toasts { position: fixed; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 99; }

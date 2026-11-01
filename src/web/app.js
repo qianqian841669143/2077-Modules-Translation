@@ -14,8 +14,8 @@ const state = {
   hidden: new Set(), onlyFile: null, transMode: "",
   localeFiles: [], localeTargets: [], applyErrors: [],
   resMode: false, resResult: null, revertUndo: false,
-  queueItems: [], queueSel: new Set(), queueState: {}, queueRunning: false,
-  queueDone: {},
+  // 批量（单模组功能）：候选来自 staging 目录，逐 mod 复制后翻译
+  mbItems: [], mbSel: new Set(), mbDone: {}, mbRunning: false,
   // Vortex 活动映射：下载包 ↔ 安装缓存 ↔ 游戏部署
   vmap: null, vmapFilter: "all", vmapSearch: "",
   // 上一次机翻没翻出来的行号（「继续」只补这些）
@@ -319,17 +319,18 @@ function bind() {
   $("loc-src").onchange = () => renderLocaleList();
   $("btn-settings").onclick = () => openSettings();
   $("btn-queue").onclick = () => openQueue();
-  $("btn-q-scan").onclick = () => scanQueue(false);
-  $("btn-q-rescan").onclick = () => scanQueue(true);
+  $("btn-q-pick").onclick = () => pickMbDir();
+  $("btn-q-scan").onclick = () => scanQueue();
   $("btn-q-start").onclick = () => startQueue();
   $("btn-q-cancel").onclick = async () => {
     $("btn-q-cancel").style.display = "none";
-    await pywebview.api.queue_cancel();
+    await pywebview.api.batch_cancel();
   };
   $("btn-q-out").onclick = async () => {
-    const r = await pywebview.api.l10n_open_output();
+    const r = await pywebview.api.batch_open_output();
     if (!r.ok) toast(r.error || "error", "err");
   };
+  $("btn-q-clear").onclick = () => clearQueueOut();
   $("btn-copy-apply-errors").onclick = () => {
     const text = state.applyErrors.map((x) => [
       x.file || "", x.line || "", x.orig || "", x.trans || "",
@@ -1887,14 +1888,13 @@ window.__evt = (e) => {
   if (e.type === "undone") { onUndone(e); return; }
   if (e.type === "reverted") { onReverted(e); return; }
   if (e.type === "official-built") { onOfficialBuilt(e); return; }
-  if (e.type === "queue-scanned") { onQueueScanned(e); return; }
-  if (e.type === "queue-start") { onQueueStart(e); return; }
-  if (e.type === "queue-item") { onQueueItem(e); return; }
-  if (e.type === "queue-progress") { onQueueProgress(e); return; }
-  if (e.type === "queue-done") { onQueueDone(e); return; }
-  if (e.type === "queue-note") { $("q-summary").textContent = e.message || ""; return; }
-  if (e.type === "error" && (e.action === "queue" || e.action === "queue-scan")) {
-    state.queueRunning = false;
+  if (e.type === "mb-scan") { onMbScan(e); return; }
+  if (e.type === "mb-scanned") { onMbScanned(e); return; }
+  if (e.type === "mb-start") { onMbStart(e); return; }
+  if (e.type === "mb-item") { onMbItem(e); return; }
+  if (e.type === "mb-done") { onMbDone(e); return; }
+  if (e.type === "error" && (e.action === "mb" || e.action === "mb-scan")) {
+    state.mbRunning = false;
     $("btn-q-cancel").style.display = "none";
     $("q-summary").textContent = e.message || "";
     toast(e.message || "error", "err");
@@ -1980,70 +1980,71 @@ window.__evt = (e) => {
   }
 };
 
-/* ---------------- 批量队列 ---------------- */
+/* ---------------- 批量（单模组功能） ---------------- */
 
 function openQueue() {
   openModal("modal-queue");
   refreshQueueInfo();
-  if (state.queueItems.length) renderQueue();
+  if (state.mbItems.length) renderQueue();
 }
 
 async function refreshQueueInfo() {
   try {
-    const r = await pywebview.api.queue_info();
-    if (!r.ok) { $("q-info").textContent = r.error || ""; return; }
-    state.queueInfo = r;
-    const bits = [];
-    if (r.cached) bits.push(T("已探测 %d").replace("%d", r.cached));
-    if (r.stateMods) bits.push(T("有快照 %d").replace("%d", r.stateMods));
-    $("q-info").textContent = bits.join(" · ");
+    const r = await pywebview.api.batch_info();
+    if (!r || !r.ok) return;
+    if (!$("q-staging").value) $("q-staging").value = r.staging || "";
+    if (r.running) {
+      state.mbRunning = true;
+      $("btn-q-cancel").style.display = "";
+    }
   } catch (_) {}
 }
 
-async function scanQueue(refresh) {
-  if (state.queueRunning) return;
-  $("q-summary").textContent = T("正在探测已安装的 mod ...");
-  const r = await pywebview.api.queue_scan(!!refresh);
+async function pickMbDir() {
+  const r = await pywebview.api.pick_folder();
+  if (r) $("q-staging").value = r;
+}
+
+async function scanQueue() {
+  if (state.mbRunning) return;
+  const dir = $("q-staging").value.trim();
+  $("q-list").innerHTML = "";
+  state.mbItems = [];
+  $("q-summary").textContent = T("正在预扫，全部跑完大约 1 分钟 ...");
+  const r = await pywebview.api.batch_scan(dir);
   if (!r || !r.ok) toast((r && r.error) || "error", "err");
 }
 
-async function startQueue() {
-  if (state.queueRunning) return;
-  const keys = [...state.queueSel];
-  if (!keys.length) { toast(T("请先勾选要翻译的 mod"), "err"); return; }
-  const r = await pywebview.api.queue_start(keys);
-  if (!r || !r.ok) {
-    toast((r && r.error) || "error", "err");
-    if (((r && r.error) || "").includes("API")) openSettings();
-    return;
-  }
-  state.queueRunning = true;
+function mbUsable(it) {
+  return !!(it && it.todo);
 }
 
-function queueUsable() {
-  return state.queueItems.filter((x) => x.total && !x.error);
+function mbSize(n) {
+  if (!n) return "-";
+  return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB"
+    : Math.max(1, Math.round(n / 1024)) + " KB";
 }
 
 function renderQueue() {
   const box = $("q-list");
-  const items = state.queueItems;
+  const items = state.mbItems;
   if (!items.length) { box.innerHTML = ""; return; }
   const rows = items.map((it) => {
     const key = String(it.key || "");
-    const done = state.queueDone[key] || {};
-    const usable = !!it.total && !it.error;
-    const sel = usable && state.queueSel.has(key);
+    const done = state.mbDone[key] || {};
+    const usable = mbUsable(it);
+    const sel = usable && state.mbSel.has(key);
     const cls = done.state ? "done-" + done.state : "";
-    const types = Object.keys(it.types || {})
-      .map((k) => `${esc(k)} ${it.types[k]}`).join(" · ");
-    const stateText = done.text || (it.error ? T("不可用")
-      : (usable ? T("待翻译") : T("无本地化")));
-    const sub = done.detail || it.error || "";
+    const stateText = done.text || (it.error ? T("读取失败")
+      : (usable ? T("待翻译") : T("无需翻译")));
+    const sub = done.detail || it.error
+      || (it.alreadyRows ? T("已有中文 %d 行").replace("%d", it.alreadyRows) : "");
     return `<div class="q-row ${cls}" data-key="${esc(key)}">
       <input type="checkbox" ${sel ? "checked" : ""} ${usable ? "" : "disabled"}>
-      <span class="q-name" title="${esc(it.archive || it.xl || "")}">${esc(it.name || key)}</span>
-      <span class="q-num">${usable ? Number(it.total).toLocaleString() : "-"}</span>
-      <span class="q-num" title="${types}">${types || "-"}</span>
+      <span class="q-name" title="${esc(it.root || "")}">${esc(it.name || key)}</span>
+      <span class="q-num">${usable ? Number(it.todo).toLocaleString() : "-"}</span>
+      <span class="q-num">${it.alreadyRows ? Number(it.alreadyRows).toLocaleString() : "-"}</span>
+      <span class="q-num">${mbSize(it.bytes)}</span>
       <span class="q-state">${esc(stateText)}</span>
       ${sub ? `<span class="q-sub">${esc(sub)}</span>` : ""}
     </div>`;
@@ -2052,104 +2053,119 @@ function renderQueue() {
   box.querySelectorAll(".q-row").forEach((el) => {
     el.onclick = () => {
       const key = el.dataset.key;
-      const it = state.queueItems.find((x) => String(x.key) === key);
-      if (!it || !it.total || it.error || state.queueRunning) return;
-      if (state.queueSel.has(key)) state.queueSel.delete(key);
-      else state.queueSel.add(key);
+      const it = state.mbItems.find((x) => String(x.key) === key);
+      if (!it || !mbUsable(it) || state.mbRunning) return;
+      if (state.mbSel.has(key)) state.mbSel.delete(key);
+      else state.mbSel.add(key);
       renderQueue();
     };
   });
 }
 
-function onQueueScanned(e) {
-  state.queueItems = e.items || [];
-  state.queueDone = {};
-  state.queueSel = new Set(queueUsable().map((x) => String(x.key)));
-  renderQueue();
-  $("q-summary").textContent = T("共 %d 个 mod，其中 %d 个含本地化资源；勾选后开始。")
-    .replace("%d", state.queueItems.length)
-    .replace("%d", queueUsable().length);
-  refreshQueueInfo();
+function onMbScan(e) {
+  $("q-summary").textContent = T("预扫 %d / %d：%s")
+    .replace("%d", e.done || 0).replace("%d", e.total || 0)
+    .replace("%s", e.name || "");
 }
 
-function onQueueStart(e) {
-  state.queueRunning = true;
-  state.queueTotal = e.total || 0;
-  state.queueIndex = 0;
+function onMbScanned(e) {
+  state.mbItems = e.items || [];
+  state.mbDone = {};
+  state.mbSel = new Set(state.mbItems.filter(mbUsable).map((x) => String(x.key)));
+  renderQueue();
+  $("q-summary").textContent = T("共 %d 个目录，%d 个需要翻译（合计 %d 行待翻）；勾选后开始。")
+    .replace("%d", e.total || 0).replace("%d", e.usable || 0)
+    .replace("%d", e.rows || 0);
+}
+
+function onMbStart(e) {
+  state.mbRunning = true;
+  state.mbTotal = e.total || 0;
+  state.mbIndex = 0;
   $("btn-q-cancel").style.display = "";
   $("q-progress").classList.add("on");
   $("q-bar").style.width = "0%";
   $("q-summary").textContent = T("开始处理 %d 个 mod ...").replace("%d", e.total || 0);
 }
 
-function onQueueProgress(e) {
-  const idx = state.queueIndex || 0;
-  const total = state.queueTotal || 1;
-  const inner = e.total ? (e.done / e.total) : 0;
-  const pct = Math.min(100, Math.round(((idx + inner) / total) * 100));
-  $("q-bar").style.width = pct + "%";
-}
-
-function onQueueItem(e) {
+function onMbItem(e) {
   const key = String(e.key || "");
   if (!key) return;
+  const total = e.total || 1;
   if (e.phase === "start") {
-    state.queueIndex = e.index || 0;
-    state.queueDone[key] = { state: "", text: T("处理中 ...") };
+    state.mbIndex = e.index || 0;
+    state.mbDone[key] = { state: "", text: T("处理中 ...") };
     renderQueue();
+    $("q-bar").style.width = Math.round(((e.index || 0) / total) * 100) + "%";
     $("q-summary").textContent = T("(%d/%d) 正在处理 %s")
-      .replace("%d", (e.index || 0) + 1)
-      .replace("%d", e.total || 0)
+      .replace("%d", (e.index || 0) + 1).replace("%d", e.total || 0)
       .replace("%s", e.name || key);
     return;
   }
-  const m = e.migration || {};
   let st = "ok";
   let txt = T("完成");
-  if (e.error) { st = "err"; txt = T("失败"); }
-  else if (e.empty) { st = "skip"; txt = T("无条目"); }
-  else if (e.failed) { st = "err"; txt = T("部分失败"); }
+  if (e.error === "cancelled") { st = "skip"; txt = T("已取消"); }
+  else if (e.error) { st = "err"; txt = T("失败"); }
+  else if (!e.applied) { st = "skip"; txt = T("无译文可写"); }
   const bits = [];
-  if (e.empty) {
-    bits.push(T("没有可翻译条目"));
-  } else {
-    if (!m.first) {
-      bits.push(T("新增 %d").replace("%d", m.added || 0)
-        + " / " + T("改动 %d").replace("%d", m.changed || 0)
-        + " / " + T("复用 %d").replace("%d", m.reused || 0)
-        + (m.removed ? " / " + T("删除 %d").replace("%d", m.removed) : ""));
-    } else {
-      bits.push(T("首次翻译"));
-    }
-    bits.push(T("机翻 %d").replace("%d", e.machine || 0));
-    if (e.official) bits.push(T("官方 %d").replace("%d", e.official));
-    if (e.dedup) bits.push(T("同文合并 %d").replace("%d", e.dedup));
-    if (e.tagFallback) bits.push(T("标签不符 %d（留原文）").replace("%d", e.tagFallback));
-    if (e.failed) bits.push(T("失败 %d").replace("%d", e.failed));
-    if (e.seconds != null) bits.push(e.seconds + "s");
-    if ((e.problems || []).length) bits.push(String(e.problems[0]));
-  }
-  state.queueDone[key] = { state: st, text: txt, detail: bits.join(" · ") };
+  bits.push(T("复制 %d 个文件").replace("%d", e.copied || 0));
+  bits.push(T("待翻 %d").replace("%d", e.todo || 0));
+  if (e.tm) bits.push(T("记忆命中 %d").replace("%d", e.tm));
+  if (e.machine) bits.push(T("机翻 %d").replace("%d", e.machine));
+  if (e.applied) bits.push(T("写入 %d").replace("%d", e.applied));
+  if (e.failed) bits.push(T("失败 %d").replace("%d", e.failed));
+  if (e.seconds != null) bits.push(e.seconds + "s");
+  if ((e.errors || []).length) bits.push(String(e.errors[0]));
+  state.mbDone[key] = { state: st, text: txt, detail: bits.join(" · ") };
   renderQueue();
+  $("q-bar").style.width = Math.round(((e.done || 0) / total) * 100) + "%";
 }
 
-function onQueueDone(e) {
-  state.queueRunning = false;
+function onMbDone(e) {
+  state.mbRunning = false;
   $("btn-q-cancel").style.display = "none";
   $("q-progress").classList.remove("on");
   $("q-bar").style.width = "0%";
   const rs = e.results || [];
-  const ok = rs.filter((r) => r.ok && !r.empty).length;
-  const err = rs.filter((r) => !r.ok || r.error).length;
+  const ok = rs.filter((r) => r.ok && !r.error).length;
+  const err = rs.filter((r) => r.error && r.error !== "cancelled").length;
   const mt = rs.reduce((a, r) => a + (r.machine || 0), 0);
-  const reuse = rs.reduce((a, r) => a + ((r.migration || {}).reused || 0), 0);
-  let msg = T("完成 %d 个（成功 %d，失败 %d），机翻 %d 条，复用旧译文 %d 条。")
+  const ap = rs.reduce((a, r) => a + (r.applied || 0), 0);
+  let msg = T("完成 %d 个（成功 %d，失败 %d），机翻 %d 条，写入 %d 条。")
     .replace("%d", rs.length).replace("%d", ok).replace("%d", err)
-    .replace("%d", mt).replace("%d", reuse);
+    .replace("%d", mt).replace("%d", ap);
   if (e.cancelled) msg = T("已取消。") + " " + msg;
   $("q-summary").textContent = msg;
   toast(msg, err ? "err" : "ok");
   refreshQueueInfo();
+}
+
+async function startQueue() {
+  if (state.mbRunning) return;
+  const keys = [...state.mbSel];
+  if (!keys.length) { toast(T("请先勾选要翻译的 mod"), "err"); return; }
+  const withArchive = $("q-archive").checked;
+  const skipAssets = !$("q-assets").checked;
+  const msg = T("将要处理 %d 个 mod：先复制到输出目录，再翻译、写回副本。\n同名目录会被覆盖。继续？")
+    .replace("%d", keys.length);
+  if (!confirm(msg)) return;
+  const r = await pywebview.api.batch_start(keys, withArchive, skipAssets);
+  if (!r || !r.ok) {
+    toast((r && r.error) || "error", "err");
+    if (((r && r.error) || "").includes("API")) openSettings();
+    return;
+  }
+  state.mbRunning = true;
+}
+
+async function clearQueueOut() {
+  if (state.mbRunning) return;
+  if (!confirm(T("清空批量输出目录？里面是上一次跑出来的副本，删了就没了。"))) return;
+  const r = await pywebview.api.batch_clear();
+  if (!r || !r.ok) { toast((r && r.error) || "error", "err"); return; }
+  state.mbDone = {};
+  renderQueue();
+  toast(T("已清空 %d 项").replace("%d", r.removed || 0), "ok");
 }
 
 /* ---------------- 应用 / Excel ---------------- */
