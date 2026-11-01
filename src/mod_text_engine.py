@@ -45,6 +45,17 @@ LOCALE_RE = re.compile(r"^[a-z]{2}([_-][A-Za-z]{2,4})?$")
 IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 URL_RE = re.compile(r"^(https?|ftp)://", re.I)
 HEX_RE = re.compile(r"^#?[0-9A-Fa-f]{6,8}$")
+# _extract_lua 里「逐字面量」的两个热路径正则: 一个 1 MB 的 Base.lua 有 2 万个
+# 字面量, 每个都要试一次。必须预编译 —— 用字符串 pattern 调 re.search 会走
+# re._cache(只有 512 项), 批量线程一多就被别的 pattern 冲掉, 变成每次重新编译,
+# 6 秒的提取能拖成十几分钟并占死 GIL(v2.42.4 实测)。
+ASSIGN_TAIL_RE = re.compile(
+    r"""([A-Za-z_]\w*|\[\s*"[^"]*"\s*\]|\[\s*'[^']*'\s*\])\s*=\s*$""")
+LIST_HEAD_RE = re.compile(r"""([A-Za-z_]\w*)\s*=\s*\{[^{}]*$""")
+# 同上, 这两个在「每个字面量/每个调用」的路径上各调一次(_assigned_var / _assign_target)。
+_ASSIGN_VAR_RE = re.compile(r"([A-Za-z_]\w*)\s*=\s*[^=;\n]*$")
+_ASSIGN_LINE_RE = re.compile(
+    r"(?:^|\n)\s*(?:local\s+)?([A-Za-z_]\w*)\s*=\s*[^\n]*$")
 # 语言包文件: en_US.lua / zh-cn.lua / it-it.lua / English.reds / ChineseSimplified.reds
 LOCALE_FILE_RE = re.compile(r"(^|/)[a-z]{2}[-_][a-z]{2,4}\.(lua|reds|json)$", re.I)
 # GarageCoreLocalization_de.reds / strings_ko.lua: 「本地化字样 + 语言后缀」的文件名。
@@ -846,21 +857,25 @@ def _enclosing_call(span, spans):
 def _assigned_var(text, pos):
     """返回 pos 前最近一个赋值目标变量名, 例如 message = string.format(...)。"""
     head = text[max(0, pos - 320):pos]
-    m = re.search(r"([A-Za-z_]\w*)\s*=\s*[^=;\n]*$", head)
+    if "=" not in head:
+        return ""
+    m = _ASSIGN_VAR_RE.search(head)
     if m:
         return m.group(1).lower()
     # 三元表达式可能含 ==, 再按同一行最近一次赋值判断
-    m = re.search(r"(?:^|\n)\s*(?:local\s+)?([A-Za-z_]\w*)\s*=\s*[^\n]*$", head)
+    m = _ASSIGN_LINE_RE.search(head)
     return m.group(1).lower() if m else ""
 
 
 def _assign_target(text, pos):
     """同 _assigned_var, 但保留原始大小写 (用于驼峰命名拆分)。"""
     head = text[max(0, pos - 320):pos]
-    m = re.search(r"([A-Za-z_]\w*)\s*=\s*[^=;\n]*$", head)
+    if "=" not in head:
+        return ""
+    m = _ASSIGN_VAR_RE.search(head)
     if m:
         return m.group(1)
-    m = re.search(r"(?:^|\n)\s*(?:local\s+)?([A-Za-z_]\w*)\s*=\s*[^\n]*$", head)
+    m = _ASSIGN_LINE_RE.search(head)
     return m.group(1) if m else ""
 
 
@@ -1241,7 +1256,10 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
         if lit.start in taken or lit.quote not in ("\"", "'"):
             continue
         head = text[max(0, lit.start - 200):lit.start]
-        m = re.search(r"""([A-Za-z_]\w*|\[\s*"[^"]*"\s*\]|\[\s*'[^']*'\s*\])\s*=\s*$""", head)
+        # 剪枝: 正则要求 `... =` 收尾, 窗口里没有 = 就不可能命中。
+        if "=" not in head:
+            continue
+        m = ASSIGN_TAIL_RE.search(head)
         if not m:
             continue
         key = m.group(1).strip().strip("[]").strip("\"'").lower()
@@ -1280,7 +1298,11 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
         if lit.start in taken:
             continue
         head = text[max(0, lit.start - 1500):lit.start]
-        m = re.search(r"""([A-Za-z_]\w*)\s*=\s*\{[^{}]*$""", head)
+        # 剪枝: 正则要求 `name = {`, 窗口里没有 { 或 = 就直接跳过。
+        # 两万个字面量里绝大多数走这条路, 由 C 层 memchr 判掉, 不再进正则引擎。
+        if "{" not in head or "=" not in head:
+            continue
+        m = LIST_HEAD_RE.search(head)
         if not m:
             continue
         tname = m.group(1).lower()

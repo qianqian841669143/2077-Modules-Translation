@@ -100,6 +100,8 @@ body {
 .spacer { flex: 1; }
 .label { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .hint { color: var(--muted); font-size: 12px; margin: 0; }
+/* 批量面板的「事件通道无响应」提示：橙色，只在疑似卡死时出现。 */
+.hint.stall { color: #d99614; }
 
 /* ================= 控件 ================= */
 .input, .select {

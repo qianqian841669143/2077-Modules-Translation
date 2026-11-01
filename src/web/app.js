@@ -1996,9 +1996,26 @@ window.__evt = onEvt;
 let _mbPollTimer = null;
 let _mbPollBusy = false;
 let _mbPollUrl = "";            // 后端的只读事件端口，空串表示退回桥
+let _mbPollFails = 0;           // 连续失败次数，用来判断批量是不是卡死了
+
+function showStall(fails) {
+  const el = $("q-stall");
+  if (!el) return;
+  const sec = Math.round(fails * 0.2);
+  if (sec < 3) {
+    el.style.display = "none";
+    el.textContent = "";
+    return;
+  }
+  el.style.display = "";
+  el.textContent = "事件通道已经 " + sec + " 秒没有响应，批量可能卡在某个模组上。"
+    + "可以关掉窗口重开，再点「开始批量翻译」——已完成的模组会自动跳过。";
+}
 
 function startMbPoll() {
   if (_mbPollTimer) return;
+  _mbPollFails = 0;
+  showStall(0);
   _mbPollTimer = setInterval(pollMbEvents, 200);
 }
 
@@ -2016,10 +2033,17 @@ async function pollMbEvents() {
     let r;
     if (_mbPollUrl) {
       const resp = await fetch(_mbPollUrl, { cache: "no-store" });
+      if (!resp.ok) {
+        // 端口还在但拒绝请求（token 变了 / 路径不对）：这条通道没救了，退回桥。
+        _mbPollUrl = "";
+        throw new Error("bus " + resp.status);
+      }
       r = await resp.json();
     } else {
       r = await pywebview.api.batch_poll();
     }
+    _mbPollFails = 0;
+    showStall(0);
     if (!r || !r.ok) { stopMbPoll(); return; }
     const evs = r.events || [];
     evs.forEach(onEvt);
@@ -2027,8 +2051,13 @@ async function pollMbEvents() {
     // 否则预扫一开始就会被这里停掉。
     if (!evs.length && !r.running) stopMbPoll();
   } catch (_) {
-    if (_mbPollUrl) { _mbPollUrl = ""; }   // 端口被拦/关掉：退回桥，别停轮询
-    else stopMbPoll();
+    _mbPollFails++;
+    // 后端卡在某个模组里时 GIL 被占死，fetch 会一直超时。这时**不能**退回桥：
+    // 桥每调一次都要新开线程再 evaluate_js，只会把坑挖得更深（v2.42.4 实测
+    // 堆到 215 个线程）。原地重试，通道恢复后照常接着取事件；60 秒仍不通
+    // 就停轮询别再空转，提示留在面板上。
+    if (_mbPollFails >= 300 || !_mbPollUrl) stopMbPoll();
+    showStall(_mbPollFails);
   } finally {
     _mbPollBusy = false;
   }
