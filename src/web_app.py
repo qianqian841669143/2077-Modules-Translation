@@ -1545,9 +1545,10 @@ class Api(object):
                     int(obj.get("index") or 0) + 1, int(obj.get("total") or 0),
                     obj.get("name") or ""))
             else:
-                self._batch_log("done  %s ok=%s rows=%s todo=%s applied=%s failed=%s %s" % (
+                self._batch_log("done  %s ok=%s rows=%s todo=%s applied=%s failed=%s reason=%s %s" % (
                     obj.get("name") or "", obj.get("ok"), obj.get("rows"),
                     obj.get("todo"), obj.get("applied"), obj.get("failed"),
+                    json.dumps(obj.get("failReasons") or {}, ensure_ascii=False),
                     obj.get("error") or ""))
                 self._mb_journal(obj)
         elif t in ("mb-start", "mb-scanned", "mb-done"):
@@ -1594,6 +1595,11 @@ class Api(object):
                    "dst": r.get("dst") or "", "rows": r.get("rows"),
                    "todo": r.get("todo"), "applied": r.get("applied"),
                    "failed": r.get("failed"), "error": r.get("error") or "",
+                   # 失败原因与「没翻出来所以没写」的条数也要留档。只记总数时，
+                   # 事后无从判断是没匹配到原文、代码骨架被拒，还是目标 key 缺失。
+                   "reasons": r.get("failReasons") or {},
+                   "untouched": int(r.get("untouched") or 0),
+                   "errors": [str(x) for x in (r.get("errors") or [])][:5],
                    "at": time.strftime("%Y-%m-%d %H:%M:%S")}
             with open(p, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")

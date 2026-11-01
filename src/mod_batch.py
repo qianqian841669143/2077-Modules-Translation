@@ -246,8 +246,15 @@ def run_one(ctx, cand, r):
             raise Cancelled()
 
         # already 行本身已经是中文，写回去等于把原文再抄一遍，跳过。
+        # 译文与原文相同的行同理：模型没翻出来。放过它们会覆盖目标语言文件
+        # 里已经译好的文本（MCM 的 zh-cn.json 被冲成英文就是这个原因）。
+        unchanged = [x for x in rows
+                     if str(x.get("trans") or "").strip() and not x.get("already")
+                     and str(x.get("trans")).strip() == str(x.get("orig") or "").strip()]
+        r["untouched"] = len(unchanged)
         items = [x for x in rows
-                 if str(x.get("trans") or "").strip() and not x.get("already")]
+                 if str(x.get("trans") or "").strip() and not x.get("already")
+                 and str(x.get("trans")).strip() != str(x.get("orig") or "").strip()]
         r["machine"] = sum(1 for x in items
                            if (x.get("transSrc") or "") == "machine")
         if items:
@@ -255,6 +262,14 @@ def run_one(ctx, cand, r):
             r["applied"] = int(res.get("ok") or 0)
             r["failed"] = int(res.get("fail") or 0)
             r["errors"] = [str(x) for x in (res.get("errors") or [])][:20]
+            # 失败原因必须能落到 journal 里。只有总数的话，881 条失败查不下去：
+            # 不知道是「没匹配到原文」还是「代码骨架被拒」还是「目标文件没有该 key」。
+            reasons = {}
+            for f in (res.get("failed") or []):
+                why = str(f.get("reason") or "?").strip() or "?"
+                reasons[why] = reasons.get(why, 0) + 1
+            r["failReasons"] = dict(sorted(reasons.items(),
+                                           key=lambda kv: -kv[1])[:8])
             r["undoId"] = res.get("undoId") or ""
             if res.get("archive"):
                 r["archive"] = res.get("archive")
@@ -283,6 +298,7 @@ def run(ctx, cands):
              "ok": False, "error": "", "dst": "", "copied": 0, "bytes": 0,
              "skipped": 0, "rows": 0, "todo": 0, "already": 0, "tm": 0,
              "machine": 0, "applied": 0, "failed": 0, "errors": [],
+             "untouched": 0, "failReasons": {},
              "undoId": "", "empty": False, "archive": "", "xl": ""}
         try:
             run_one(ctx, cand, r)

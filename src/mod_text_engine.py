@@ -1965,6 +1965,12 @@ def apply_many_ex(path, pairs, allow_soft=False):
         return None
 
     for idx, (line, orig, trans) in enumerate(pairs):
+        # 译文与原文一字不差 = 模型没翻出来(单个英文单词、专名最常见)。这种
+        # 条目写回去只有坏处: 目标文件里本来有更好的译文时会被原文顶掉。
+        # MCM 的 zh-cn.json 就是这样被冲回英文的 -- "访问" 覆盖成 "Access"。
+        # 既不算成功也不算失败: 文件没变, 统计里不该出现。
+        if str(trans) == str(orig):
+            continue
         level, why = guard_level(path, orig, trans)
         if level == "hard" or (level == "soft" and not allow_soft):
             failures.append((idx, line, orig, trans, why, level))

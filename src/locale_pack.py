@@ -1049,16 +1049,52 @@ def ensure_target(root, entry_rel, target_rel_path):
     return dst
 
 
+def _merge_fill(base, ref):
+    """把 ref 里有、base 里没有的键补进 base（递归，绝不覆盖已有值）。
+
+    用于「以已有译文为底、用源文件补齐新键」：目标文件里作者已经译好的
+    条目必须原样留下，只有源文件新增、目标还没跟上的键才用源语言占位。
+    """
+    if not isinstance(base, dict) or not isinstance(ref, dict):
+        return
+    for k, v in ref.items():
+        if k not in base:
+            base[k] = v
+        elif isinstance(v, dict) and isinstance(base.get(k), dict):
+            _merge_fill(base[k], v)
+
+
 def write_json_target_ex(root, src_rel, tgt_rel, mapping):
-    """把译文写进目标 json, 返回 (成功 key 集合, 失败 key 集合, 错误信息)。"""
+    """把译文写进目标 json, 返回 (成功 key 集合, 失败 key 集合, 错误信息)。
+
+    底本必须是**目标文件自己**，不能是源文件。
+
+    以前这里读 en-us.json 当模板、把 mapping 覆盖上去再整份写成 zh-cn.json：
+    extract 没提取到的键（单个词、纯符号这类短值）就原样保留英文，于是
+    en-us 的 "Access" 直接把 zh-cn 里既有的 "访问" 顶掉了 —— MCM 一次就丢了
+    79 条作者已经译好的条目。现在目标文件存在就以它为底，源文件只补新键。
+    """
     src = os.path.join(root, src_rel.replace("/", os.sep))
     dst = os.path.join(root, tgt_rel.replace("/", os.sep))
     keys = list(mapping.keys())
     try:
         with open(src, "r", encoding="utf-8-sig") as f:
-            data = json.load(f)
+            src_data = json.load(f)
     except Exception:
         return set(), set(keys), "json 解析失败: " + src_rel
+
+    data = None
+    if os.path.exists(dst):
+        try:
+            with open(dst, "r", encoding="utf-8-sig") as f:
+                data = json.load(f)
+        except Exception:
+            data = None          # 目标损坏：退回用源骨架重建，别把好键一起丢掉
+    if data is None:
+        data = json.loads(json.dumps(src_data))   # 目标不存在：复制源骨架
+    else:
+        _merge_fill(data, src_data)               # 目标存在：只补缺的新键
+
     written = set()
     for key, val in mapping.items():
         # 1) 扁平结构: 键本身就带点 (MCM 那种 "settings.section.access")
