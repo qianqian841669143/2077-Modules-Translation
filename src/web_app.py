@@ -1965,6 +1965,7 @@ class Api(object):
                 "scanned": len(self._mb_items or []),
                 "deploy": bool(self.settings.get("batch_deploy")),
                 "deployDry": bool(self.settings.get("batch_deploy_dry", True)),
+                "hideTodo": bool(self.settings.get("batch_hide_todo", True)),
                 "target": self.settings.get("target_lang", "简体中文")}
 
     def _batch_deploy_csv(self, results):

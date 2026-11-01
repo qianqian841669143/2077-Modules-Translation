@@ -3556,6 +3556,29 @@ def check_build_skips_broken_resource():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_batch_todo_filter():
+    """批量面板能折起「无需翻译」的目录，且读取失败的不会被一起藏掉。
+
+    255 个 staging 目录里只有 127 个有待译行，其余 todo == 0，一屏里近一半
+    是噪音。过滤只按 todo 走，不重新扫盘。
+    """
+    base = os.path.dirname(HERE)
+    with io.open(os.path.join(base, "src", "web", "app.js"), encoding="utf-8") as f:
+        js = f.read()
+    assert "state.mbHideTodo" in js, "面板没有「隐藏无需翻译」开关"
+    assert "mbUsable(it) || it.error" in js, "过滤会把读取失败的目录一起藏掉"
+    with io.open(os.path.join(base, "src", "web", "index.html"),
+                 encoding="utf-8") as f:
+        html = f.read()
+    assert 'id="q-hide-todo"' in html, "面板里没有这个勾选框"
+    import appconfig
+    assert "batch_hide_todo" in appconfig.DEFAULT_SETTINGS
+    # 扫描后不许重置勾选状态
+    seg = js.split("function onMbScanned", 1)[-1].split("function ", 1)[0]
+    assert "mbHideTodo" not in seg, "扫描会把勾选状态重置掉"
+    return True
+
+
 def main():
     print("== 回填自测 ==")
     check_apply_roundtrip()
@@ -3672,6 +3695,8 @@ def main():
     print("   OK: 按文件覆盖 / 预演不写盘 / 清单记 added+sha1 / 还原后被重新读回")
     check_build_skips_broken_resource()
     print("   OK: 资源转换崩溃重试一次 / 只跳过那一个 / .xl 不声明被跳过的")
+    check_batch_todo_filter()
+    print("   OK: 批量面板折叠「无需翻译」/ 读取失败的不藏 / 不随扫描重置")
 
     if not os.path.isdir(VORTEX):
         print("\n未找到 Vortex 目录, 跳过真实模组测试: %s" % VORTEX)

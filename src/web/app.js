@@ -16,6 +16,8 @@ const state = {
   resMode: false, resResult: null, revertUndo: false,
   // 批量（单模组功能）：候选来自 staging 目录，逐 mod 复制后翻译
   mbItems: [], mbSel: new Set(), mbDone: {}, mbRunning: false,
+  // 把「无需翻译」的目录折起来（todo == 0）。状态不随扫描重置。
+  mbHideTodo: true, mbHideTodoInit: false,
   // Vortex 活动映射：下载包 ↔ 安装缓存 ↔ 游戏部署
   vmap: null, vmapFilter: "all", vmapSearch: "",
   // 上一次机翻没翻出来的行号（「继续」只补这些）
@@ -2163,6 +2165,30 @@ function initDeployBoxes(r) {
   syncDeployBoxes();
 }
 
+/* 「隐藏无需翻译」开关：只在第一次打开面板时按设置初始化，之后不随扫描重置。 */
+function initTodoFilter(r) {
+  const box = $("q-hide-todo");
+  if (!box) return;
+  if (!state.mbHideTodoInit) {
+    state.mbHideTodoInit = true;
+    const s = state.settings || {};
+    state.mbHideTodo = (r && r.hideTodo != null) ? !!r.hideTodo
+      : (s.batch_hide_todo == null ? true : !!s.batch_hide_todo);
+    box.checked = state.mbHideTodo;
+    box.onchange = async () => {
+      state.mbHideTodo = !!box.checked;
+      renderQueue();
+      try {
+        const saved = await pywebview.api.save_settings({
+          batch_hide_todo: state.mbHideTodo,
+        });
+        if (saved && saved.ok) state.settings = saved.settings;
+      } catch (_) {}
+    };
+  }
+  box.checked = state.mbHideTodo;
+}
+
 function syncDeployBoxes() {
   const dv = $("q-deploy"), dry = $("q-deploy-dry");
   if (!dv || !dry) return;
@@ -2177,6 +2203,7 @@ async function refreshQueueInfo() {
     if (!$("q-staging").value) $("q-staging").value = r.staging || "";
     if (!$("q-out").value) $("q-out").value = r.outRoot || (state.settings || {}).batch_out_dir || "";
     initDeployBoxes(r);
+    initTodoFilter(r);
     syncQueueStart();
     if (r.running) {
       state.mbRunning = true;
@@ -2216,8 +2243,14 @@ function mbSize(n) {
 
 function renderQueue() {
   const box = $("q-list");
-  const items = state.mbItems;
-  if (!items.length) { box.innerHTML = ""; return; }
+  const all = state.mbItems;
+  if (!all.length) { box.innerHTML = ""; return; }
+  // 「无需翻译」的目录折起来：255 个 staging 目录里有 128 个 todo == 0，
+  // 一屏里近一半是噪音。读取失败的照样显示，那是要处理的信号。
+  const items = state.mbHideTodo
+    ? all.filter((it) => mbUsable(it) || it.error)
+    : all;
+  const hidden = all.length - items.length;
   const rows = items.map((it) => {
     const key = String(it.key || "");
     const done = state.mbDone[key] || {};
@@ -2238,7 +2271,10 @@ function renderQueue() {
       ${sub ? `<span class="q-sub">${esc(sub)}</span>` : ""}
     </div>`;
   });
-  box.innerHTML = rows.join("");
+  box.innerHTML = rows.join("") + (hidden
+    ? `<p class="hint">${esc(T("已隐藏 %d 个无需翻译的目录（%d 个里）")
+      .replace("%d", hidden).replace("%d", all.length))}</p>`
+    : "");
   box.querySelectorAll(".q-row").forEach((el) => {
     el.onclick = () => {
       const key = el.dataset.key;

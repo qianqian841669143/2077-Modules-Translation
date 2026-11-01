@@ -21,7 +21,7 @@ try:
 except Exception:                      # 老版本 Python 没有这些名字, 忽略即可
     pass
 
-VERSION = "v2.44.1"
+VERSION = "v2.44.2"
 APP_DIR_NAME = "2077ModTranslator"
 
 TARGET_LANGS = ["简体中文", "繁體中文", "English", "日本語", "한국어",
@@ -49,6 +49,9 @@ DEFAULT_SETTINGS = {
     "batch_deploy": False,
     # 只算不写：先出一份「会覆盖哪些文件」的清单，确认后再关掉它。
     "batch_deploy_dry": True,
+    # 批量面板把「无需翻译」（待译行数 0）的目录折起来：255 个 staging 目录里
+    # 只有 127 个有待译行，一屏里近一半是噪音。
+    "batch_hide_todo": True,
     "verify_active": True,                     # 加载时提示该目录是否在部署清单里
     "res_source_lang": "en-us",                # 原始语言
     "res_skip_target": True,                   # 目标语言已存在则跳过
