@@ -482,6 +482,26 @@
     "将提交 %d 条译文：%d 条打包成新的翻译 mod，其余写回源文件。\n原 mod 不会被修改。": "Submit %d translation(s): %d go into a new translation mod, the rest are written back to source files.\nThe original mod is not modified.",
     "归档 %d 条": "archive %d",
     "源码 %d 条": "source %d",
-    "翻译物已生成：%s（在输出目录，未安装）": "Translation package created: %s (in the output folder, not installed)"
+    "翻译物已生成：%s（在输出目录，未安装）": "Translation package created: %s (in the output folder, not installed)",
+    "仍要写入": "Write anyway",
+    "标记为代码": "Mark as code",
+    "可疑·可覆盖": "Suspect - can override",
+    "必坏·不可写入": "Breaks - never write",
+    "已标记为代码：以后不再作为候选出现。": "Marked as code: it will not show up as a candidate again.",
+    "%d 条已按「标记为代码」隐藏": "%d hidden by \"Mark as code\"",
+    "这一条被判为「疑似代码片段」，写进去可能把语法改坏。\n\n原文：%s\n译文：%s\n\n确认要单条写入吗？": "This line was flagged as a possible code fragment; writing it may break the syntax.\n\nSource: %s\nTranslation: %s\n\nWrite this single row?",
+    "没有要写入的条目。": "Nothing to write.",
+    "还没有加载模组。": "No mod is loaded yet.",
+    "写入排除表失败。": "Could not write the exclusion list.",
+    "竖线数据行的段数或属性变了, 写回会打断 id 表": "The pipe-separated data row changed its segment count or type; writing it would break the id table",
+    "这是能力/协议清单, 翻掉后别处解析不出任何一项": "This is a capability/protocol list; translating it makes it unparsable elsewhere",
+    "写回后代码骨架不一致, 这条会改坏语法": "Code skeleton mismatch after write-back; this row would break the syntax",
+    "写回后代码骨架不一致, 已拒绝": "Code skeleton mismatch after write-back; rejected",
+    "这些文件里还有 %d 条没译的行，本次只会写回已译的 %d 条。\n\n%s\n\n继续写回吗？": "%d rows in these files are still untranslated; only the %d translated ones will be written.\n\n%s\n\nWrite anyway?",
+    "候选 %d 条 · 写入 %d 条 · 跳过 %d 条": "%d candidates · %d written · %d skipped",
+    "%d 条译文与归档里已有的内容一致，没有重新打包。": "%d translations already match the archive; nothing was rebuilt.",
+    "模型把英文原样返回（%d 条，已按单条重试）": "The model echoed the English back for %d rows (retried one by one)",
+    "单条补翻成功 %d 条": "Retried %d rows one by one successfully",
+    "单条补翻 %d / %d": "Retrying row %d / %d"
   }
 }

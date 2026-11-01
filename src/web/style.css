@@ -304,6 +304,7 @@ textarea.input { height: auto; min-height: var(--ctl-h); max-height: 76px; paddi
 }
 .toast.ok { border-left: 3px solid var(--success); }
 .toast.err { border-left: 3px solid var(--danger); }
+.toast.warn { border-left: 3px solid #d99614; }
 @keyframes slide { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 /* ================= 滚动条 ================= */
@@ -395,6 +396,16 @@ textarea.input { height: auto; min-height: var(--ctl-h); max-height: 76px; paddi
   display: inline-block; min-width: 46px; color: var(--muted); margin-right: 8px;
 }
 .apply-error-row.reason { color: #d14343; }
+/* 失败级别角标：可疑(可覆盖) / 必坏(不可写入) */
+.apply-error-title .lv {
+  display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px;
+  font-size: 11px; font-weight: 500;
+}
+.apply-error-title .lv.soft { background: rgba(217,150,20,.14); color: #b77400; }
+.apply-error-title .lv.hard { background: rgba(209,67,67,.14); color: #d14343; }
+.apply-error-acts { margin-top: 6px; display: flex; gap: 6px; }
+.btn.tiny { padding: 2px 8px; font-size: 11px; height: auto; }
+.btn.tiny.mark { color: var(--muted); }
 
 /* 行右键菜单 */
 .ctxmenu {

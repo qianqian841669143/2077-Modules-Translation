@@ -7,6 +7,7 @@
   资源转储  图集清单 "kb_a:64:64:0|kb_b:64:64:0|..."、路径 + 计数
   记录名    Items.xxx / Foo::Bar;StringString / StringToName 之外的 TweakDB 记录
   技术串    SQL 片段、纯格式化串、key=value 调试 dump
+  数据行    "takemura|story_takemura|q112_done|20" —— 竖线分隔的 id 表
   ---- 以上在任何档位都不是给玩家看的，直接判死（hard）。
   外文表    [en_us][pl_pl] 前缀、韩/俄/阿拉伯文、波兰语等带特征变音符号的行。
   ---- 这类只在「长句兜底」这一档过滤；显式界面位置（label= / this.Text）
@@ -28,10 +29,15 @@ FAMILY_LOCKEY = "本地化键"
 FAMILY_TECH = "技术串"
 FAMILY_LANG = "外文表"
 FAMILY_TABLE = "双语表"
+FAMILY_DATA = "数据行"
+# 位置证据挡下来的「名字」（call(obj,"Method") 的方法名、插槽名、能力清单）。
+# 判据在 mod_text_engine 里（需要 token 上下文），这里只占一个家族名，
+# 好让扫描报告能说清「少掉的这些条是为什么少的」。
+FAMILY_POSITION = "位置标识符"
 
-HARD_FAMILIES = (FAMILY_ASSET, FAMILY_KEY, FAMILY_TECH)
+HARD_FAMILIES = (FAMILY_ASSET, FAMILY_KEY, FAMILY_TECH, FAMILY_DATA)
 ALL_FAMILIES = (HARD_FAMILIES + (FAMILY_IDENT, FAMILY_LOCKEY,
-                                 FAMILY_LANG, FAMILY_TABLE))
+                                 FAMILY_LANG, FAMILY_TABLE, FAMILY_POSITION))
 
 CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
@@ -49,8 +55,70 @@ def _pipe_list(s):
     return sum(1 for seg in segs if _PIPE_KV.match(seg)) >= 2
 
 
+# takemura|story_takemura|q112_done|20 —— 竖线分隔的 id 表。
+# 每一段都是标识符形状：没有空格、没有标点、没有大小写拐点才算数。
+_DATA_ROW_SEG = re.compile(r"^[A-Za-z0-9_.:\-]+$")
+# 至少一段像 id：snake_case 或纯数字。用来把 "Alive|Dead|Unknown" 这类
+# 真正的三选一界面文本放过去（它们也该翻）。
+_ID_LIKE = re.compile(r"[a-z]_[a-z]|^\d+$", re.I)
+
+
+def is_data_row(s):
+    """竖线分隔的 id 表：段数 ≥3、每段都是标识符形状、至少一段像 id。"""
+    t = (s or "").strip()
+    if not t or CJK_RE.search(t):
+        return False
+    if t.count("|") < 2 or re.search(r"\s", t):
+        return False
+    segs = t.split("|")
+    while segs and segs[-1] == "":
+        segs.pop()
+    if len(segs) < 3:
+        return False
+    if not all(_DATA_ROW_SEG.match(seg) for seg in segs):
+        return False
+    return any(_ID_LIKE.search(seg) for seg in segs)
+
+
+def data_row_shape(seg_text):
+    """把一条竖线表压成「每段的字符属性」序列，用于写回前后比对。
+
+    段数变了、或者某一段从 ASCII 名字变成中文（反之亦然），都说明这条译文
+    会把 id 表打坏 —— 而这种坏法在文件层面完全看不出来（照样能编译、照样
+    能读，只是语音池查不到、fact 名字失配）。所以只能靠写回守卫挡。
+    """
+    out = []
+    for seg in (seg_text or "").split("|"):
+        if not seg:
+            out.append("")
+        elif CJK_RE.search(seg):
+            out.append("cjk")
+        elif _DATA_ROW_SEG.match(seg):
+            out.append("ascii")
+        else:
+            out.append("other")
+    return out
+
+
+# "meta.read,perspective.read,events.push," —— 点分逗号清单（能力/协议清单）。
+# 这类串是给别的模组读的接口清单，不是文案；翻成中文后解析不出任何一项，
+# 而模组内部的 hasCapability 走的是另一套表，界面上完全正常。
+_PROTO_LIST = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_.]*(?:,[A-Za-z_][A-Za-z0-9_.]*)+,?$")
+
+
+def is_protocol_list(s):
+    t = (s or "").strip()
+    if not t or CJK_RE.search(t) or re.search(r"\s", t):
+        return False
+    if "," not in t or "." not in t:
+        return False
+    return bool(_PROTO_LIST.match(t))
+
+
 # "widgets/notifications/notification_assets (154)" 路径 + 计数
 _PATH_COUNT = re.compile(r"^[\w.\-]+(?:[/\\][\w.\-]+)+ \(\d+\)$")
+
 # Foo.Bar::Baz;StringString  REDscript/Lua 桥接函数签名
 _TYPESIG = re.compile(r"^[A-Za-z_][\w.]*(?:::[A-Za-z_]\w*)+(?:;[A-Za-z0-9_]*)?$")
 # TweakDB 记录 / 存档字段
@@ -123,6 +191,10 @@ def hard_family(t):
         return ""
     if _pipe_list(s) or _ASSET_TRIPLET.search(s):
         return FAMILY_ASSET
+    if is_data_row(s):
+        return FAMILY_DATA
+    if is_protocol_list(s):
+        return FAMILY_POSITION
     if _PATH_COUNT.match(s):
         return FAMILY_ASSET
     if _TYPESIG.match(s) or _TWEAKDB.match(s):

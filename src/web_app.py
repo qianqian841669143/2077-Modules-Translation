@@ -779,6 +779,26 @@ class Api(object):
                                  "type": typ, "ctx": ctx, "orig": orig,
                                  "trans": orig, "pairMode": "source",
                                  "layer": "source", "already": 1})
+        # ---- 用户标记为「代码」的行直接过滤掉
+        #
+        # 位置判据只能挡住工具认得出来的名字; 剩下的（纯符号、模组特有的协议串）
+        # 只能靠人判断。判断一旦落下就必须生效, 否则用户每次加载都还会看到它。
+        try:
+            import user_skip
+            marked = user_skip.marks(root)
+        except Exception:
+            marked = set()
+        hidden_skip = 0
+        if marked and src_rows:
+            kept = []
+            for r in src_rows:
+                key = (str(r.get("file") or "").replace("\\", "/").lower(),
+                       user_skip.sha1_of(r.get("orig") or ""))
+                if key in marked:
+                    hidden_skip += 1
+                    continue
+                kept.append(r)
+            src_rows = kept
         # ---- 合并两层: 语言包行在前, 设置/源码文本在后
         for r in loc_rows:
             r["layer"] = "locale"
@@ -844,6 +864,7 @@ class Api(object):
         # 资源层的信息与跨层冲突放在这里收尾：上面 if loc_meta 会重建 meta，
         # 提前写进去会被覆盖掉。
         meta["resourceRows"] = len(res_rows)
+        meta["userSkip"] = hidden_skip
         if res_info:
             meta["resource"] = res_info
         if res_rows and (loc_rows or src_rows):
@@ -869,7 +890,7 @@ class Api(object):
                "parseErrors": int(meta.get("parse_errors", 0) or 0),
                "parseErrorSample": list(meta.get("parse_error_sample") or [])[:5],
                "localeRows": len(loc_rows), "sourceRows": len(src_rows),
-               "resourceRows": len(res_rows)}
+               "resourceRows": len(res_rows), "userSkip": hidden_skip}
         for k in ("source", "pairCount", "unpaired", "localeTotal", "sourceFiles"):
             if k in loc_info:
                 out[k] = loc_info[k]
@@ -1239,6 +1260,29 @@ class Api(object):
                 tx.discard()
             return {"ok": 0, "fail": len(items), "mode": "resource",
                     "errors": [self._tr("没有可提交的译文")]}
+
+        # 内容与归档里已有的完全一致 -> 不重建。以前这里照样重打包一遍：
+        # 字节、时间戳、Vortex 部署状态全变，玩家看到的东西一个都没变。
+        if not sess.changed():
+            if own_tx and tx is not None:
+                tx.discard()
+            prev_archive = prev_xl = ""
+            try:
+                from localization import builder as Lbuild
+                out_name = Lbuild.default_output_name(
+                    getattr(sess.target, "name", ""),
+                    getattr(sess, "lang", "zh-cn") or "zh-cn")
+                prev_archive = os.path.join(outdir, out_name + ".archive")
+                prev_xl = os.path.join(outdir, out_name + ".archive.xl")
+            except Exception:
+                pass
+            return {"ok": n, "fail": 0, "mode": "resource", "unchanged": True,
+                    "errors": [], "archive": prev_archive if os.path.exists(
+                        prev_archive) else "",
+                    "xl": prev_xl if os.path.exists(prev_xl) else "",
+                    "outdir": str(outdir), "resources": [],
+                    "undoId": "", "undoAvailable": False,
+                    "canInstall": False, "memorySaved": 0}
 
         # 产物路径能提前算出来（名字固定是 <mod>_zh-cn），先在写之前拍快照，
         # 撤销时按「本来不存在」把它们删掉；同名旧产物会被还原成覆盖前的内容。
@@ -1895,6 +1939,27 @@ class Api(object):
             groups[key].append(i)
         dedup_saved = len(misses) - len(order)
 
+        # 占位符密集的串不进批量（P17）：批量里这类最容易整条被跳过或原样
+        # 返回，而它们恰恰是最不能出错的一批（通知模板、多行说明）。
+        def _dense(s):
+            return (len(re.findall(r"\{[^{}]*\}", s or "")) >= 3
+                    or (s or "").count("\n") >= 4)
+
+        def _echo(out, src):
+            """模型把英文原样吐回来。以前它照样算「已填」。"""
+            a = (out or "").strip()
+            b = (src or "").strip()
+            if not a or a != b:
+                return False
+            return bool(re.search(r"[A-Za-z]{3,}", b))
+
+        heavy = [k for k in order if _dense(rep_text[k])]
+        if heavy:
+            _hs = set(heavy)
+            order = [k for k in order if k not in _hs]
+        blanks = []          # 批量里被模型跳过的 key（空串 / 原样返回）
+        echo_n = 0
+
         # 预热：先把模型载入并按 keep_alive 保温。首次载入 27B 要 35-80 秒，
         # 以前这段时间整段算在第一个批次的 180 秒里（实测日志里空闲后的首个
         # 请求就是 1m30s / 45s）。只有 Ollama 原生 /api/chat 认 keep_alive，
@@ -1967,6 +2032,13 @@ class Api(object):
             for key, out in zip(keys, outs or []):
                 text = (out or "").strip()
                 if not text:
+                    # 批量里被整条跳过。以前这里静默 continue，用户点应用时
+                    # 才发现文件只写回了一半，而报告里只有一句「空译文 N 条」。
+                    blanks.append(key)
+                    continue
+                if _echo(text, rep_text[key]):
+                    echo_n += 1
+                    blanks.append(key)
                     continue
                 for i in groups[key]:
                     rows[i]["trans"] = text
@@ -1980,6 +2052,60 @@ class Api(object):
             self._emit({"type": "rows", "items": items})
             self._emit({"type": "progress", "done": done, "total": len(targets),
                         "memory": len(hits)})
+
+        # ---- 单条补翻：占位符密集的 + 批量里被跳过的（P12 / P17）
+        #
+        # 批量提示词对「2-4 个词的按钮名」和「一堆 {…} 占位符的通知模板」都
+        # 不友好，模型会整条跳过或原样返回。以前这些行既不写盘也不报警，用户
+        # 点完应用只看到「成功 26 条」，剩下的 5 条静默消失。
+        singles = list(heavy) + list(blanks)
+        retried = 0
+        if singles and not self._stop.is_set():
+            left = []
+            for n_s, key in enumerate(singles, 1):
+                if self._stop.is_set():
+                    break
+                src_text = rep_text[key]
+                gl = ""
+                try:
+                    gl = self._glossary_store.prompt_block(
+                        self._glossary_store.relevant([src_text]))
+                except Exception:
+                    gl = ""
+                text = ""
+                for attempt in (0, 1):
+                    try:
+                        text = mt_client.translate_one(base, mdl, src_text,
+                                                       target=tgt, glossary=gl)
+                    except Exception:
+                        text = ""
+                    text = (text or "").strip()
+                    if text and not _echo(text, src_text):
+                        break
+                    if attempt == 0:
+                        # 第二次把「占位符与换行必须原样保留」说死, 再说一遍
+                        # 「只翻译自然语言部分」——否则模型仍然整条照抄。
+                        gl = (gl + "\n\n保留 {…} 占位符与 \\n 换行原样不动，"
+                                   "只翻译自然语言部分。").strip()
+                if not text or _echo(text, src_text):
+                    left.append(key)
+                    continue
+                made = []
+                for i in groups[key]:
+                    rows[i]["trans"] = text
+                    rows[i]["transSrc"] = "machine"
+                    made.append({"i": i, "trans": text, "src": "machine"})
+                    written.add(i)
+                    self._memory_store.put(rows[i]["orig"], tgt, text)
+                done += len(groups[key])
+                retried += 1
+                self._memory_store.save()
+                self._emit({"type": "rows", "items": made})
+                self._emit({"type": "progress", "done": done,
+                            "total": len(targets), "memory": len(hits),
+                            "note": self._tr("单条补翻 %d / %d") % (n_s, len(singles))})
+            blanks = left
+
         # 重翻时旧译文还在，按 trans 非空判断会把失败行也算成「翻好了」。
         if force:
             empty = [i for i in misses if i not in written]
@@ -1994,6 +2120,11 @@ class Api(object):
                            % (failed_batches, failed_rows))
         if empty:
             reasons.append(self._tr("模型返回了空译文（%d 条）") % len(empty))
+        if echo_n:
+            reasons.append(self._tr(
+                "模型把英文原样返回（%d 条，已按单条重试）") % echo_n)
+        if retried:
+            reasons.append(self._tr("单条补翻成功 %d 条") % retried)
         self._emit({"type": "done", "translated": done, "memory": len(hits),
                     "stopped": False})
         self._trans_report(targets, memory=len(hits) - official_n,
@@ -2068,12 +2199,21 @@ class Api(object):
         return {"ok": True}
 
     # ------------------------------------------------------------ 回填
-    def apply(self, items):
+    def apply(self, items, force=False):
         """异步: 立刻返回, 结果通过 applied / error 事件回推"""
         if not items:
             return {"ok": False, "error": self._tr("还没有可应用的译文。")}
         if self._busy:
             return {"ok": False, "error": "busy"}
+        # 写回前对账（P12）：同一批文件里还有没译的行，说明这次只会写回一部分。
+        # 以前是写完了用户才发现「少了 5 条」，而报告里只有一句「空译文 5 条」。
+        if not force:
+            pending = self._pending_in_same_files(items)
+            if pending.get("count"):
+                return {"ok": True, "started": False,
+                        "pending": pending["count"],
+                        "pendingFiles": pending["files"][:5],
+                        "error": ""}
         self._busy = True
         self._emit({"type": "busy", "on": True, "text": i18n.tr("正在写回模组文件 ...")})
 
@@ -2100,6 +2240,81 @@ class Api(object):
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True, "started": True}
 
+    def apply_one_row(self, item):
+        """单条覆盖写回（P16）。
+
+        只给 soft 级失败用：代码碎片这类「形态可疑，但用户已经看过上下文、
+        确定是文案」的行。批量永远不开放这条路 —— 一次写坏几十行，撤销只能
+        回滚文件，回滚不了用户没看见的错误。
+        """
+        if not item:
+            return {"ok": False, "error": self._tr("没有要写入的条目。")}
+        if self._busy:
+            return {"ok": False, "error": "busy"}
+        self._busy = True
+        self._emit({"type": "busy", "on": True, "text": i18n.tr("正在写回模组文件 ...")})
+
+        def work():
+            try:
+                r = self._do_apply([item], allow_soft=True)
+                self._emit(dict(r, type="applied", single=True))
+            except Exception as ex:
+                import traceback
+                self._log_failure("apply", traceback.format_exc())
+                self._emit({"type": "error", "action": "apply", "message": str(ex)})
+            finally:
+                self._busy = False
+                self._emit({"type": "busy", "on": False})
+
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True, "started": True}
+
+    def mark_as_code(self, file, orig):
+        """把 (相对路径, 原文) 记进「这是代码」排除表, 以后不再当候选。
+
+        用户点一次「标记为代码」，比每次应用都撞一次「疑似代码片段」有用得多；
+        这也是唯一能把用户判断留下来的形态（弹窗本身不留任何东西）。
+        """
+        import user_skip
+        root = self.root or ""
+        if not root or not file:
+            return {"ok": False, "error": self._tr("还没有加载模组。")}
+        ok, n = user_skip.add(root, file, orig)
+        if not ok:
+            return {"ok": False, "error": self._tr("写入排除表失败。")}
+        # 已经加载在表格里的行一并标掉, 不用重新加载
+        hit = 0
+        for r in (self.rows or []):
+            if (str(r.get("file") or "") == str(file)
+                    and str(r.get("orig") or "") == str(orig)):
+                r["skip"] = 1
+                r["codeMarked"] = 1
+                hit += 1
+        return {"ok": True, "marked": hit, "total": n}
+
+    def _pending_in_same_files(self, items):
+        """这次要写的文件里，还有多少条没译的行。
+
+        只统计「同一次提交里出现的文件」——别的文件没译跟这次写回没关系，
+        拿它们凑数只会让提示变成噪音。
+        """
+        files = {str(it.get("file") or "") for it in items}
+        files.discard("")
+        counts = {}
+        for r in (self.rows or []):
+            f = str(r.get("file") or "")
+            if f not in files:
+                continue
+            if r.get("already") or r.get("skip"):
+                continue
+            if not str(r.get("orig") or "").strip():
+                continue
+            if str(r.get("trans") or "").strip():
+                continue
+            counts[f] = counts.get(f, 0) + 1
+        return {"count": sum(counts.values()),
+                "files": sorted(counts, key=lambda x: -counts[x])}
+
     def _log_failure(self, kind, detail):
         """把会冒到用户面前的失败落到文件里。
 
@@ -2124,7 +2339,7 @@ class Api(object):
         except Exception:
             pass
 
-    def _do_apply(self, items):
+    def _do_apply(self, items, allow_soft=False):
         """按行的来源分流：归档资源行走组包，其余写回明文源文件。
 
         一个模组可能两层都有（.reds 里有硬编码文案，.archive 里有本地化表），
@@ -2135,12 +2350,12 @@ class Api(object):
         res = [it for it in items if (it.get("kind") or "") == "resource"]
         src = [it for it in items if (it.get("kind") or "") != "resource"]
         if res and src:
-            return self._apply_mixed(res, src)
+            return self._apply_mixed(res, src, allow_soft=allow_soft)
         if res:
             return self._apply_resource(res)
-        return self._do_apply_source(src)
+        return self._do_apply_source(src, allow_soft=allow_soft)
 
-    def _apply_mixed(self, res_items, src_items):
+    def _apply_mixed(self, res_items, src_items, allow_soft=False):
         """两层同时提交：资源层出新归档，源码层回写文件，结果分别上报。
 
         两层共用一个撤销事务。以前各建各的：一次混合应用留下两条记录，用户
@@ -2173,7 +2388,7 @@ class Api(object):
             out["canInstall"] = True
 
         try:
-            r2 = self._do_apply_source(src_items, tx=tx)
+            r2 = self._do_apply_source(src_items, tx=tx, allow_soft=allow_soft)
         except Exception as ex:
             r2 = {"ok": 0, "fail": len(src_items), "errors": [str(ex)]}
         out["ok"] += int(r2.get("ok") or 0)
@@ -2233,7 +2448,7 @@ class Api(object):
                 filled += 1
         return filled
 
-    def _do_apply_source(self, items, tx=None):
+    def _do_apply_source(self, items, tx=None, allow_soft=False):
         import locale_pack
         import mod_text_engine as E
         import undo_store
@@ -2285,7 +2500,7 @@ class Api(object):
                 except Exception:
                     pass
 
-        def add_fail(it, reason):
+        def add_fail(it, reason, level="hard"):
             failed.append({
                 "file": it.get("file", ""),
                 "line": it.get("line", 0),
@@ -2293,6 +2508,8 @@ class Api(object):
                 "trans": it.get("trans", ""),
                 "target": it.get("target", ""),
                 "reason": str(reason),
+                # soft = 形态可疑, 可以单条覆盖; hard = 写进去必坏, 不给开关
+                "level": level,
             })
 
         json_groups = {}
@@ -2394,11 +2611,12 @@ class Api(object):
             else:
                 pairs = [(int(it["line"]), it["orig"], it["trans"]) for it in group]
                 try:
-                    n, details = E.apply_many_ex(dst_path, pairs)
+                    n, details = E.apply_many_ex(dst_path, pairs,
+                                                 allow_soft=allow_soft)
                     ok += n
                     fail += len(details)
-                    for idx, _line, _orig, _trans, reason in details:
-                        add_fail(group[idx], reason)
+                    for idx, _line, _orig, _trans, reason, level in details:
+                        add_fail(group[idx], reason, level)
                     if details:
                         errors.append("%s (%d 条未匹配)" % (tgt, len(details)))
                 except Exception as ex:  # noqa: BLE001
@@ -2453,11 +2671,21 @@ class Api(object):
                     self._memory_store.save()
             except Exception:
                 manual = 0
+        # 候选总数：用户看到「候选 31 · 写入 26 · 跳过 5」才知道这 5 条去哪了
+        per_file = {}
+        for it in items:
+            per_file.setdefault(str(it.get("file") or ""), 0)
+        for r in (self.rows or []):
+            f = str(r.get("file") or "")
+            if f in per_file and not r.get("already") and not r.get("skip") \
+                    and str(r.get("trans") or "").strip():
+                per_file[f] = per_file.get(f, 0) + 1
+        candidates = sum(per_file.values()) or len(items)
         return {"ok": ok, "fail": fail, "errors": errors[:20],
                 "created": sorted(set(created)),
                 "providers": sorted(set(prepared_providers)),
                 "undoId": undo_id, "undoAvailable": bool(undo_id),
-                "manualSaved": manual,
+                "manualSaved": manual, "candidates": candidates,
                 "failed": failed[:2000], "failedTotal": len(failed)}
 
     def undo_last(self, root=""):

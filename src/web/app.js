@@ -170,7 +170,10 @@ function bind() {
 
   $("btn-browse").onclick = async () => {
     const p = await pywebview.api.pick_folder();
-    if (p) { $("path").value = p; state.modPath = p; loadMod(); }
+    // 只在输入框里放路径；state.modPath 等加载成功后由 onLoaded 写（P4）。
+    // 以前这里就把它改了，选完文件夹又放弃加载时，state.modPath 已经指向
+    // 一个跟表格毫无关系的目录。
+    if (p) { $("path").value = p; loadMod(); }
   };
   $("btn-load").onclick = () => loadMod();
   $("btn-apply").onclick = () => applyAll();
@@ -493,11 +496,21 @@ function bind() {
 async function loadMod() {
   const path = $("path").value.trim();
   if (!path) { toast(T("请先选择有效的模组目录"), "err"); return; }
+  // 换模组会把当前表格整份换掉（P6）。没应用的译文、没来得及写回的机翻结果
+  // 都在内存里，以前加载一下就没了，连提示都没有。
+  if (state.dirty) {
+    const ok = confirm(T("当前表格里还有没应用的改动，加载新模组会把它们丢掉。\n\n继续加载吗？"));
+    if (!ok) { $("path").value = state.modPath; return; }
+  }
   setBusy(true, T("正在提取可翻译文本 ..."));
   const r = await pywebview.api.load_mod(path, state.opts);
   if (!r.ok) {
     setBusy(false);
     if (r.error !== "busy") toast(r.error || "error", "err");
+    // 加载没成功，路径输入框就得退回它真正指向的那份数据（P4）。
+    // 以前这里已经把 state.modPath 改了，之后 root = state.root || state.modPath
+    // 会指向一个跟表格毫无关系的目录——再点应用就写到别人家里去了。
+    $("path").value = state.modPath;
   }
 }
 
@@ -576,6 +589,9 @@ function onLoaded(r) {
   state.search = "";
   $("filter").value = "全部";
   $("search").value = "";
+  // 新表刚进来，里面还没有任何「未应用的改动」（P6）。
+  // 以前这个标志只置不清，加载一次以后永远是 true，拿它做确认框等于每次都弹。
+  state.dirty = false;
   updateScopeInfo();
   updateNoiseInfo();
   state.page = 1;
@@ -616,6 +632,10 @@ function onLoaded(r) {
   if (r.parseErrors) {
     // 解析失败的文件以前是静默消失的：界面上只表现为「这个模组没有文本」。
     msg += " · " + T("%d 个文件解析失败（已跳过）").replace("%d", r.parseErrors);
+  }
+  if (r.userSkip) {
+    // 用户自己标成「代码」的行：不再出现，但要让人知道它们还在排除表里
+    msg += " · " + T("%d 条已按「标记为代码」隐藏").replace("%d", r.userSkip);
   }
   if (r.localeRows || r.sourceRows) {
     msg += " · " + T("语言包 %d 行 / 设置与源码 %d 行")
@@ -1882,6 +1902,9 @@ window.__evt = (e) => {
   }
   if (e.type === "busy") { setBusy(!!e.on, e.text); return; }
   if (e.type === "rows") {
+    // 机翻结果落到表里也算「未应用的改动」（P6）：以前这些结果不算 dirty，
+    // 加载新模组时整批静默丢掉，用户还以为是模型没翻。
+    state.dirty = true;
     e.items.forEach((it) => {
       const origIndex = Number(it.i);
       const raw = state.raw.find((x) => Number(x._i) === origIndex);
@@ -2264,7 +2287,17 @@ async function applyAll() {
         .replace("%d", items.length).replace("%s", state.root || state.modPath);
   if (!confirm(ask)) return;
   setBusy(true, T("正在写回模组文件 ..."));
-  const r = await pywebview.api.apply(items);
+  let r = await pywebview.api.apply(items);
+  if (r && r.ok && r.started === false && r.pending) {
+    // 同批文件里还有没译的行：先说清楚，再决定要不要只写这一半
+    setBusy(false);
+    const files = (r.pendingFiles || []).join("\n");
+    const ok = confirm(T("这些文件里还有 %d 条没译的行，本次只会写回已译的 %d 条。\n\n%s\n\n继续写回吗？")
+      .replace("%d", r.pending).replace("%d", items.length).replace("%s", files));
+    if (!ok) return;
+    setBusy(true, T("正在写回模组文件 ..."));
+    r = await pywebview.api.apply(items, true);
+  }
   if (!r.ok) {
     setBusy(false);
     if (r.error !== "busy") toast(r.error || "error", "err");
@@ -2273,6 +2306,9 @@ async function applyAll() {
 
 function onApplied(r) {
   setBusy(false);
+  // 写回成功：内存里的改动已经落盘，后面的「加载」不该再拦一次（P6）。
+  // 失败的不清 —— 那些行还在表里等着重试。
+  if (!r.fail) state.dirty = false;
   if (r.mode === "resource") { onAppliedResource(r); return; }
   // 混合批次：归档层出的是新 mod，源码层写的是原文件，两本账分开报。
   if (r.mode === "mixed" && r.layers) {
@@ -2299,8 +2335,17 @@ function onApplied(r) {
     setStatus(T("应用完成: 成功 %d 条, 失败 %d 条。").replace("%d", r.ok).replace("%d", r.fail));
     showApplyErrors(r);
   } else {
-    toast(T("%d 条译文已写回模组。\nVortex 用户请重新 Deploy 后启动游戏。").replace("%d", r.ok), "ok");
-    setStatus(T("应用完成: 成功 %d 条, 失败 %d 条。").replace("%d", r.ok).replace("%d", 0));
+    // 候选 > 写入时把差额报出来：不然「少了 5 条」只能靠用户自己数
+    const cand = Number(r.candidates || 0);
+    if (cand > Number(r.ok || 0)) {
+      const line = T("候选 %d 条 · 写入 %d 条 · 跳过 %d 条")
+        .replace("%d", cand).replace("%d", r.ok).replace("%d", cand - r.ok);
+      toast(line, "warn");
+      setStatus(line);
+    } else {
+      toast(T("%d 条译文已写回模组。\nVortex 用户请重新 Deploy 后启动游戏。").replace("%d", r.ok), "ok");
+      setStatus(T("应用完成: 成功 %d 条, 失败 %d 条。").replace("%d", r.ok).replace("%d", 0));
+    }
   }
 }
 
@@ -2337,6 +2382,14 @@ function onAppliedResource(r) {
     toast(errs[0], "err");
     showApplyErrors({ ok: 0, fail: r.fail || 0,
                       failedTotal: errs.length, errors: errs, failed: [] });
+    return;
+  }
+
+  // 内容与归档里已有的完全一致：没重建，也不该让人以为重新打包了一遍。
+  if (r.unchanged) {
+    setStatus(T("%d 条译文与归档里已有的内容一致，没有重新打包。")
+      .replace("%d", done));
+    toast(T("%d 条译文与归档里已有的内容一致，没有重新打包。").replace("%d", done), "ok");
     return;
   }
 
@@ -2413,27 +2466,77 @@ function onOfficialBuilt(e) {
 
 function showApplyErrors(r) {
   state.applyErrors = Array.isArray(r.failed) ? r.failed : [];
-  const total = r.failedTotal || r.fail || state.applyErrors.length;
-  const shown = state.applyErrors.length;
+  state.applyErrorOk = r.ok || 0;
+  state.applyErrorTotal = r.failedTotal || r.fail || state.applyErrors.length;
+  state.applyErrorExtra = (r.ok || r.fail) ? "" : (r.errors && r.errors.length
+    ? `<pre class="report">${esc(r.errors.join("\n"))}</pre>` : "");
+  renderApplyErrorList();
+  openModal("modal-apply-errors");
+}
+
+function renderApplyErrorList() {
+  const list = state.applyErrors || [];
+  const total = state.applyErrorTotal || list.length;
   $("apply-errors-summary").textContent =
     T("成功 %d 条，失败 %d 条；以下为失败明细（显示 %d / %d 条）。")
-      .replace("%d", r.ok).replace("%d", total)
-      .replace("%d", shown).replace("%d", total);
+      .replace("%d", state.applyErrorOk || 0).replace("%d", total)
+      .replace("%d", list.length).replace("%d", total);
   const box = $("apply-errors");
-  if (!shown) {
-    box.innerHTML = `<div class="hint">${esc(T("没有单条失败明细；请查看文件级错误。"))}</div>` +
-      (r.errors && r.errors.length
-        ? `<pre class="report">${esc(r.errors.join("\n"))}</pre>` : "");
-  } else {
-    box.innerHTML = state.applyErrors.map((x, i) => `
+  if (!list.length) {
+    box.innerHTML = `<div class="hint">${esc(T("没有单条失败明细；请查看文件级错误。"))}</div>`
+      + (state.applyErrorExtra || "");
+    return;
+  }
+  box.innerHTML = list.map((x, i) => {
+    // soft = 形态可疑（可能误报），给单条覆盖；hard = 写进去必坏，不给开关
+    const soft = (x.level || "") === "soft";
+    const acts = [];
+    if (soft) {
+      acts.push(`<button class="btn tiny force" data-force="${i}">${esc(T("仍要写入"))}</button>`);
+    }
+    acts.push(`<button class="btn tiny mark" data-mark="${i}">${esc(T("标记为代码"))}</button>`);
+    return `
       <div class="apply-error">
-        <div class="apply-error-title">${i + 1}. ${esc(x.file || "-")}${x.line ? ":" + esc(String(x.line)) : ""}</div>
+        <div class="apply-error-title">${i + 1}. ${esc(x.file || "-")}${x.line ? ":" + esc(String(x.line)) : ""}
+          <span class="lv ${soft ? "soft" : "hard"}">${esc(soft ? T("可疑·可覆盖") : T("必坏·不可写入"))}</span></div>
         <div class="apply-error-row"><span>${esc(T("原文"))}</span>${esc(x.orig || "")}</div>
         <div class="apply-error-row"><span>${esc(T("译文"))}</span>${esc(x.trans || "")}</div>
         <div class="apply-error-row reason"><span>${esc(T("原因"))}</span>${esc(T(x.reason || "") || x.reason || "")}</div>
-      </div>`).join("");
-  }
-  openModal("modal-apply-errors");
+        <div class="apply-error-acts">${acts.join("")}</div>
+      </div>`;
+  }).join("");
+  box.querySelectorAll("button[data-force]").forEach((b) => {
+    b.onclick = () => forceApplyOne(Number(b.dataset.force));
+  });
+  box.querySelectorAll("button[data-mark]").forEach((b) => {
+    b.onclick = () => markAsCode(Number(b.dataset.mark));
+  });
+}
+
+async function forceApplyOne(i) {
+  const x = (state.applyErrors || [])[i];
+  if (!x) return;
+  const ask = T("这一条被判为「疑似代码片段」，写进去可能把语法改坏。\n\n原文：%s\n译文：%s\n\n确认要单条写入吗？")
+    .replace("%s", x.orig || "").replace("%s", x.trans || "");
+  if (!confirm(ask)) return;
+  setBusy(true, T("正在写回模组文件 ..."));
+  const r = await pywebview.api.apply_one_row({
+    root: state.root || state.modPath,
+    file: x.file, line: x.line, orig: x.orig, trans: x.trans,
+    target: x.target || "", ctx: x.ctx || "",
+  });
+  if (!r.ok) { setBusy(false); if (r.error !== "busy") toast(r.error || "error", "err"); }
+}
+
+async function markAsCode(i) {
+  const x = (state.applyErrors || [])[i];
+  if (!x) return;
+  const r = await pywebview.api.mark_as_code(x.file, x.orig);
+  if (!r.ok) { toast(r.error || "error", "err"); return; }
+  // 这条不用再看了，从列表里划掉；下次加载它直接不出现
+  state.applyErrors.splice(i, 1);
+  renderApplyErrorList();
+  toast(T("已标记为代码：以后不再作为候选出现。"), "ok");
 }
 
 async function exportXlsx() {

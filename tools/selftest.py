@@ -790,9 +790,9 @@ def check_apply_failure_details():
         ])
         assert n == 1, n
         assert len(failed) == 1, failed
-        idx, _line, orig, _trans, reason = failed[0]
+        idx, _line, orig, _trans, reason, level = failed[0]
         assert idx == 1 and orig == "Missing source line", failed
-        assert reason, failed
+        assert reason and level == "hard", failed
         text = open(p, encoding="utf-8", newline="").read()
         assert 'ImGui.Text("有效译文")' in text, text
         return True
@@ -925,6 +925,109 @@ def check_translate_pipeline():
     assert '"type": "done"' in joined, joined
     assert '"type": "error"' not in joined, joined
     assert "mt_client" not in joined, joined
+    return True
+
+
+def check_translate_retry_and_echo():
+    """批量里被跳过 / 原样返回的行要单条补翻，占位符密集的直接走单条 (P12/P17)。
+
+    背景：`translate_batch` 保证返回长度一致，但模型会对短串返回空串、对满是
+    `{…}` 的模板把英文原样吐回来。以前 `if not text: continue` 静默跳过，用户
+    点「应用」时才发现文件只写回了一半，而报告里只有一句「空译文 7 条」。
+    echo 更隐蔽：它落进了 `trans`，被算成「已填」，还因为「译文=原文」不进
+    记忆库，下次加载又变空 —— 表现为「这条怎么永远翻不了」。
+    """
+    import time
+    import types
+
+    api = web_app.Api("")
+    api.rows = [
+        {"file": "a.reds", "line": 1, "type": "界面文本", "ctx": "x",
+         "orig": "First text", "trans": ""},
+        {"file": "a.reds", "line": 2, "type": "界面文本", "ctx": "y",
+         "orig": "Second text", "trans": ""},
+        {"file": "a.reds", "line": 3, "type": "界面文本", "ctx": "z",
+         "orig": "Third text", "trans": ""},
+        {"file": "a.reds", "line": 4, "type": "长句文本", "ctx": "w",
+         "orig": "You have {a} items, {b} coins and {c} boxes", "trans": ""},
+    ]
+    api.settings["use_tm"] = False
+    api.settings["use_official_tm"] = False
+    events, batches = [], []
+
+    class FakeWindow:
+        def evaluate_js(self, script):
+            events.append(script)
+
+    class FakeMemory:
+        def put(self, *a, **k):
+            pass
+        def save(self):
+            pass
+
+    class FakeGlossary:
+        def relevant(self, texts):
+            return []
+        def prompt_block(self, terms):
+            return ""
+
+    fake_mt = types.ModuleType("mt_client")
+    fake_mt.resolve_model = lambda *a, **k: "fake-model"
+
+    def fake_batch(api_base, model, texts, **kw):
+        batches.append(list(texts))
+        out = []
+        for t in texts:
+            if t == "First text":
+                out.append("")               # 被整条跳过
+            elif t == "Second text":
+                out.append(t)                # 原样返回
+            else:
+                out.append("译文三")
+        return out
+
+    def fake_one(api_base, model, text, **kw):
+        return {"First text": "补翻一",
+                "Second text": "补翻二",
+                "You have {a} items, {b} coins and {c} boxes":
+                    "你有 {a} 件物品、{b} 枚硬币和 {c} 个盒子"}.get(text, "")
+
+    fake_mt.translate_batch = fake_batch
+    fake_mt.translate_one = fake_one
+
+    old_mt = sys.modules.get("mt_client")
+    sys.modules["mt_client"] = fake_mt
+    try:
+        api._window = FakeWindow()
+        api._memory = FakeMemory()
+        api._glossary = FakeGlossary()
+        result = api.translate([0, 1, 2, 3], [])
+        assert result["ok"], result
+        for _ in range(200):
+            if not api._busy:
+                break
+            time.sleep(0.02)
+        assert not api._busy, "翻译线程没有结束"
+    finally:
+        if old_mt is None:
+            sys.modules.pop("mt_client", None)
+        else:
+            sys.modules["mt_client"] = old_mt
+
+    got = [r["trans"] for r in api.rows]
+    assert got[0] == "补翻一" and got[1] == "补翻二", got
+    assert got[2] == "译文三", got
+    assert got[3].startswith("你有 {a} 件物品"), got
+    # 占位符密集的那条根本没进批量
+    assert batches and all(len(b) == 3 for b in batches), batches
+    assert all(not any("{" in t for t in b) for b in batches), batches
+
+    joined = "\n".join(events)
+    assert '"type": "trans-report"' in joined, joined
+    assert "原样返回" in joined, joined
+    assert "单条补翻成功" in joined, joined
+    # echo 的那条不能再被算成「已填」
+    assert '"left": 0' in joined, joined
     return True
 
 
@@ -1422,13 +1525,13 @@ def check_mixed_single_undo():
               "r", encoding="utf-8-sig") as f:
         src = f.read()
     assert "def _apply_resource(self, items, tx=None)" in src
-    assert "def _do_apply_source(self, items, tx=None)" in src
+    assert "def _do_apply_source(self, items, tx=None" in src
     assert "_apply_resource(res_items, tx=tx)" in src
-    assert "_do_apply_source(src_items, tx=tx)" in src
+    assert "_do_apply_source(src_items, tx=tx" in src
     # 事务必须在两层都跑完之后才提交，否则先提交的那层盖不住后写的文件
     seg = src[src.index("def _apply_mixed"):]
     seg = seg[:seg.index("def _do_apply_source")]
-    assert seg.index("_do_apply_source(src_items, tx=tx)") < seg.index("tx.commit()"), \
+    assert seg.index("_do_apply_source(src_items, tx=tx") < seg.index("tx.commit()"), \
         "撤销记录的提交时机不对"
     # 外部传入的事务不能被下层丢弃
     assert "if own_tx and tx is not None:" in src
@@ -2373,7 +2476,7 @@ def check_apply_dispatch():
         calls = []
         seen = []
 
-        def fake_res(items, tx=None):
+        def fake_res(items, tx=None, **kw):
             calls.append(("res", len(items)))
             seen.append(tx)
             if tx is not None:
@@ -2381,7 +2484,7 @@ def check_apply_dispatch():
             return {"ok": len(items), "fail": 0, "errors": [], "canInstall": True,
                     "archive": "a.archive", "xl": "a.xl"}
 
-        def fake_src(items, tx=None):
+        def fake_src(items, tx=None, **kw):
             calls.append(("src", len(items)))
             seen.append(tx)
             if tx is not None:
@@ -2679,6 +2782,225 @@ def _lp_write(root, rel, text):
     return p
 
 
+def check_position_and_data_row_guards():
+    """位置证据与数据行 (P21 / P18)。
+
+    一类是「形态完全正常的单词，但位置在说它是名字」：call(obj,"Renew") 的
+    方法名、cname("None")、slotWorldPosition(c,"Head") 的插槽名。翻掉之后
+    文件照样能编译，只是功能静默失效——最坏的一类错误。
+    另一类是竖线 id 表 "a|b|c|20"：翻掉任一段，语音池/fact 名就失配。
+    两类都没有「像不像代码」的形状特征，只能靠位置和段结构判。
+    """
+    lua = "\n".join([
+        "local function call(obj, name, ...)",
+        "  return host.call(obj, name, ...)",
+        "end",
+        "local function slotWorldPosition(slotComp, name)",
+        "  local ok, t = pcall(function()",
+        '    return slotComp:GetSlotTransform(name)',
+        "  end)",
+        "  return t",
+        "end",
+        "local sys = getSystem()",
+        'local ok, st = call(sys, "Renew", owner, scope, ttl)',
+        'local nm = host.cname("None")',
+        'local headWorld = slotWorldPosition(slotComp, "Head")',
+        'nativeSettings.addSubcategory("/tppCamera/keys", "Key bindings")',
+        'nativeSettings.addSwitch("/tppCamera/x", "Enable head tracking",',
+        '                         "Turns head tracking on")',
+        "",
+    ])
+    rows = E._extract_lua(lua, loose=True, trace=False)
+    origs = [r[3] for r in rows]
+    assert "Renew" not in origs, origs
+    assert "None" not in origs, origs
+    assert "Head" not in origs, origs
+    # 真界面文案照收
+    assert "Key bindings" in origs, origs
+    assert "Enable head tracking" in origs, origs
+
+    reds = "\n".join([
+        "module T",
+        "public class T extends ScriptableSystem {",
+        "  private func Roster() -> String {",
+        '    return "meta.read,perspective.read,events.push,"',
+        '      + "events.lease,events.workspot,settings.read";',
+        "  }",
+        "  private func F() -> Void {",
+        '    if Equals(p[0], "ponr") { }',
+        '    let beat = "takemura|story_takemura|q112_done|20";',
+        '    Show(n"k", "Enable nearby pickup");',
+        "  }",
+        "}",
+        "",
+    ])
+    rrows = E._extract_reds(reds, ".reds", target_locale="zh-CN", stats={},
+                            loose=True, trace=False)
+    rorigs = [r[3] for r in rrows]
+    assert "ponr" not in rorigs, rorigs
+    assert not any("meta.read" in o for o in rorigs), rorigs
+    assert not any("takemura|" in o for o in rorigs), rorigs
+    assert "Enable nearby pickup" in rorigs, rorigs
+
+    # 竖线表的白名单：真正的三选一界面文本不能被误杀
+    assert NOISE.is_data_row("takemura|story_takemura|q112_done|20")
+    assert NOISE.is_data_row("w:3.0|s:ghxst_sfx_connect|1")
+    assert not NOISE.is_data_row("Alive|Dead|Unknown")
+    assert not NOISE.is_data_row("Yes|No")
+
+    # 写回守卫：段数/属性变了 = 硬拒；二选一文案照常放行
+    bad_level, _why = E.guard_level(
+        "a.reds", "takemura|story_takemura|q112_done|20",
+        "武村|story_takemura|q112_done|20")
+    assert bad_level == "hard", bad_level
+    ok_level, _ = E.guard_level("a.reds", "Alive|Dead|Unknown", "生|死|未知")
+    assert ok_level == "", ok_level
+    # 代码碎片是 soft（可能误报），允许单条覆盖
+    soft_level, _ = E.guard_level("a.reds", r")) \(a)/\(b)", "第 1 页")
+    assert soft_level == "soft", soft_level
+    assert E.looks_like_protocol_list("meta.read,events.push,")
+    assert not E.looks_like_protocol_list("Hello, world")
+    # 被调名暗示要按「词」判, 不能按子串: artifact 里含 fact
+    assert E.name_callee_hint("slotWorldPosition")
+    assert E.name_callee_hint("makeTweakDBID")
+    assert E.name_callee_hint("GetItemInSlot")
+    assert not E.name_callee_hint("ShowArtifact")
+    assert not E.name_callee_hint("FactoryReset")
+
+
+def check_soft_hard_and_isolation():
+    """写回失败分两级，且一条坏行不该干掉整批 (P16)。
+
+    以前 soft（形态可疑）和 hard（必定写坏）走同一条失败通道，用户只看到
+    「应用失败」；骨架校验失败还是一次全局 return 0，把同文件里几十条好译文
+    一起扣下，明细里每条都写同一句原因，看不出是谁。
+    """
+    root = tempfile.mkdtemp(prefix="guard2_")
+    try:
+        p = os.path.join(root, "a.lua")
+        body = "\n".join([
+            'ImGui.Text("Pick up the dropped item")',
+            'ImGui.Text("Enable nearby pickup")',
+            'ImGui.Text("Close the panel")',
+            "",
+        ])
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(body)
+
+        # soft: 默认拒绝，且级别是 soft（前端据此给「仍要写入」）
+        n, fails = E.apply_many_ex(p, [(1, r")) \(a)/\(b)", "第 1 页")])
+        assert n == 0 and len(fails) == 1, (n, fails)
+        assert fails[0][5] == "soft" and "代码片段" in fails[0][4], fails
+        assert open(p, encoding="utf-8").read() == body
+
+        # 单条覆盖：allow_soft 只放开 soft，不再报「代码片段」
+        _n1, f1 = E.apply_one(p, 1, r")) \(a)/\(b)", "第 1 页", allow_soft=True)
+        assert not any("代码片段" in x[4] for x in f1), f1
+        # 上面这一下可能按行号兜底写过一次，先把文件恢复成原样再测隔离
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(body)
+
+        # 一条会改坏骨架的行 + 两条好行：好行必须照样写进去
+        orig_shape = E.same_code_shape
+        try:
+            E.same_code_shape = (lambda old, new, lang: "BADROW" not in new)
+            n2, fails2 = E.apply_many_ex(p, [
+                (1, "Pick up the dropped item", "拾取掉落的物品"),
+                (2, "Enable nearby pickup", "BADROW"),
+                (3, "Close the panel", "关闭面板"),
+            ])
+        finally:
+            E.same_code_shape = orig_shape
+        assert n2 == 2, (n2, fails2)
+        assert len(fails2) == 1 and fails2[0][0] == 1, fails2
+        assert fails2[0][5] == "hard" and "骨架" in fails2[0][4], fails2
+        text = open(p, encoding="utf-8", newline="").read()
+        assert "拾取掉落的物品" in text and "关闭面板" in text, text
+        assert "BADROW" not in text, text
+    finally:
+        _drop_tx(root)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def check_user_skip_mark():
+    """「标记为代码」要能持久化，并按 (相对路径, 原文 sha1) 命中 (P19-3/4)。
+
+    位置判据挡不住的东西（纯符号、模组特有的协议串）只能靠人判断。判断必须
+    落到文件里，否则用户每次加载都还会看到同一条，应用时还会再被拒一次。
+    """
+    tmp = tempfile.mkdtemp(prefix="skip_")
+    old = os.environ.get("MT_DATA_DIR")
+    os.environ["MT_DATA_DIR"] = tmp
+    try:
+        import user_skip
+        root = os.path.join(tmp, "MyMod")
+        os.makedirs(root)
+        assert user_skip.count(root) == 0
+        ok, n = user_skip.add(root, r"r6/scripts/a.reds", ")")
+        assert ok and n == 1, (ok, n)
+        # 路径大小写/分隔符归一后再比
+        assert user_skip.is_marked(root, "r6\\scripts\\a.reds", ")")
+        assert user_skip.marks(root) == {
+            ("r6/scripts/a.reds", user_skip.sha1_of(")"))}
+        # 同一条重复标记不重复计数
+        user_skip.add(root, "r6/scripts/a.reds", ")")
+        assert user_skip.count(root) == 1
+        # 别的模组不受影响（同名文件、同一条原文也不串）
+        other = os.path.join(tmp, "OtherMod")
+        os.makedirs(other)
+        assert not user_skip.is_marked(other, "r6/scripts/a.reds", ")")
+        assert user_skip.remove(root, "r6/scripts/a.reds", ")")
+        assert not user_skip.is_marked(root, "r6/scripts/a.reds", ")")
+        assert user_skip.count(root) == 0
+    finally:
+        os.environ.pop("MT_DATA_DIR", None)
+        if old is not None:
+            os.environ["MT_DATA_DIR"] = old
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_getter_literal_labels():
+    """getLabel / getActionLabel 直接返回字面量时要能进表 (P11-3)。
+
+    这种显示名一条判据都沾不上：前面不是 `label =`（中间隔了 `function`），
+    也没有调用包装；长句兜底又要求首字母大写，而它以 `[` 开头，于是永远进
+    不了表 —— 用户翻完整个模组，面板上那几个按钮还是英文。
+
+    实测全量 286 个模组：命中的 12 处全是显示名（6 对「英文原版 + 已汉化」），
+    没有一条是代码。
+    """
+    src = "\n".join([
+        "local settings = {",
+        "  forDev = {",
+        '    name = "forDev",',
+        '    getLabel=function() return "[For Dev] Restricted Gig Settings" end,',
+        '    getDescription=function() return "Only for mod authors: raw ids" end,',
+        "  },",
+        "  button = {",
+        '    getActionLabel=function(self) return "Show ID" end,',
+        '    label = "Normal label",',
+        "  },",
+        "  indirect = {",
+        "    getLabel=function(self) return self.label end,",
+        "  },",
+        "  multiline = {",
+        "    getLabel = function()",
+        '      return "Across lines"',
+        "    end,",
+        "  },",
+        "}",
+        "",
+    ])
+    rows = E._extract_lua(src, loose=True, trace=False)
+    types = {r[3]: r[1] for r in rows}
+    assert types.get("[For Dev] Restricted Gig Settings") == "显示名称", types
+    assert types.get("Show ID") == "显示名称", types
+    assert types.get("Only for mod authors: raw ids") == "描述", types
+    assert types.get("Across lines") == "显示名称", types
+    # 返回变量（display name 在别处赋值）走表字段那条路, 仍然照收
+    assert types.get("Normal label") == "选项文本", types
+
+
 def check_locale_pack_names():
     """语言包类名沿用 Provider 的命名, 撞名时放弃改名。
 
@@ -2846,6 +3168,8 @@ def main():
     print("   OK: 机翻工作线程 / mt_client 导入 / rows-progress-done 事件")
     check_translate_dedup()
     print("   OK: 同文去重 (同一句只发一次模型 / 重复行共用译文)")
+    check_translate_retry_and_echo()
+    print("   OK: 空译文与 echo 单条补翻 / 占位符密集串不进批量")
     check_codeware_provider_apply()
     print("   OK: Codeware 翻译文件类名 / Provider 自动注册")
     check_provider_pairs_and_undo()
@@ -2897,6 +3221,14 @@ def main():
     print("   OK: 代码碎片写回守卫 (拒绝写盘 / 骨架不变 / 逗号开头与目标语言放行)")
     check_parse_and_locale_robustness()
     print("   OK: 非 ASCII 标识符不吞文件 / 解析失败可计数 / 目标语言码大小写无关")
+    check_position_and_data_row_guards()
+    print("   OK: 位置证据 (方法名/插槽名/能力清单) 与竖线数据行不进候选")
+    check_soft_hard_and_isolation()
+    print("   OK: soft/hard 失败分级 / 单条覆盖 / 一条坏行不干掉整批")
+    check_user_skip_mark()
+    print("   OK: 「标记为代码」持久化 (按路径+原文 sha1, 分模组隔离)")
+    check_getter_literal_labels()
+    print("   OK: getLabel/getActionLabel 直接返回字面量的显示名进表")
     check_identifier_guard()
     print("   OK: 标识符/本地化键守卫 (n\"\" 引用与查表键不参与翻译)")
     res3 = check_resource_layer()

@@ -964,6 +964,123 @@ def _wrapper_rules(text):
     return out
 
 
+# ---------------------------------------------------------------- 位置证据 (P21)
+#
+# 有些字面量的「位置」本身就在说：这是名字，不是文案。它们形态上是完全正常
+# 的单词，looks_like_code_fragment 一条都挡不住，但翻掉的后果是静默的 ——
+# 方法名不认、插槽名查不到、能力清单解析不出来，而文件照样能编译通过。
+#
+# 实测（Immersive Third Person 2.0.0，全部是这条路径漏出去的）：
+#   api.lua:650             call(sys, "Renew")           -> call(sys, "刷新")
+#   api.lua:1044            host.cname("None")           -> host.cname("无")
+#   init.lua:4551           slotWorldPosition(c,"Head")  -> slotWorldPosition(c,"头部")
+#   tpp_camera_api.reds:850 CapabilityRoster() 的 "a.read,b.read,…" 整块被翻
+#
+# 前三个是「位置证据」，最后一个是「形状证据」（点分逗号清单），两套互补。
+
+# 这些被调函数的指定参数位是名字。键 = 小写的最后一段被调名。
+_NAME_ARG_CALLS = {
+    # CET 远程调用：call(obj, "MethodName", ...) 的第二个参数是 Redscript 方法名。
+    # 方法名不存在 -> host.call 返回 ok=false -> 功能走失败分支，界面上看不出来。
+    "call": (1,),
+    # CName / 枚举名
+    "cname": (0,), "stringtoname": (0,), "stringtocname": (0,),
+    "toname": (0,), "tocname": (0,), "stringtoenum": (0,), "enumfromstring": (0,),
+    # 引擎插槽 / 骨骼名：传中文等于传一个不存在的插槽，被 pcall 兜住 -> 静默失效
+    "getslottransform": (0,), "getslotworldtransform": (0,),
+    "getslotposition": (0,), "getboneworldposition": (0,),
+    "getbonelocalposition": (0,), "findbone": (0,), "attachslot": (0,),
+    # 比较 / 切分：右边那个是名字或分隔符
+    "equals": (1,), "strsplit": (1,),
+}
+
+# 被调名里带这些「词」时，它的字符串参数是插槽/骨骼/fact/记录名一类的名字。
+# 用来接住「名字经由本地包装函数中转」的情况：ITP 的
+# slotWorldPosition(slotComp, "Head") 光看参数位判不出来，但函数名在说。
+#
+# 必须按**词**匹配而不是子串：`artifact` 里含 `fact`、`Factory` 里含 `fact`，
+# 按子串匹配会把 ShowArtifact("…") 的文案也挡掉。
+_NAME_CALLEE_SEGS = {
+    "slot", "slots", "bone", "bones", "skeleton", "attach", "attachment",
+    "attachments", "persist", "persisted", "fact", "facts", "recordid",
+    "recordname", "entityid", "rigidbody",
+}
+
+
+def name_callee_hint(last):
+    """被调名在暗示「我这一串参数是名字」。last 保留原始大小写。"""
+    low = (last or "").lower()
+    if not low:
+        return False
+    if "tweakdb" in low:            # makeTweakDBID / GetTweakDBID 拆不出词
+        return True
+    return any(seg in _NAME_CALLEE_SEGS for seg in _name_segments(last))
+
+
+# 查表键的取用函数：它们的实参是 key，译文在资源层归档里。
+# 源码层翻掉这个 key 等于把引用打断，而界面回退显示的就是那句中文，看着正常。
+LOC_CALLS = {"gettext", "gettextorkey", "getlocalizedtextbykey",
+             "getlocalkey", "getlocalkeyorfallback", "getlocalizedtext"}
+
+
+def _is_name_literal(s):
+    """「名字」形状的字面量：无空格、纯 ASCII 的单词或点分名。
+
+    中文直接排除：名字翻了确实坏了，但已经是中文的串说明坏在别处（或者就是
+    历史译文），这里不该再拦 —— 否则用户在界面上连改都改不了。
+    """
+    t = (s or "").strip()
+    if not t or CJK_RE.search(t):
+        return False
+    if re.search(r"\s", t):
+        return False
+    if t[:1] in ("/", "#", "$"):
+        return False
+    return bool(IDENT_RE.match(t))
+
+
+def looks_like_protocol_list(t):
+    '''点分逗号清单: "meta.read,perspective.read,events.push,"。'''
+    return NOISE.is_protocol_list(t)
+
+
+def name_position_starts(toks, spans, by_start):
+    """返回「处于名字位置」的字面量起始偏移集合。
+
+    只认**直接**作为实参的那一个字面量：中间夹了变量或表达式就不管了。
+    宁可漏判（多一条待翻行）也不误伤（功能静默失效）。
+    """
+    out = set()
+    for name, oi, close in spans:
+        raw_last = name.split(".")[-1]
+        last = raw_last.lower()
+        if not last:
+            continue
+        idxs = _NAME_ARG_CALLS.get(last)
+        hinted = name_callee_hint(raw_last)
+        if not idxs and not hinted:
+            continue
+        args = _split_args(toks, oi, close)
+        for ai, (a, b) in enumerate(args):
+            if a != b or toks[a].kind != "str":
+                continue
+            if idxs and ai not in idxs:
+                continue
+            lit = by_start.get(toks[a].start)
+            if lit is None or not _is_name_literal(lit.inner):
+                continue
+            out.add(lit.start)
+    return out
+
+
+# getLabel = function() return "…" end —— 直接返回字面量的显示名取用函数。
+# 只认「函数体就是一句 return 字面量」；返回变量（return self.label）的不算，
+# 那种显示名在别处赋值，走的是「表字段」那条路。
+_GETTER_RE = re.compile(
+    r"\bget(label|actionlabel|name|title|description|desc|tooltip)\s*=\s*"
+    r"function\s*\([^)]*\)\s*return\s*$", re.I)
+
+
 def _brace_end(text, open_pos):
     """从 '{' 的位置出发, 返回与之配对的 '}' 之后的位置。
 
@@ -1000,6 +1117,8 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
     spans = call_spans(toks)
     cmap = callee_map(toks, spans)
     starts = [t.start for t in toks]
+    # 名字位置（call 的方法名 / 插槽名 / CName）与查表键位置的字面量, 一律不进表
+    name_starts = name_position_starts(toks, spans, by_start)
     wrappers = _wrapper_rules(text)
     # 模组自带的「英文 → 中文」数据表: 左边是查表 key, 翻它会把表打坏
     table_keys = NOISE.bilingual_keys(text)
@@ -1048,6 +1167,25 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
         if lit is None or lit.quote not in ("\"", "'"):
             return
         if lit.start in taken:
+            return
+        if lit.start in name_starts:
+            # 位置证据: 这是方法名/插槽名/CName/查表键, 不是文案。
+            # 写进去功能会静默失效, 而界面上一点异常都看不出来。
+            drop(NOISE.FAMILY_POSITION)
+            return
+        if NOISE.is_data_row(lit.inner):
+            # a|b|c|20 这种 id 表: 翻掉任一段, 语音池/fact 名就失配
+            drop(NOISE.FAMILY_DATA)
+            return
+        if NOISE.is_protocol_list(lit.inner):
+            drop(NOISE.FAMILY_POSITION)
+            return
+        # getText("UI-Foo-label") / getTextOrKey(...) 的实参是查表键: 译文在
+        # 资源层归档里, 源码层翻掉它等于把引用打断, 而界面回退显示的就是那句
+        # 中文 —— 表面上一切正常, 是最容易被忽略的一类损坏 (P13)。
+        if (lit_callee(cmap, toks, starts, lit.start) or ""
+                ).split(".")[-1].lower() in LOC_CALLS:
+            drop(NOISE.FAMILY_LOCKEY)
             return
         if not kept_section(lit.start):
             drop(NOISE.FAMILY_LANG)
@@ -1114,6 +1252,28 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
               else is_label_text(lit.inner))
         if ok:
             take(lit, typ, key + " =")
+
+    # ---- 2b) getLabel / getDescription 直接返回字面量
+    #
+    #   getLabel = function() return "[For Dev] Restricted Gig Settings" end,
+    #
+    # 这类显示名一条判据都沾不上：前面不是 `label =`（中间隔了 function）、
+    # 也没有任何调用包装；长句兜底又要求首字母大写，而它首字符是 `[`，
+    # 于是永远进不了表 —— 用户翻完整个模组，面板上那一项还是英文。
+    # 返回值就是显示名本身，取出来即可（不涉及任何查表键）。
+    for lit in lits:
+        if lit.start in taken or lit.quote not in ("\"", "'"):
+            continue
+        head = text[max(0, lit.start - 200):lit.start]
+        m = _GETTER_RE.search(head)
+        if not m:
+            continue
+        typ = (TYPE_DESC if m.group(1).lower() in ("description", "desc", "tooltip")
+               else TYPE_NAME)
+        ok = (is_translatable(lit.inner) if typ is TYPE_DESC
+              else is_label_text(lit.inner))
+        if ok:
+            take(lit, typ, "get" + m.group(1) + "=function() return")
 
     # ---- 3) 多行选项表:  labels = { "A", "B", ... }
     for lit in lits:
@@ -1216,6 +1376,8 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
     cmap = callee_map(toks, spans)
     starts = [t.start for t in toks]
     codeware_values, codeware_keys = codeware_text_calls(toks, lits)
+    by_start = {l.start: l for l in lits}
+    name_starts = name_position_starts(toks, spans, by_start)
     out, seen = [], set()
     # 同一文件里带多套语言(EN_US / RU_RU …，或 English/German 两个语言包类)时，
     # 只有源语言那一段是「原文」；把俄语段当原文翻一遍纯属误报。
@@ -1331,6 +1493,23 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
             drop(NOISE.FAMILY_LOCKEY)
             continue
         if lit.start in codeware_keys:        # this.Text 的第一个参数是 key, 不翻译
+            continue
+        if lit.start in name_starts:
+            # 位置证据 (P21): 方法名 / 插槽名 / CName 实参, 翻了功能静默失效
+            drop(NOISE.FAMILY_POSITION)
+            continue
+        if NOISE.is_data_row(lit.inner):
+            drop(NOISE.FAMILY_DATA)           # 竖线 id 表, 翻任一段就失配
+            continue
+        if NOISE.is_protocol_list(lit.inner):
+            drop(NOISE.FAMILY_POSITION)       # 点分逗号清单 (能力/协议)
+            continue
+        _callee_last = (lit_callee(cmap, toks, starts, lit.start) or ""
+                        ).split(".")[-1].lower()
+        if _callee_last in LOC_CALLS:
+            # getText("UI-Foo-label") 的实参是查表键, 译文在资源层归档里。
+            # 以前这里靠「像不像句子」判, 于是 key 被当成文案翻掉 -> 查表断供。
+            drop(NOISE.FAMILY_LOCKEY)
             continue
         if (lit_callee(cmap, toks, starts, lit.start) or ""
                 ).split(".")[-1].lower() in KEY_CALLS:
@@ -1636,60 +1815,95 @@ def _shape_guard_applies(path):
     return os.path.splitext(path)[1].lower() in (".reds", ".lua")
 
 
-def apply_translation(path, line_no, original, trans):
-    """把文件中 (行号, 原文) 对应的字符串替换为译文; 返回是否成功"""
-    guard = _shape_guard_applies(path)
-    if guard and looks_like_code_fragment(original):
-        return False
-    try:
-        with open(path, "r", encoding="utf-8", newline="") as f:
-            text = f.read()
-    except Exception:
-        return False
-    lang = lang_of(path)
-    try:
-        _, lits = scan_source(text, lang)
-    except Exception:
-        return False
-    cand = [l for l in lits
-            if l.quote in ("\"", "'")
-            and (l.inner == original
-                 or l.inner.startswith(original + "##"))]
-    if not cand:
-        return False
-    pick = None
-    for l in cand:
-        if l.line == line_no:
-            pick = l
+def guard_level(path, orig, trans):
+    """写回前的内容级裁决, 返回 (级别, 原因)。级别为空表示放行。
+
+    soft = 形态可疑, 可能误报 —— 允许用户单条覆盖(默认仍然拒绝);
+    hard = 写进去必坏, 永远不给覆盖开关。
+
+    以前两者塞在同一条失败通道里, 用户只看到「应用失败」, 既分不清能不能救,
+    也没法告诉工具「这条我看过了, 别再报」。
+    """
+    if _shape_guard_applies(path) and looks_like_code_fragment(orig):
+        return "soft", "疑似代码片段, 拒绝写回"
+    if NOISE.is_protocol_list(orig) and not NOISE.is_protocol_list(trans or ""):
+        return "hard", "这是能力/协议清单, 翻掉后别处解析不出任何一项"
+    if NOISE.is_data_row(orig):
+        if NOISE.data_row_shape(orig) != NOISE.data_row_shape(trans or ""):
+            return "hard", "竖线数据行的段数或属性变了, 写回会打断 id 表"
+    return "", ""
+
+
+def _edge_spaces(text, lit, orig, trans):
+    """拼接上下文里的首尾空格要保住 (P14)。
+
+    ``label="Restrict "..gig:GetQuestName()`` 写回成 ``label="限制"..`` 之后,
+    面板上显示的是「限制Japantown…」—— 缺的那个空格模型不会给, 因为原文里
+    它在引号内、译文里它被当成排版噪音吃掉了。只在字面量紧邻 ``..`` 时才补,
+    普通字段（``description = "..."``）不动, 免得无端多出空格。
+    """
+    if not trans:
+        return trans
+    # 两侧都留 4 个字符再看：写成 `"Restrict " .. name` 时，引号前面是
+    # 「空格 + ..」，只取 2 个字符会看到 ". " 而漏判。
+    left = (text[max(0, lit.start - 4):lit.start] or "").strip().endswith("..")
+    right = (text[lit.end:lit.end + 4] or "").strip().startswith("..")
+    pre = post = ""
+    if left and orig[:1].isspace() and not trans[:1].isspace():
+        pre = " "
+    if right and orig[-1:].isspace() and not trans[-1:].isspace():
+        post = " "
+    return pre + trans + post
+
+
+def _render_replacements(text, repls):
+    """把 [(lit, 原文, 译文, 索引)] 一次性套到 text 上(从后往前, 偏移不互相影响)。"""
+    out = text
+    for lit, orig, trans, _idx in sorted(repls, key=lambda x: -x[0].start):
+        suffix = lit.inner[len(orig):] if lit.inner.startswith(orig) else ""
+        body = escape_for(_edge_spaces(text, lit, orig, trans) + suffix, lit.quote)
+        out = out[:lit.start + 1] + body + out[lit.end - 1:]
+    return out
+
+
+def _shape_offenders(base, repls, lang, budget=40):
+    """二分找出「把代码骨架改坏」的那几条, 返回 (坏行, 剩下的)。
+
+    全批一起拒会把同一文件里几十条好译文一起扣下(一条坏 -> 整批 0 条);
+    逐条重放又太慢(大文件每行一次全量分词)。二分只需要 O(log n) 次分词。
+    """
+    bad, rest = [], list(repls)
+    while rest and len(bad) < budget:
+        if same_code_shape(base, _render_replacements(base, rest), lang):
             break
-    if pick is None:
-        pick = cand[0]
-    suffix = pick.inner[len(original):]          # 保留 "##id" 这类隐藏后缀
-    new_text = (text[:pick.start + 1] + escape_for(trans, pick.quote)
-                + escape_for(suffix, pick.quote) + text[pick.end - 1:])
-    # 语法自检: 替换后代码骨架必须不变
-    if guard and not same_code_shape(text, new_text, lang):
-        return False
-    try:
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write(new_text)
-    except Exception:
-        return False
-    return True
+        chunk = rest
+        while len(chunk) > 1:
+            half = chunk[:len(chunk) // 2]
+            if not same_code_shape(base, _render_replacements(base, half), lang):
+                chunk = half
+            else:
+                chunk = chunk[len(chunk) // 2:]
+        bad.append(chunk[0])
+        rest = [x for x in rest if x is not chunk[0]]
+    return bad, rest
 
 
-def apply_many_ex(path, pairs):
+def apply_many_ex(path, pairs, allow_soft=False):
     """一次读改写: pairs = [(行号, 原文, 译文)]。
 
-    返回 (成功条数, 失败明细)。失败明细为 [(pairs索引, 行号, 原文, 译文, 原因)]。
+    返回 (成功条数, 失败明细)。失败明细为
+    ``[(pairs索引, 行号, 原文, 译文, 原因, 级别)]``, 级别是 "soft" / "hard"。
     比逐条 apply_translation 快得多(文件只读写一次), 用于回填大批量译文。
+
+    allow_soft: 允许写回 soft 级失败(代码碎片这类「可疑但可能误报」的行)。
+                只有单条覆盖(apply_one)才会传 True; 批量永远不传。
     """
     pairs = list(pairs)
     try:
         with open(path, "r", encoding="utf-8", newline="") as f:
             text = f.read()
     except Exception:
-        return 0, [(i, p[0], p[1], p[2], "读取文件失败")
+        return 0, [(i, p[0], p[1], p[2], "读取文件失败", "hard")
                    for i, p in enumerate(pairs)]
     original_text = text
     lang = lang_of(path)
@@ -1697,7 +1911,7 @@ def apply_many_ex(path, pairs):
     try:
         _, lits = scan_source(text, lang)
     except Exception:
-        return 0, [(i, p[0], p[1], p[2], "文件解析失败")
+        return 0, [(i, p[0], p[1], p[2], "文件解析失败", "hard")
                    for i, p in enumerate(pairs)]
     by_key, by_text, by_line = {}, {}, {}
     for lit in lits:
@@ -1717,8 +1931,9 @@ def apply_many_ex(path, pairs):
         return None
 
     for idx, (line, orig, trans) in enumerate(pairs):
-        if guard and looks_like_code_fragment(orig):
-            failures.append((idx, line, orig, trans, "疑似代码片段, 拒绝写回"))
+        level, why = guard_level(path, orig, trans)
+        if level == "hard" or (level == "soft" and not allow_soft):
+            failures.append((idx, line, orig, trans, why, level))
             continue
         try:
             line_no = int(line)
@@ -1732,26 +1947,52 @@ def apply_many_ex(path, pairs):
             # 退回 2: 按行号匹配(按顺序找该行尚未使用的字符串)
             lit = pick(by_line.get(line_no, []))
         if lit is None:
-            failures.append((idx, line, orig, trans, "未找到对应原文"))
+            failures.append((idx, line, orig, trans, "未找到对应原文", "hard"))
             continue
-        repls.append((lit, orig, trans))
+        repls.append((lit, orig, trans, idx))
     if not repls:
         return 0, failures
-    for lit, orig, trans in sorted(repls, key=lambda x: -x[0].start):
-        suffix = lit.inner[len(orig):] if lit.inner.startswith(orig) else ""
-        new = escape_for(trans + suffix, lit.quote)
-        text = text[:lit.start + 1] + new + text[lit.end - 1:]
+    text = _render_replacements(original_text, repls)
     if guard and not same_code_shape(original_text, text, lang):
-        return 0, [(i, p[0], p[1], p[2], "写回后代码骨架不一致, 已拒绝")
-                   for i, p in enumerate(pairs)]
+        # 有行把语法改坏了。找出是哪一条, 而不是整批拒 —— 否则一条坏
+        # 就干掉同文件里几十条好译文, 用户还看不出来是谁。
+        bad_repls, keep = _shape_offenders(original_text, repls, lang)
+        if not keep:
+            return 0, [(i, p[0], p[1], p[2],
+                        "写回后代码骨架不一致, 已拒绝", "hard")
+                       for i, p in enumerate(pairs)]
+        for _lit, orig, trans, idx in bad_repls:
+            failures.append((idx, pairs[idx][0], orig, trans,
+                             "写回后代码骨架不一致, 这条会改坏语法", "hard"))
+        repls = keep
+        text = _render_replacements(original_text, repls)
+        if guard and not same_code_shape(original_text, text, lang):
+            return 0, [(i, p[0], p[1], p[2],
+                        "写回后代码骨架不一致, 已拒绝", "hard")
+                       for i, p in enumerate(pairs)]
     try:
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(text)
     except Exception:
-        all_fail = [(i, p[0], p[1], p[2], "写入文件失败")
+        all_fail = [(i, p[0], p[1], p[2], "写入文件失败", "hard")
                     for i, p in enumerate(pairs)]
         return 0, all_fail
     return len(repls), failures
+
+
+def apply_one(path, line, orig, trans, allow_soft=False):
+    """单条写回: 复用 apply_many_ex 的同一个入口。
+
+    撤销记录、记忆记账、失败回滚都走同一条路, 否则单条与批量会出现两套行为。
+    """
+    return apply_many_ex(path, [(line, orig, trans)], allow_soft=allow_soft)
+
+
+def apply_translation(path, line_no, original, trans, allow_soft=False):
+    """把文件中 (行号, 原文) 对应的字符串替换为译文; 返回是否成功"""
+    n, _failed = apply_many_ex(path, [(line_no, original, trans)],
+                              allow_soft=allow_soft)
+    return n == 1
 
 
 def apply_many(path, pairs):

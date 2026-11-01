@@ -157,6 +157,10 @@ class Session(object):
         self._sub_groups = {}   # rel -> subtitleGroup（从原 mod 的注册表里学到）
         self._byid = {}         # rel -> {entryId: entry}，回写时按主键定位
         self._touched = {}      # rel -> {entryId}，真正被写过的条目
+        # 内容真的变了的条目。用户点「应用」时常常整批译文都跟归档里已有的
+        # 一模一样（同一份表重复应用），这时不该重建整包：字节和时间戳都变，
+        # 玩家看到的东西一个都没变，Vortex 还得重新部署一遍。
+        self._dirty = {}        # rel -> {entryId}，内容与原文不同的条目
         self._scanned = False
 
     # -------------------------------------------------------------- 扫描
@@ -317,6 +321,8 @@ class Session(object):
         entry = self._index(rel).get(str(entry_id))
         if entry is None:
             return False
+        if cr2w.get_text(entry) != text:
+            self._dirty.setdefault(rel, set()).add(str(entry_id))
         cr2w.set_text(entry, text)
         self._touched.setdefault(rel, set()).add(str(entry_id))
         return True
@@ -352,12 +358,13 @@ class Session(object):
     def changed(self):
         """哪些资源有改动：{rel: [改过的 entryId]}。
 
-        以 set_text() 实际写过的条目为准，而不是去看行对象的 trans 字段——
-        调用方（UI）传来的行是另一批对象，靠行状态会漏判。
+        以 set_text() 实际写过、**且内容与原文不同**的条目为准，而不是去看行
+        对象的 trans 字段——调用方（UI）传来的行是另一批对象，靠行状态会漏判。
+        写过但内容没变的不算改动（见 _dirty 的说明）。
         若一条都没写过，再退回扫描 rows 的 trans 作为兜底。
         """
         if self._touched:
-            return {rel: sorted(ids) for rel, ids in self._touched.items() if ids}
+            return {rel: sorted(ids) for rel, ids in self._dirty.items() if ids}
         out = {}
         for r in self.rows:
             if not str(r.get("trans") or "").strip():
