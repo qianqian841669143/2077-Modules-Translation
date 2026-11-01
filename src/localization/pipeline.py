@@ -432,7 +432,181 @@ class Session(object):
         return result
 
 
+class GroupResult(object):
+    """多个会话组包的结果。字段与 `builder.BuildResult` 同名，上层不用改。"""
+
+    def __init__(self, parts, problems=None):
+        self.parts = list(parts or [])          # [(Session, BuildResult)]
+        self.problems = list(problems or [])
+
+    @property
+    def archive(self):
+        for _s, r in self.parts:
+            if getattr(r, "archive", None):
+                return r.archive
+        return ""
+
+    @property
+    def xl_path(self):
+        for _s, r in self.parts:
+            if getattr(r, "xl_path", None):
+                return r.xl_path
+        return ""
+
+    @property
+    def resources(self):
+        out = []
+        for _s, r in self.parts:
+            out.extend(getattr(r, "resources", []) or [])
+        return out
+
+    @property
+    def warnings(self):
+        out = list(self.problems)
+        for _s, r in self.parts:
+            out.extend(getattr(r, "warnings", []) or [])
+        return out
+
+
+class SessionGroup(object):
+    """一个模组的多个归档会话，对外装作一个 Session。
+
+    一个模组经常不止一个归档（AMM：`AMM_Characters` / `AMM_Patches` /
+    `AMM_Shared`，本地化表只在其中一个里）。上层只认「一个会话、一次组包、
+    一条撤销记录」，所以这里把 N 个会话包成同样接口：`rows` 拼接、
+    `apply_rows` 按行上的 `archive` 分流、`build` 各出各的包（产物名按归档名
+    区分，不会互相覆盖）、`changed` 取并集。
+    """
+
+    def __init__(self, sessions, lang=DEFAULT_LANG):
+        self.sessions = list(sessions or [])
+        self.lang = lang or DEFAULT_LANG
+        self.last_spec = None
+        self.last_result = None
+
+    # -- 与 Session 对齐的只读接口 -------------------------------------
+
+    @property
+    def target(self):
+        return self.sessions[0].target if self.sessions else None
+
+    @property
+    def cli(self):
+        return self.sessions[0].cli if self.sessions else None
+
+    @property
+    def workdir(self):
+        return self.sessions[0].workdir if self.sessions else None
+
+    @property
+    def warnings(self):
+        out = []
+        for s in self.sessions:
+            out.extend(s.warnings or [])
+        return out
+
+    @property
+    def rows(self):
+        out = []
+        for s in self.sessions:
+            out.extend(s.rows)
+        return out
+
+    @property
+    def meta(self):
+        langs, types = {}, {}
+        files = 0
+        names = []
+        for s in self.sessions:
+            m = s.meta
+            for k, v in (m.get("languages") or {}).items():
+                langs[k] = langs.get(k, 0) + int(v or 0)
+            for k, v in (m.get("types") or {}).items():
+                types[k] = types.get(k, 0) + int(v or 0)
+            files += int(m.get("files") or 0)
+            if m.get("source"):
+                names.append(m["source"])
+        return {
+            "mode": "resource",
+            "target": self.target.name if self.target else "",
+            "source": "、".join(names),
+            "archives": len(self.sessions),
+            "extend": self.target.extend_name() if self.target else "",
+            "files": files,
+            "total": sum(len(s.rows) for s in self.sessions),
+            "types": types,
+            "languages": langs,
+            "lang": self.lang,
+            "warnings": self.warnings,
+        }
+
+    def scan(self):
+        for s in self.sessions:
+            s.scan()
+        return self.meta
+
+    # -- 写译文与出包 --------------------------------------------------
+
+    def apply_rows(self, rows, collect=None):
+        """按行上的 `archive` 分流到对应会话。
+
+        不能一股脑塞给每个会话：两个归档里可能有同名的资源路径
+        （都带一份 `localization_en-us.json`），那样一条译文会被写两遍。
+        """
+        by_arch, loose = {}, []
+        for r in rows or []:
+            key = _norm_arch(r.get("archive"))
+            if key:
+                by_arch.setdefault(key, []).append(r)
+            else:
+                loose.append(r)
+        n = 0
+        for s in self.sessions:
+            sub = list(by_arch.get(_norm_arch(getattr(s.target, "archive_path", ""))) or [])
+            sub.extend(loose)
+            if sub:
+                n += s.apply_rows(sub, collect=collect)
+        return n
+
+    def changed(self):
+        out = {}
+        for s in self.sessions:
+            for rel, ids in (s.changed() or {}).items():
+                out.setdefault(rel, set()).update(ids)
+        return {rel: sorted(ids) for rel, ids in out.items() if ids}
+
+    def build(self, name=None, outdir=None, extend=True, log=None):
+        """各会话各自组包；一个失败不影响其它，失败原因放进 GroupResult。"""
+        todo = [s for s in self.sessions if s.changed()]
+        if not todo:
+            raise PipelineError("没有可提交的译文")
+        parts, problems = [], []
+        for s in todo:
+            try:
+                parts.append((s, s.build(name=None, outdir=outdir,
+                                         extend=extend, log=log)))
+            except Exception as ex:      # noqa: BLE001 - 一个归档炸了不拖垮整包
+                problems.append("%s: %s" % (
+                    getattr(s.target, "name", "?"), ex))
+        if not parts:
+            raise PipelineError("；".join(problems) or "没有可提交的译文")
+        self.last_spec = parts[0][0].last_spec
+        self.last_result = GroupResult(parts, problems)
+        return self.last_result
+
+
 # ------------------------------------------------------------------ 工具
+
+
+def _norm_arch(path):
+    """归档路径归一化，用来把「行」和「会话」对起来。"""
+    if not path:
+        return ""
+    try:
+        import os
+        return os.path.normcase(os.path.abspath(str(path)))
+    except Exception:
+        return str(path).lower()
 
 
 def _safe(text):

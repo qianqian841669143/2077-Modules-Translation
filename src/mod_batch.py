@@ -143,8 +143,17 @@ def copy_mod(src, dst, with_archive=False, skip_assets=True, cancel=None):
     dst = os.path.abspath(str(dst or ""))
     if not os.path.isdir(src):
         raise IOError("源目录不存在: %s" % src)
-    stat = {"files": 0, "bytes": 0, "skipped": 0}
+    stat = {"files": 0, "bytes": 0, "skipped": 0, "own": 0}
     seen = 0
+    # 上一轮部署进这个模组的、我们自己新建的文件（语言的包、中文归档）。
+    # 只在「路径命中**且**内容没变」时跳过：用户解压还原之后 hash 变了，
+    # 它就得作为普通模组内容被读回来，不能因为路径还在清单里就永久跳过。
+    own = {}
+    try:
+        import mod_deploy
+        own = {k: v[0] for k, v in mod_deploy.deployed_files(src).items() if v[1]}
+    except Exception:
+        own = {}
     for dirpath, dirnames, filenames in os.walk(src):
         dirnames[:] = [d for d in dirnames if d.lower() != ".git"]
         rel = os.path.relpath(dirpath, src)
@@ -172,6 +181,16 @@ def copy_mod(src, dst, with_archive=False, skip_assets=True, cancel=None):
                 continue
             sp = os.path.join(dirpath, fn)
             dp = os.path.join(out_dir, fn)
+            key = (os.path.join(rel, fn) if rel != "." else fn).replace("/", "\\").lower()
+            want = own.get(key)
+            if want:
+                try:
+                    import mod_deploy
+                    if mod_deploy.file_sha1(sp) == want:
+                        stat["own"] += 1
+                        continue
+                except Exception:
+                    pass
             try:
                 shutil.copy2(sp, dp)
             except (OSError, shutil.Error):
@@ -213,7 +232,7 @@ class Ctx(object):
 
     def __init__(self, spawn_worker, out_root, with_archive=False,
                  skip_assets=True, base="", model="", target="简体中文",
-                 on_event=None, cancel=None):
+                 on_event=None, cancel=None, deploy=False, deploy_dry=True):
         self.spawn_worker = spawn_worker
         self.out_root = out_root
         self.with_archive = with_archive
@@ -224,6 +243,8 @@ class Ctx(object):
         self.on_event = on_event or (lambda e: None)
         self.cancel = cancel
         self.worker = None
+        self.deploy = deploy            # 跑完把副本按文件覆盖回原模组目录
+        self.deploy_dry = deploy_dry    # 只算不写
 
     def stopped(self):
         return self.cancel is not None and self.cancel.is_set()
@@ -255,7 +276,7 @@ def run_one(ctx, cand, r):
     cp = copy_mod(cand["root"], dst, with_archive=ctx.with_archive,
                   skip_assets=ctx.skip_assets, cancel=ctx.cancel)
     r.update(dst=dst, copied=cp["files"], bytes=cp["bytes"],
-             skipped=cp["skipped"])
+             skipped=cp["skipped"], own=cp.get("own", 0))
     if ctx.stopped():
         raise Cancelled()
     if not cp["files"]:
@@ -295,6 +316,15 @@ def run_one(ctx, cand, r):
                      if str(x.get("trans") or "").strip() and not x.get("already")
                      and str(x.get("trans")).strip() == str(x.get("orig") or "").strip()]
         r["untouched"] = len(unchanged)
+        # 永远没翻出来的行：机翻后译文仍为空（模型没答）+ 译文与原文相同
+        # （模型照抄）。这两种行都会被下面从 items 里剔掉，不写进任何文件，
+        # 以前连计数都没有——25 个归档包漏了约 10 条，报告上却显示 failed=0。
+        empty_trans = [x for x in rows
+                       if not str(x.get("trans") or "").strip()
+                       and not x.get("already")]
+        r["untranslated"] = len(empty_trans) + len(unchanged)
+        r["untranslatedSample"] = [str(x.get("orig") or "")[:60]
+                                   for x in (empty_trans + unchanged)[:5]]
         items = [x for x in rows
                  if str(x.get("trans") or "").strip() and not x.get("already")
                  and str(x.get("trans")).strip() != str(x.get("orig") or "").strip()]
@@ -321,9 +351,35 @@ def run_one(ctx, cand, r):
             if res.get("archive"):
                 r["archive"] = res.get("archive")
                 r["xl"] = res.get("xl") or ""
+        if ctx.deploy and items:
+            r["deploy"] = _deploy_one(ctx, cand, dst, items)
         r["ok"] = True
     finally:
         ctx.worker = None
+
+
+def _deploy_one(ctx, cand, dst, items):
+    """把副本按文件覆盖回原模组目录，返回报告（不抛异常）。"""
+    rep = {"ok": False, "dry": bool(ctx.deploy_dry), "overwritten": 0,
+           "added": 0, "same": 0, "notes": [], "error": ""}
+    root = cand.get("root") or ""
+    if not root or not os.path.isdir(root):
+        rep["error"] = "原模组目录不存在"
+        return rep
+    try:
+        import mod_deploy
+        got = mod_deploy.deploy_mod(
+            dst, root, undo_root=root, dry_run=ctx.deploy_dry,
+            pairs_list=[(x.get("orig"), x.get("trans")) for x in (items or [])])
+        rep["ok"] = bool(got.get("ok"))
+        rep["overwritten"] = int(got.get("overwritten") or 0)
+        rep["added"] = int(got.get("added") or 0)
+        rep["same"] = int(got.get("same") or 0)
+        rep["notes"] = list(got.get("notes") or [])[:20]
+        rep["error"] = got.get("error") or ""
+    except Exception as ex:      # noqa: BLE001 - 部署失败不该让整队停
+        rep["error"] = str(ex)
+    return rep
 
 
 def run(ctx, cands):
@@ -343,9 +399,10 @@ def run(ctx, cands):
                       "total": total, "key": cand.get("key"), "name": name})
         r = {"key": cand.get("key"), "name": name, "root": cand.get("root", ""),
              "ok": False, "error": "", "dst": "", "copied": 0, "bytes": 0,
-             "skipped": 0, "rows": 0, "todo": 0, "already": 0, "tm": 0,
+             "skipped": 0, "own": 0, "rows": 0, "todo": 0, "already": 0, "tm": 0,
              "machine": 0, "applied": 0, "failed": 0, "errors": [],
-             "untouched": 0, "failReasons": {},
+             "untouched": 0, "untranslated": 0, "untranslatedSample": [],
+             "failReasons": {}, "deploy": None,
              "undoId": "", "empty": False, "archive": "", "xl": "", "baks": 0}
         try:
             run_one(ctx, cand, r)

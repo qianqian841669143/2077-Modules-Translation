@@ -21,7 +21,7 @@ try:
 except Exception:                      # 老版本 Python 没有这些名字, 忽略即可
     pass
 
-VERSION = "v2.43.3"
+VERSION = "v2.44.0"
 APP_DIR_NAME = "2077ModTranslator"
 
 TARGET_LANGS = ["简体中文", "繁體中文", "English", "日本語", "한국어",
@@ -44,6 +44,11 @@ DEFAULT_SETTINGS = {
     # 产物根目录。留空 = 不进行批量翻译（用户明确要求的出口）：
     # 目录写错就会 rmtree 到模组本体，宁可不跑也不要猜一个位置。
     "batch_out_dir": "",
+    # 跑完把副本按文件覆盖回原模组目录。默认关：这是会改 standings 里原件的
+    # 操作，必须由用户显式打开。判据不满足的情况照覆盖，只在清单里备注。
+    "batch_deploy": False,
+    # 只算不写：先出一份「会覆盖哪些文件」的清单，确认后再关掉它。
+    "batch_deploy_dry": True,
     "verify_active": True,                     # 加载时提示该目录是否在部署清单里
     "res_source_lang": "en-us",                # 原始语言
     "res_skip_target": True,                   # 目标语言已存在则跳过

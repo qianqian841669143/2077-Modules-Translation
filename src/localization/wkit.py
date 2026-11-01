@@ -190,15 +190,38 @@ def list_archive(cli, archive, timeout=180, log=None):
     return out
 
 
+def localization_files(files):
+    """从 `list_archive()` 的输出里挑出「可能是本地化表」的 json。
+
+    只按路径段判断，不看文件名前缀：实测命名毫无规律（`en-us.json`、
+    `kiki_buttercup_dress_localization.json`、`translation_strings.json`）。
+    """
+    out = []
+    for f in files or []:
+        low = str(f).lower()
+        if not low.endswith(".json"):
+            continue
+        parts = low.split("\\")
+        if ("localization" in parts or "l10n" in parts or "onscreens" in parts
+                or "localization" in parts[-1]):
+            out.append(f)
+    return out
+
+
 def has_localization(cli, archive, timeout=180):
-    """归档里有没有可翻译的本地化资源。拿不准就返回 True（宁可多解一次）。"""
+    """预筛：归档里有没有可能是本地化表的 json。拿不准就返回 True。
+
+    这里只是省一次解包，**不能当结论**：目录里有 localization 目录、里面却
+    没有条目（AMM 的 `AMM_Patches.archive` 就是这样）也会返回 True。
+    真正的判据是解包后扫出来的行数，为 0 时由调用方报 `no_rows`。
+    """
     try:
         files = list_archive(cli, archive, timeout=timeout)
     except Exception:
         return True
     if not files:
         return True
-    return any(("localization" in f and f.endswith(".json")) for f in files)
+    return bool(localization_files(files))
 
 
 def unbundle(cli, archive, outdir, pattern=None, timeout=DEFAULT_TIMEOUT, log=None):

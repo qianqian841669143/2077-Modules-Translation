@@ -294,33 +294,183 @@ def _sibling_archive(xl_path, name):
     return None
 
 
+# ------------------------------------------------------------ 本工具的产物
+#
+# 产物叫 `<原归档名>_zh-cn.archive` + `.archive.xl`（builder.default_output_name），
+# 和原归档并排躺在 mod 目录里。下一轮扫描时它就在 rglob 的结果里，而
+# `_resolve_dir` 原来按「.xl 的 localization 段非空」挑候选——我们的包恰好非空，
+# 于是挑中的是自己写的中文包，把中文当原文再翻一遍。
+#
+# 只排除「名字像产物」不够：真模组也可能叫 `Foo_zh-cn.archive`（别人做的汉化）。
+# 所以要求两个信号同时命中：名字带语言码后缀 + 资源路径是我们的写法。
+
+_LANG_CODE_RE = re.compile(
+    r"_(?:zh[_-]cn|zh[_-]tw|en[_-]us|de[_-]de|es[_-]es|es[_-]mx|fr[_-]fr|"
+    r"it[_-]it|ja[_-]jp|ko[_-]kr|pl[_-]pl|pt[_-]br|ru[_-]ru|ar[_-]sa|"
+    r"tr[_-]tr|cz[_-]cz|hu[_-]hu|nl[_-]nl|chs|cht)$", re.I)
+
+# pipeline._out_rel 写 onscreens、build 写字幕，两条都在这里
+_OWN_SUB_RE = re.compile(r"^localization\\[a-z]{2}[-_][a-z]{2}\\subtitles\\", re.I)
+
+
+def _strip_archive_ext(name):
+    low = name.lower()
+    for suffix in (".archive.xl", ".archive", ".xl"):
+        if low.endswith(suffix):
+            return name[: -len(suffix)]
+    return Path(name).stem
+
+
+def is_own_product(path, cfg=None):
+    """是不是本工具生成的翻译包（`<原名>_zh-cn.archive` 或它的 `.xl`）。"""
+    p = Path(path)
+    if not _LANG_CODE_RE.search(_strip_archive_ext(p.name)):
+        return False
+    if p.name.lower().endswith(".archive"):
+        return True
+    if cfg is None:
+        try:
+            cfg = xlmod.load(p)
+        except xlmod.XlError:
+            return True          # 解析不了还叫这个名字，当产物处理更安全
+    paths = cfg.all_paths()
+    if not paths:
+        return True
+    for rel in paths:
+        low = str(rel).lower()
+        if low.startswith("l10n\\") or _OWN_SUB_RE.match(low):
+            continue
+        return False
+    return True
+
+
+def _pick_xl(cands):
+    """从候选里挑最像「这个 mod 自己」的那份 .xl。
+
+    判据依次是：localization 段非空 > 声明了 extend > 配套归档更大。
+    原来是「按 rglob 顺序取第一个非空的」，目录里多一份 .xl 就变成随机命中。
+    """
+    best = None
+    for p, cfg in cands:
+        nonempty = 1 if (cfg is not None and not cfg.is_empty()) else 0
+        extend = 1 if (cfg is not None and cfg.extend) else 0
+        size = 0
+        arch = _sibling_archive(p, _name_from(p))
+        if arch is not None:
+            try:
+                size = arch.stat().st_size
+            except OSError:
+                size = 0
+        key = (nonempty, extend, size)
+        if best is None or key > best[0]:
+            best = (key, p, cfg)
+    return best[1], best[2]
+
+
 def _resolve_dir(root):
     root = Path(root)
     xls = [p for p in root.rglob("*.xl") if xlmod.looks_like_xl(p)]
-    archives = list(root.rglob("*.archive"))
+    archives = [p for p in root.rglob("*.archive")]
     if not xls and not archives:
         raise ArchiveError("目录里没有 .archive 或 .archive.xl：%s" % root)
 
-    if xls:
-        # 优先选带 localization 段的那个
-        best = None
-        for p in xls:
-            try:
-                cfg = xlmod.load(p)
-            except xlmod.XlError:
-                continue
-            if not cfg.is_empty():
-                best = p
-                break
-        chosen = best or xls[0]
+    loaded = []
+    for p in xls:
+        try:
+            cfg = xlmod.load(p)
+        except xlmod.XlError:
+            cfg = None
+        loaded.append((p, cfg))
+    own = set(p for p, cfg in loaded if is_own_product(p, cfg))
+    own_arch = set(a for a in archives if is_own_product(a))
+    real = [(p, cfg) for p, cfg in loaded if p not in own]
+    real_arch = [a for a in archives if a not in own_arch]
+    if not real and not real_arch:
+        names = sorted(p.name for p in (own | own_arch))[:3]
+        raise ArchiveError(
+            "目录里只有本工具生成的翻译包（%s），请选择原 mod 的归档。"
+            % "、".join(names))
+
+    if real:
+        chosen, cfg = _pick_xl(real)
         name = _name_from(chosen)
         arch = _sibling_archive(chosen, name)
-        if arch is None and archives:
-            same = [a for a in archives if a.stem.lower() == name.lower()]
-            arch = same[0] if same else (archives[0] if len(archives) == 1 else None)
+        if arch is not None and arch in own_arch:
+            arch = None          # 指向的是我们自己写的包，当它不存在
+        if arch is None:
+            same = [a for a in real_arch if a.stem.lower() == name.lower()]
+            arch = same[0] if same else (real_arch[0] if len(real_arch) == 1 else None)
         return Target(name, arch, chosen, root, "dir")
 
-    return Target(_name_from(archives[0]), archives[0], None, root, "dir")
+    return Target(_name_from(real_arch[0]), real_arch[0], None, root, "dir")
+
+
+def resolve_all(root):
+    """目录里**所有**该翻的归档目标（已排除本工具的产物）。
+
+    一个模组经常不止一个归档：AMM 有 `AMM_Characters` / `AMM_Patches` /
+    `AMM_Shared`，本地化表只在其中一个里。老做法用 `_resolve_dir()` 挑一个，
+    挑到没文本的那个就等于「这个模组没有归档层」，而且挑中谁取决于目录
+    遍历顺序——同一份 mod 两次扫描能给出不同结果。
+
+    排序：`_pick_xl()` 选中的那个放最前，其余按名字。
+    """
+    root = Path(root)
+    xls = [p for p in root.rglob("*.xl") if xlmod.looks_like_xl(p)]
+    archives = [p for p in root.rglob("*.archive")]
+    if not xls and not archives:
+        raise ArchiveError("目录里没有 .archive 或 .archive.xl：%s" % root)
+
+    loaded = []
+    for p in xls:
+        try:
+            cfg = xlmod.load(p)
+        except xlmod.XlError:
+            cfg = None
+        loaded.append((p, cfg))
+    own = set(p for p, cfg in loaded if is_own_product(p, cfg))
+    own_arch = set(a for a in archives if is_own_product(a))
+    real = [(p, cfg) for p, cfg in loaded if p not in own]
+    real_arch = [a for a in archives if a not in own_arch]
+    if not real and not real_arch:
+        names = sorted(p.name for p in (own | own_arch))[:3]
+        raise ArchiveError(
+            "目录里只有本工具生成的翻译包（%s），请选择原 mod 的归档。"
+            % "、".join(names))
+
+    best = None
+    if real:
+        try:
+            best = _pick_xl(real)[0]
+        except Exception:
+            best = None
+    ordered = sorted(real, key=lambda pc: pc[0].name.lower())
+    if best is not None:
+        ordered.sort(key=lambda pc: 0 if pc[0] == best else 1)
+
+    out, claimed = [], set()
+    for p, _cfg in ordered:
+        name = _name_from(p)
+        arch = _sibling_archive(p, name)
+        if arch is not None and arch in own_arch:
+            arch = None
+        if arch is None:
+            same = [a for a in real_arch
+                    if a.stem.lower() == name.lower() and a not in claimed]
+            if same:
+                arch = same[0]
+            else:
+                free = [a for a in real_arch if a not in claimed]
+                if len(free) == 1:
+                    arch = free[0]
+        if arch is not None:
+            claimed.add(arch)
+        out.append(Target(name, arch, p, root, "dir"))
+    for a in real_arch:
+        if a in claimed:
+            continue
+        out.append(Target(_name_from(a), a, None, root, "dir"))
+    return out
 
 
 def unpack(cli, target, workdir, want=None, log=None):

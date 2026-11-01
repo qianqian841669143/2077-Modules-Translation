@@ -3342,6 +3342,153 @@ def check_package_class_langs():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_own_product_and_prefilter():
+    """自己的产物不能被当成源。
+
+    部署过一次之后 mod 目录里就躺着 `Foo_zh-cn.archive` + `.xl`。老 `_resolve_dir`
+    按「.xl 的 localization 段非空」挑，我们的包恰好非空，于是挑中自己写的中文
+    包，把中文当原文再翻一遍。同时钉住 `localization_files` 的预筛口径。
+    """
+    import localization.archive as Larch
+    import localization.wkit as Lwkit
+
+    real_xl = (
+        "localization:\n"
+        "  onscreens:\n"
+        "    en-us:\n"
+        "      - localization\\\\en-us.json\n"
+    )
+    own_xl = (
+        "localization:\n"
+        "  extend: Foo.archive.xl\n"
+        "  onscreens:\n"
+        "    zh-cn:\n"
+        "      - l10n\\\\foo\\\\zh-cn\\\\onscreens\\\\00_onscreens.json\n"
+    )
+    tmp = tempfile.mkdtemp(prefix="mt-own-")
+    try:
+        def put(name, text):
+            p = os.path.join(tmp, name)
+            with io.open(p, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+
+        open(os.path.join(tmp, "Foo.archive"), "wb").write(b"x")
+        put("Foo.archive.xl", real_xl)
+        open(os.path.join(tmp, "Foo_zh-cn.archive"), "wb").write(b"y")
+        put("Foo_zh-cn.archive.xl", own_xl)
+
+        t = Larch._resolve_dir(tmp)
+        assert t.name == "Foo", t.name
+        assert os.path.basename(str(t.xl_path)) == "Foo.archive.xl", t.xl_path
+        assert os.path.basename(str(t.archive_path)) == "Foo.archive", t.archive_path
+
+        # 只有产物时必须报错，不能把中文当原文
+        solo = tempfile.mkdtemp(prefix="mt-own-solo-")
+        try:
+            open(os.path.join(solo, "Foo_zh-cn.archive"), "wb").write(b"y")
+            with io.open(os.path.join(solo, "Foo_zh-cn.archive.xl"), "w",
+                         encoding="utf-8", newline="") as f:
+                f.write(own_xl)
+            try:
+                Larch._resolve_dir(solo)
+                raise AssertionError("目录里只有自己的产物却没报错")
+            except Larch.ArchiveError:
+                pass
+        finally:
+            shutil.rmtree(solo, ignore_errors=True)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # 名字像、内容不是我们的写法（别人做的汉化）不能误伤
+    assert not Larch.is_own_product("D:\\x\\SomeMod.archive")
+    assert Larch.is_own_product("D:\\x\\SomeMod_zh-cn.archive")
+
+    files = ["localization\\en-us.json", "readme.txt",
+             "mod\\data\\localization\\zh-cn.json", "x\\whatever.json"]
+    got = Lwkit.localization_files(files)
+    assert "localization\\en-us.json" in got, got
+    assert "x\\whatever.json" not in got, got
+    assert "readme.txt" not in got, got
+
+
+def check_deploy_and_manifest():
+    """按文件覆盖 + 清单 + 「还原后被重新读回来」。
+
+    钉住四件事：
+      1. dry_run 不写盘，但数字算得对；
+      2. 真部署只覆盖副本里有的文件，原目录其它文件一个字节不动；
+      3. 清单记的性质（added）与 sha1 正确；
+      4. 用户解压还原之后 hash 变了，copy_mod 必须把它读回来，
+         不能因为路径还在清单里就永久跳过。
+    """
+    import mod_batch as MB
+    import mod_deploy as MD
+
+    old_cfg = MD.config_dir
+    tmp = tempfile.mkdtemp(prefix="mt-deploy-")
+    try:
+        vault = os.path.join(tmp, "userdata")
+        MD.config_dir = lambda: vault
+        copy_dir = os.path.join(tmp, "copy")
+        orig = os.path.join(tmp, "orig")
+        for d in (copy_dir, orig):
+            os.makedirs(d)
+
+        def put(root, name, text):
+            p = os.path.join(root, name)
+            os.makedirs(os.path.dirname(p) or root, exist_ok=True)
+            with io.open(p, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+
+        put(copy_dir, "a.reds", "中文 A")
+        put(copy_dir, "zh-cn.reds", "中文包")
+        put(orig, "a.reds", "english A")
+        put(orig, "keep.bin", "keep me")
+        put(orig, "only_orig.txt", "not in copy")
+
+        dry = MD.deploy_mod(copy_dir, orig, dry_run=True)
+        assert dry["ok"], dry
+        assert dry["overwritten"] == 1, dry
+        assert dry["added"] == 1, dry
+        with io.open(os.path.join(orig, "a.reds"), encoding="utf-8") as f:
+            assert f.read() == "english A", "dry_run 写了盘"
+
+        rep = MD.deploy_mod(copy_dir, orig, pairs_list=[("english A", "中文 A")])
+        assert rep["ok"], rep
+        assert rep["overwritten"] == 1 and rep["added"] == 1, rep
+        with io.open(os.path.join(orig, "a.reds"), encoding="utf-8") as f:
+            assert f.read() == "中文 A"
+        assert os.path.isfile(os.path.join(orig, "zh-cn.reds"))
+        with io.open(os.path.join(orig, "keep.bin"), encoding="utf-8") as f:
+            assert f.read() == "keep me", "副本里没有的文件被动了"
+        assert os.path.isfile(os.path.join(orig, "only_orig.txt"))
+
+        files = MD.deployed_files(orig)
+        assert files.get("zh-cn.reds", ("", False))[1] is True, files
+        assert files.get("a.reds", ("", True))[1] is False, files
+        assert MD.pairs(orig) == [("english A", "中文 A")], MD.pairs(orig)
+
+        # 原样再部署一次：内容一样就不重写
+        rep2 = MD.deploy_mod(copy_dir, orig)
+        assert rep2["overwritten"] == 0 and rep2["same"] == 2, rep2
+
+        # 清单命中且 hash 相同 -> copy_mod 跳过自己的产物
+        out = os.path.join(tmp, "out")
+        st = MB.copy_mod(orig, out, with_archive=True, skip_assets=False)
+        assert st["own"] == 1, st          # zh-cn.reds 被跳过
+        assert os.path.isfile(os.path.join(out, "a.reds"))
+
+        # 模拟用户解压还原：内容变了，就必须读回来
+        put(orig, "zh-cn.reds", "author's own pack")
+        out2 = os.path.join(tmp, "out2")
+        st2 = MB.copy_mod(orig, out2, with_archive=True, skip_assets=False)
+        assert st2["own"] == 0, st2
+        assert os.path.isfile(os.path.join(out2, "zh-cn.reds"))
+    finally:
+        MD.config_dir = old_cfg
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     print("== 回填自测 ==")
     check_apply_roundtrip()
@@ -3452,6 +3599,10 @@ def main():
     print("   OK: 批量写回不留 .bak / 不建撤销记录 / 标记丢失的行不写")
     check_package_class_langs()
     print("   OK: 多语言包类只取源语言段 / Provider 只取源语言类块")
+    check_own_product_and_prefilter()
+    print("   OK: 自己的翻译包不被当源 / 只有产物时拒绝 / 归档预筛口径")
+    check_deploy_and_manifest()
+    print("   OK: 按文件覆盖 / 预演不写盘 / 清单记 added+sha1 / 还原后被重新读回")
 
     if not os.path.isdir(VORTEX):
         print("\n未找到 Vortex 目录, 跳过真实模组测试: %s" % VORTEX)

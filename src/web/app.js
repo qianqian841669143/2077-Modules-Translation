@@ -2148,12 +2148,35 @@ function syncQueueStart() {
   btn.title = hasOut ? "" : T("请先设置批量输出目录");
 }
 
+/* 部署开关只在第一次打开面板时按设置初始化，之后由用户自己按。 */
+function initDeployBoxes(r) {
+  const dv = $("q-deploy"), dry = $("q-deploy-dry");
+  if (!dv || !dry) return;
+  if (!state.mbDeployInit) {
+    state.mbDeployInit = true;
+    const s = state.settings || {};
+    dv.checked = (r && r.deploy != null) ? !!r.deploy : !!s.batch_deploy;
+    dry.checked = (r && r.deployDry != null) ? !!r.deployDry
+      : (s.batch_deploy_dry == null ? true : !!s.batch_deploy_dry);
+    dv.onchange = () => { syncDeployBoxes(); };
+  }
+  syncDeployBoxes();
+}
+
+function syncDeployBoxes() {
+  const dv = $("q-deploy"), dry = $("q-deploy-dry");
+  if (!dv || !dry) return;
+  dry.disabled = !dv.checked;
+  dry.parentElement.style.opacity = dv.checked ? "" : ".5";
+}
+
 async function refreshQueueInfo() {
   try {
     const r = await pywebview.api.batch_info();
     if (!r || !r.ok) return;
     if (!$("q-staging").value) $("q-staging").value = r.staging || "";
     if (!$("q-out").value) $("q-out").value = r.outRoot || (state.settings || {}).batch_out_dir || "";
+    initDeployBoxes(r);
     syncQueueStart();
     if (r.running) {
       state.mbRunning = true;
@@ -2290,6 +2313,14 @@ function onMbItem(e) {
   if (e.machine) bits.push(T("机翻 %d").replace("%d", e.machine));
   if (e.applied) bits.push(T("写入 %d").replace("%d", e.applied));
   if (e.failed) bits.push(T("失败 %d").replace("%d", e.failed));
+  if (e.untranslated) bits.push(T("未译 %d").replace("%d", e.untranslated));
+  if (e.deploy && e.deploy.ok) {
+    bits.push((e.deploy.dry ? T("预演 ") : "")
+      + T("覆盖 %d").replace("%d", e.deploy.overwritten || 0)
+      + "/" + T("新增 %d").replace("%d", e.deploy.added || 0));
+  } else if (e.deploy && e.deploy.error) {
+    bits.push(T("部署失败: %s").replace("%s", e.deploy.error));
+  }
   if (e.seconds != null) bits.push(e.seconds + "s");
   if ((e.errors || []).length) bits.push(String(e.errors[0]));
   state.mbDone[key] = { state: st, text: txt, detail: bits.join(" · ") };
@@ -2314,6 +2345,14 @@ function onMbDone(e) {
   let msg = T("完成 %d 个（成功 %d，失败 %d），机翻 %d 条，写入 %d 条。")
     .replace("%d", rs.length).replace("%d", ok).replace("%d", err)
     .replace("%d", mt).replace("%d", ap);
+  const dep = rs.filter((r) => r.deploy && r.deploy.ok);
+  if (dep.length) {
+    const ov = dep.reduce((a, r) => a + (r.deploy.overwritten || 0), 0);
+    const ad = dep.reduce((a, r) => a + (r.deploy.added || 0), 0);
+    msg += " " + (dep[0].deploy.dry ? T("部署预演：覆盖 %d 个文件，新增 %d 个。")
+      : T("已部署：覆盖 %d 个文件，新增 %d 个。"))
+      .replace("%d", ov).replace("%d", ad);
+  }
   if (e.cancelled) msg = T("已取消。") + " " + msg;
   $("q-summary").textContent = msg;
   toast(msg, err ? "err" : "ok");
@@ -2332,12 +2371,21 @@ async function startQueue() {
   if (!keys.length) { toast(T("请先勾选要翻译的 mod"), "err"); return; }
   const withArchive = $("q-archive").checked;
   const skipAssets = !$("q-assets").checked;
-  const msg = T("将要处理 %d 个 mod：先复制到输出目录，再翻译、写回副本。\n同名目录会被覆盖。继续？")
+  const doDeploy = $("q-deploy").checked;
+  const doDry = $("q-deploy-dry").checked;
+  let msg = T("将要处理 %d 个 mod：先复制到输出目录，再翻译、写回副本。\n同名目录会被覆盖。继续？")
     .replace("%d", keys.length);
+  if (doDeploy) {
+    msg += "\n\n" + (doDry
+      ? T("本轮只预演部署：算出会覆盖/新增哪些文件，不写原模组目录。")
+      : T("本轮跑完会**原地覆盖**原模组目录里对应的文件（副本里没有的文件保持原样）。"));
+  }
   if (!confirm(msg)) return;
   // 面板里改的输出目录要落盘：后端 batch_start 读的是 settings，不先保存就是
   // 「填了 A、跑的还是 B」。
-  const saved = await pywebview.api.save_settings({ batch_out_dir: outDir });
+  const saved = await pywebview.api.save_settings({
+    batch_out_dir: outDir, batch_deploy: doDeploy, batch_deploy_dry: doDry,
+  });
   if (!saved || !saved.ok) {
     toast((saved && saved.error) || T("输出目录保存失败"), "err");
     return;

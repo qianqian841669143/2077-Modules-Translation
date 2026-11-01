@@ -48,6 +48,17 @@ def build_html(theme="light"):
     return html
 
 
+class _MergedReport(object):
+    """多个归档各自校验后的合并报告（字段与 verifier 的报告对齐）。"""
+
+    def __init__(self, ok, problems):
+        self.ok = bool(ok)
+        self.problems = list(problems or [])
+
+    def as_dict(self):
+        return {"ok": self.ok, "problems": list(self.problems)}
+
+
 def fill_resource_entry_ids(items, rows):
     """给缺 entryId 的归档行按 (file, 原文) 反查补齐，返回仍缺主键的条数。
 
@@ -924,7 +935,9 @@ class Api(object):
     def _scan_resource_layer(self, root):
         """把模组归档里的 localization 也扫进来，作为第三层。
 
-        返回 (rows, session, info)。info["skipped"] 说明这一层为什么是空的：
+        一个模组可能有好几个归档（AMM 就有 3 个），本地化表只在其中一个里。
+        所以这里逐个归档扫，最后包成一个 `SessionGroup`，上层仍然只看到一个
+        会话。返回 (rows, group, info)。info["skipped"] 说明这一层为什么是空的：
         没有 WolvenKit、目录里没有归档、归档里没有本地化资源、扫描失败。
         这些都是「这个模组没有这一层」的正常情况，调用方不该当错误处理。
         """
@@ -941,50 +954,70 @@ class Api(object):
             return [], None, {"skipped": "no_wkit"}
 
         try:
-            target = Larch.resolve_target(
-                root, workdir=os.path.join(config_dir(), "work", "zip"))
+            targets = [t for t in Larch.resolve_all(root) if t.archive_path is not None]
         except Exception as ex:
             return [], None, {"skipped": "no_archive", "detail": str(ex)}
-        if target.archive_path is None:
+        if not targets:
             return [], None, {"skipped": "no_archive"}
 
-        # 先只读目录：归档里没有 localization 就不必解包（几百 MB 的归档
-        # 解一遍要几十秒，只为确认"这里没有可翻的东西"太亏）。
-        try:
-            if not Lwkit.has_localization(cli, target.archive_path):
-                return [], None, {"skipped": "no_localization",
-                                  "archive": str(target.archive_path or "")}
-        except Exception:
-            pass
+        sessions, rows, used, empty_arch = [], [], [], []
+        for target in targets:
+            # 先只读目录：归档里没有 localization 就不必解包（几百 MB 的归档
+            # 解一遍要几十秒，只为确认"这里没有可翻的东西"太亏）。这一步只是
+            # 预筛，目录里有 localization 目录却没条目也会放行，最终以行数为准。
+            try:
+                if not Lwkit.has_localization(cli, target.archive_path):
+                    continue
+            except Exception:
+                pass
 
-        work = os.path.join(
-            config_dir(), "work",
-            re.sub(r"[^A-Za-z0-9_.-]+", "_", target.name)[:60] or "mod")
-        sess = Lpipe.Session(target, cli, work, lang="zh-cn", log=None)
-        try:
-            sess.scan()
-        except Exception as ex:
-            return [], None, {"skipped": "scan_failed", "detail": str(ex)}
-        if not sess.rows:
-            return [], sess, {"skipped": "no_rows",
-                              "archive": str(target.archive_path or "")}
+            work = os.path.join(
+                config_dir(), "work",
+                re.sub(r"[^A-Za-z0-9_.-]+", "_", target.name)[:60] or "mod")
+            sess = Lpipe.Session(target, cli, work, lang="zh-cn", log=None)
+            try:
+                sess.scan()
+            except Exception:
+                continue         # 一个归档坏了不该让其它归档一起哑掉
+            if not sess.rows:
+                empty_arch.append(str(target.archive_path or ""))
+                continue
 
-        rows, skipped = self._filter_l10n_rows(sess, cfg)
-        for r in rows:
-            r["layer"] = "resource"
-            # 资源行的 file 是归档内部路径，磁盘上没有这个文件。要定位到
-            # 「这一行所在的文件」，必须知道它在哪个归档里。
-            r["archive"] = str(target.archive_path or "")
+            got, skipped = self._filter_l10n_rows(sess, cfg)
+            for r in got:
+                r["layer"] = "resource"
+                # 资源行的 file 是归档内部路径，磁盘上没有这个文件。要定位到
+                # 「这一行所在的文件」，必须知道它在哪个归档里。
+                r["archive"] = str(target.archive_path or "")
+            rows.extend(got)
+            sessions.append(sess)
+            used.append({"archive": str(target.archive_path or ""),
+                         "name": target.name, "rows": len(got),
+                         "skipped": skipped})
+
+        if not rows:
+            info = {"skipped": "no_rows",
+                    "archives": [str(t.archive_path or "") for t in targets],
+                    "emptyArchives": empty_arch}
+            if empty_arch:
+                info["archive"] = empty_arch[0]
+            return [], None, info
+
+        group = Lpipe.SessionGroup(sessions, lang="zh-cn")
+        meta = group.meta
         info = {
             "rows": len(rows),
-            "skipped": skipped,
-            "archive": str(target.archive_path or ""),
+            "skipped": sum(int(u["skipped"] or 0) for u in used),
+            "archive": used[0]["archive"],
+            "archives": [u["archive"] for u in used],
+            "emptyArchives": empty_arch,
+            "scan": used,
             "sourceLang": cfg["source_lang"],
-            "languages": dict(sess.meta.get("languages") or {}),
-            "extend": target.extend_name() if hasattr(target, "extend_name") else "",
-            "name": target.name,
+            "languages": dict(meta.get("languages") or {}),
+            "extend": group.target.extend_name() if group.target else "",
+            "name": group.target.name if group.target else "",
         }
-        return rows, sess, info
+        return rows, group, info
 
     # ------------------------------------------------------------ 资源模式
     #
@@ -1307,11 +1340,14 @@ class Api(object):
         if tx is not None:
             try:
                 from localization import builder as Lbuild
-                out_name = Lbuild.default_output_name(
-                    getattr(sess.target, "name", ""),
-                    getattr(sess, "lang", "zh-cn") or "zh-cn")
-                for suffix in (".archive", ".archive.xl"):
-                    tx.snapshot(os.path.join(outdir, out_name + suffix))
+                names = set()
+                for one in getattr(sess, "sessions", [sess]):
+                    names.add(Lbuild.default_output_name(
+                        getattr(getattr(one, "target", None), "name", ""),
+                        getattr(one, "lang", "zh-cn") or "zh-cn"))
+                for out_name in sorted(names):
+                    for suffix in (".archive", ".archive.xl"):
+                        tx.snapshot(os.path.join(outdir, out_name + suffix))
             except Exception:
                 pass
 
@@ -1328,8 +1364,19 @@ class Api(object):
 
         report = None
         try:
-            report = Lverify.verify_build(result, sess.last_spec, sess.cli,
-                                          sess.workdir)
+            parts = getattr(result, "parts", None)
+            if parts:
+                # 一个模组可能出了好几个包（每个归档一个），逐个校验再合并。
+                problems, ok_all = [], True
+                for one, res_one in parts:
+                    rep = Lverify.verify_build(res_one, one.last_spec,
+                                               one.cli, one.workdir)
+                    ok_all = ok_all and bool(rep.ok)
+                    problems.extend(list(rep.problems))
+                report = _MergedReport(ok_all, problems)
+            else:
+                report = Lverify.verify_build(result, sess.last_spec, sess.cli,
+                                              sess.workdir)
         except Exception as ex:
             if own_tx and tx is not None:
                 tx.discard()
@@ -1851,7 +1898,9 @@ class Api(object):
                              with_archive=bool(with_archive),
                              skip_assets=bool(skip_assets),
                              base=base, model=model, target=tgt,
-                             on_event=self._mb_push, cancel=self._mb_cancel)
+                             on_event=self._mb_push, cancel=self._mb_cancel,
+                             deploy=bool(self.settings.get("batch_deploy")),
+                             deploy_dry=bool(self.settings.get("batch_deploy_dry", True)))
                 self._mb_results = MB.run(ctx, items)
             except Exception as ex:
                 import traceback
@@ -1860,6 +1909,12 @@ class Api(object):
                 self._mb_push({"type": "error", "action": "mb",
                                "message": str(ex)})
             finally:
+                try:
+                    p = self._batch_deploy_csv(self._mb_results)
+                    if p:
+                        self._mb_push({"type": "mb-deploy-csv", "path": p})
+                except Exception:
+                    pass
                 self._mb_running = False
                 self._mb_worker = None
 
@@ -1894,7 +1949,44 @@ class Api(object):
                 "running": self._mb_running,
                 "usable": len([x for x in (self._mb_items or []) if x.get("todo")]),
                 "scanned": len(self._mb_items or []),
+                "deploy": bool(self.settings.get("batch_deploy")),
+                "deployDry": bool(self.settings.get("batch_deploy_dry", True)),
                 "target": self.settings.get("target_lang", "简体中文")}
+
+    def _batch_deploy_csv(self, results):
+        """把这一轮的部署结果落成 CSV，返回路径；没部署时返回空串。
+
+        一个 mod 一行：覆盖 / 新增 / 相同 / 失败 / 备注。备注里记的是
+        「照覆盖但值得看一眼」的情况（原件已含中文、写入失败……）。
+        """
+        rows = [r for r in (results or []) if isinstance(r.get("deploy"), dict)]
+        if not rows:
+            return ""
+        import csv
+        p = os.path.join(config_dir(), "batch",
+                         "deploy-%s.csv" % time.strftime("%Y%m%d-%H%M%S"))
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["mod", "预演", "覆盖", "新增", "相同",
+                            "未译", "失败", "备注"])
+                for r in rows:
+                    d = r["deploy"]
+                    why = []
+                    if d.get("error"):
+                        why.append(str(d["error"]))
+                    for n in (d.get("notes") or [])[:5]:
+                        why.append("%s: %s" % (n.get("path"), n.get("why")))
+                    w.writerow([r.get("name"), "1" if d.get("dry") else "0",
+                                d.get("overwritten", 0), d.get("added", 0),
+                                d.get("same", 0), r.get("untranslated", 0),
+                                r.get("failed", 0), " | ".join(why)])
+            self._batch_log("deploy csv: %s" % p)
+        except Exception as ex:
+            self._batch_log("deploy csv 失败: %r" % (ex,))
+            return ""
+        return p
 
     def batch_open_output(self):
         d, why = self._batch_out_check(create=False)
