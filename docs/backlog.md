@@ -3,41 +3,118 @@
 按优先级记，条目只在「决定做」时往下排，做完就删掉这一节，别让文档腐烂。
 详细分析写进 `docs/P*.md`，这里只留「还要做什么」和「为什么不做什么」。
 
-目前没有紧急待办。P11 已按实测定论关闭（见下「已修」），留下的三条
-（`CALL_RULES` 补 tab/subcategory、赋值式包装函数声明、键守卫）**不做**：
-全量 240 个键位字面量里 0 个会被当候选（键都是 camelCase 单词），
-加了只会让规则更绕。真出现带空格的键（`settings.category("reward money", …)`）
-再加键守卫，那时它才是硬需求。
+P11 已按实测定论关闭（见下「已修」），留下的三条（`CALL_RULES` 补
+tab/subcategory、赋值式包装函数声明、键守卫）**不做**：全量 240 个键位字面量里
+0 个会被当候选（键都是 camelCase 单词），加了只会让规则更绕。真出现带空格的键
+（`settings.category("reward money", …)`）再加键守卫，那时它才是硬需求。
 
-## 待办：单模组功能整体优化（v2.43 起）
+v2.43 的待办重排过一遍：译文层的失败和「journal ok 但游戏里不生效」先做，
+UI 与自动部署往后排。
 
-v2.42 把批量换成单模组流程之后，批量跑一遍就会把单模组层的毛病放大 101 倍。
+## 待办：v2.43（译文正确性 + 覆盖率）
+
+v2.42.6 修掉了「目标文件被英文冲掉」，但 2026-11-01 18:17 那轮（127 个模组）全量
+比对 `batch\out` 之后，654 条失败只落在 5 个根因上，另外还有 4 个模组「journal 全
+ok、游戏里却没有中文」。下面把旧条目和这些新发现按「同一处代码、同一类失效合并」
+重排，分 3 批，每批单独编译验证。
+
+基线：127 模组 / rows 24,074 / applied 23,249 / failed 654 / untouched 37；
+简体语言包 7,509 个条目里 458 个仍不是中文（6.1%）。
+
+### 批 1（v2.43.0）：先不产生坏文件
+
+1. **M1 目标语言文件定位统一**（合并旧「lua 语言包文件名」+ 本轮 IAH / Reinforcements）
+   现状：只认 `TARGET_NAMES` 算出的那一个名字（reds 是 `ChineseSimplified`，lua 是
+   `zh_CN`）。模组自带的 `zh-cn.reds`（类 `SimpChinese`）、`zh_cn.reds`（类 `GR_zh_cn`）
+   认不出来，工具反而去复制英文包 → 类名冲突 → 跳过，229 条没写进去
+   （Inventory Adjustments Hub 192、Reinforcements Gang Vs Gang 37）。
+   lua 那边同理：CET 是 `require("localization/" .. language)`、`language` 取自游戏
+   设置（`zh-cn`），按 `TARGET_NAMES` 生成的 `zh_CN.lua` 读不到（这轮 staging 里
+   0 个 `zh-cn.lua`，没触发，但判据要从根上解决）。
+   做法：抽一个解析函数，`target_rel` / `_existing_target` / `prepare_codeware_package`
+   共用，顺序
+   ① 同目录已有变体（`zh-cn` / `zh_cn` / `ChineseSimplified` / `SimpChinese`，大小写
+      与 `-`/`_` 不敏感）→ 用它；
+   ② provider 里 `case n"zh-cn"` 实际指向的类所在文件 → 用它；
+   ③ 都没有才按 `TARGET_NAMES` 新建。
+   判据：变体匹配只认同目录且文件名/类名带目标语言标记，不许跨目录挑。
+2. **M2 失败不留半成品**
+   `ensure_target` 先把英文包复制成目标文件，`prepare_codeware_package` 再报「类名已被
+   占用」并 `continue`，复制出来的文件没人删。本轮实测两个模组因此装进游戏会编译失败
+   （`SYM_REDEFINITION`）：
+   - IAH `locales/ChineseSimplified.reds` 与 `en-us.reds` 逐字节相同，同 module
+     `IAHub.Localization`、同 `class English`；
+   - Reinforcements `Packages/ChineseSimplified.reds` 与 `en_us.reds` 逐字节相同，
+     同 module `Gibbon.GR.Localization.Packages`、同 `class GR_en_us`。
+   做法：失败分支删掉本轮新建的 `dst` 和 `.bak`（只删本轮新建的）。
+3. **M6 卫生**
+   `copy_mod` 排除 `*.bak`（out 里现在 624 个 / 20.1 MB；Cyberpunk 按 `*.reds` /
+   `init.lua` 扫描，这些不生效但占地方）；写入前确认真有替换再备份（现在 5 次内容没
+   变也备份了）；删掉 `src/tmp_wa1.py`、`src/tmp_wa2.py`（10/30 的暂存脚本）。
+
+### 批 2（v2.43.1）：覆盖率
+
+4. **M3 Provider 接线失败要报错**
+   `_add_provider_case` 只认 `switch` + `default:`。SenSen 那几个模组写成
+   `if Equals(language, n"en-us") {...}`，找不到 `default` 就原样返回，且非
+   `exact_rels` 路径不报错 → 中文包已经生成（如 `ChineseSimplified-skeletonkey.reds`，
+   翻译完整）但没有任何代码引用它，73 条译文白做，journal 还全 ok。
+   做法：支持 `if Equals(...)` 形式；无 `default:` 时插在 `return null;` 前；
+   接不上就返回 error —— 宁可报失败，也不要「ok 但没生效」。
+5. **M4 目标包缺条目时追加**
+   Redscript Config Framework 自带的 `ChineseSimplified.reds` 只有 19 条（模板 stub），
+   `English.reds` 有 194 条 → 174 条报「目标语言包里没有这个条目」。
+   做法：`apply_text_target` 找不到 key 时往 `DefineTexts` 末尾追加
+   `this.Text("key", "译文")`，缩进与换行风格沿用相邻行；定位不到块尾就不追加、报失败。
+
+### 批 3（v2.43.2）：结构改写，单独一版
+
+6. **M5 混合 .reds 只抽 package 类**
+   Garage Core 的 `GarageCoreLocalization.reds` 同时有 `LocalizationProvider`（`switch`
+   里只有 en-us / de-de / kr-kr）和 `English` 包（226 条 `this.Text`），整文件复制会重复
+   声明所以被拒绝；Cyberware-EX、INCF CORE 同理，共 236 条没写。
+   做法：抽出 `class X extends ModLocalizationPackage {…}` 整块生成新文件，再给 provider
+   的 `switch` 插 `case n"zh-cn": return new …;`。
+   硬约束：块边界按括号配对 + 字符串/注释处理（`this.Text` 的值里有 `</>` 富文本），
+   抽完自检「恰好 1 个类、括号平衡、`this.Text` 条数 = 源文件」，不自检就报错拒绝，
+   **不许退回整文件复制**。
+
+### 验收判据（改完重跑一遍批量）
+
+| 指标 | 现在 | 目标 |
+|---|---|---|
+| `failed` | 654 | 6（4 条「未找到对应原文」+ 2 条「疑似代码片段」，都是合理拒绝） |
+| 简体语言包未译条目 | 458 / 7,509（6.1%） | 24 / 7,509（0.3%），RCF 另多 174 条 |
+| 重复类文件 | 2 个 | 0 |
+| 译文写入但没有代码引用 | 4 个模组 | 0 |
+| `.bak` | 624 个 / 20.1 MB | 0 |
+
+### 硬约束
+
+- **自动部署（下节第 3 条）必须排在 M2 / M5 之后**：现在 `out` 里还有会让模组编译
+  不过的文件，先上线自动部署等于把它们直接推进 staging。
+- M5 单独一版编译，出问题好定位；M1 / M2 / M6 可以一次编译完。
+
+## 待办：UI 与部署（v2.43.3 起）
+
+v2.42 把批量换成单模组流程之后，批量跑一遍就会把单模组层的毛病放大 127 倍。
 以下按「用户已决定后续处理」记着，暂时不改：
 
-1. **lua 语言包文件名**：`TARGET_NAMES["zh-CN"]["lua"] = "zh_CN"`，但实测 staging 里
-   5 个模组用 `zh-cn.lua`、0 个用 `zh_CN.lua`；CET 是
-   `require("localization/" .. language)`，`language` 取自游戏设置（`zh-cn`），
-   所以生成的 `zh_CN.lua` 读不到，语言包那层等于白翻。
-   `ChineseSimplified.reds`（35 个）命名正确，不受影响。
-   修法：`target_rel` 先在同目录找已存在的目标文件变体（大小写、`-`/`_` 不敏感），
-   找不到再按 `TARGET_NAMES` 生成；`_existing_target` 也走同一套变体匹配，
-   否则 mod 自带的 `zh-cn.lua` 里已有的中文不会被当成基线。
-2. 其余待批量实跑后再补。
-3. **工具栏溢出**（v2.42.1 记）：工具条那一行按钮不换行，窗口窄的时候右侧会被裁。
+1. **工具栏溢出**（v2.42.1 记）：工具条那一行按钮不换行，窗口窄的时候右侧会被裁。
    已把「导出 Excel」收进「更多」，还剩 6 个（浏览 / 加载·提取 / 应用到模组 /
    撤销上次应用 / 批量翻译 / 设置 / 更多）+ 一个 grow 输入框。
    根治要么给 `.row` 加 `flex-wrap`，要么继续往菜单里收。
    判据：窗口宽 1280 时整行不溢出。
-4. **批量翻译面板加筛选：隐藏「无需翻译」的条目**（v2.42.1 记）。
+2. **批量翻译面板加筛选：隐藏「无需翻译」的条目**（v2.42.1 记）。
    扫描后列表里把待译行数为 0 的 mod 折起来，只留能翻的。
-   实测定量：286 个 staging 目录里只有 101 个有待译行，其余 185 个 `todo == 0`
-   （其中 28 个连文本都没有），一屏里近三分之二是噪音。
+   实测定量：255 个 staging 目录里只有 127 个有待译行，其余 128 个 `todo == 0`，
+   一屏里近一半是噪音。
    做法：`batch_scan()` 的输出里每项都带 `todo`（`probe_text()` 顺带算的），
    前端 `renderQueue()` 按这个值过滤就行，不用再扫一遍盘。
    默认值定「显示」还是「隐藏」待实跑后再定；勾选状态要能留在面板里不随扫描重置。
-5. **批量跑完直接替换 / 不能替换的作为新增**（v2.42.1 记）。
+3. **批量跑完直接替换 / 不能替换的作为新增**（v2.42.1 记）。
    现状：批量只写 `userdata/batch/out/<mod>`（固定 latest），staging 原目录全程只读，
-   跑完还得用户自己搬，101 个 mod 手工搬不现实。
+   跑完还得用户自己搬，127 个 mod 手工搬不现实。
    目标：跑完自动部署 —— 能安全替换的**原地覆盖**原目录，不能的**作为新增**放进去，
    原目录一个字节都不动。
    判定「不能替换」的主要风险，排序：
@@ -47,7 +124,7 @@ v2.42 把批量换成单模组流程之后，批量跑一遍就会把单模组�
      所以覆盖只能**按文件覆盖**，副本里没有的保留原样。
    - 跑完后原目录又被 Vortex 改过（mtime / 大小与扫描时记录的不一致）。
    - 原目录里本来就有中文（官方译或别人译），覆盖会丢。
-   - 语言包命名变体（`zh-cn.lua`，见第 1 条）导致新文件没生效、旧的反而被顶掉。
+   - 语言包命名变体（`zh-cn.lua`，见上述 M1）导致新文件没生效、旧的反而被顶掉。
    实现要点：部署前先记一份原目录清单（相对路径 + 大小 + mtime）做判据；
    替换要留 undo（现有 undo store 能回滚文件）；新增用带后缀的目录名
    （如 `name + " (zh)"`）避开同名冲突，不要覆盖已存在的同名目录。
