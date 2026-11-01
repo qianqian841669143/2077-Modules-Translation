@@ -250,8 +250,29 @@ class Ctx(object):
         return self.cancel is not None and self.cancel.is_set()
 
 
-def run_one(ctx, cand, r):
-    """跑一个 mod：复制 → 提取 → 机翻 → 写回副本。"""
+def _skip_reason(ctx, cand):
+    """S6：已经部署好、源文件也没动的模组，整块跳过。
+
+    只有「跑完覆盖回原模组」真开着才有意义：部署关掉时产物就在副本里，跳过等于
+    这个模组什么都不产出。判据全在部署清单里（`mod_deploy.up_to_date`），不读
+    模组内容——上一轮还有漏译的不会跳，用户解压还原过的也不会跳。
+    """
+    if not (ctx.deploy and not ctx.deploy_dry):
+        return ""
+    try:
+        import mod_deploy
+        return mod_deploy.up_to_date(cand.get("root") or "")
+    except Exception:
+        return ""
+
+
+def prepare(ctx, cand):
+    """复制 + 加载。返回值交给 `finish` 用。
+
+    单独拆出来是为了 S4：上一个模组在等模型的时候，这个函数已经在复制并解析
+    下一个模组了（加载 11.8 分钟 / 机翻 7.7 分钟，本来就是两拨不同的资源）。
+    这里不碰 `ctx.worker`、不发事件，整条事件流仍由 `run()` 单线程发出。
+    """
     dst = os.path.join(ctx.out_root, safe_name(cand.get("name")))
     # 输出目录自 v2.43.0 起由用户指定，下面这句 rmtree 就可能落到模组本体上
     # （目录填成 staging / 游戏目录）。界面层已经按「不与 staging、游戏目录重叠」
@@ -270,108 +291,152 @@ def run_one(ctx, cand, r):
     if bad:
         raise RuntimeError("输出目录校验失败: %s 会覆盖源目录 %s"
                            % (dst, cand.get("root") or ""))
+
+    prep = {"dst": dst, "cp": {}, "w": None, "load": None,
+            "error": "", "skip": "", "seconds": 0.0}
+    t0 = time.time()
+    skip = _skip_reason(ctx, cand)
+    if skip:
+        prep["skip"] = skip
+        prep["seconds"] = round(time.time() - t0, 2)
+        return prep
     if os.path.isdir(dst):
         shutil.rmtree(dst, ignore_errors=True)
 
     cp = copy_mod(cand["root"], dst, with_archive=ctx.with_archive,
                   skip_assets=ctx.skip_assets, cancel=ctx.cancel)
-    r.update(dst=dst, copied=cp["files"], bytes=cp["bytes"],
-             skipped=cp["skipped"], own=cp.get("own", 0))
+    prep["cp"] = cp
     if ctx.stopped():
         raise Cancelled()
     if not cp["files"]:
-        r["error"] = "复制后没有任何文件"
-        return
+        prep["error"] = "复制后没有任何文件"
+        return prep
 
     w = ctx.spawn_worker()
-    ctx.worker = w
-    try:
-        load = w._do_load(dst, {"resource": bool(ctx.with_archive),
-                                "lua": True, "loose": True})
-        if not load or not load.get("ok"):
-            r["error"] = (load or {}).get("error") or "加载失败"
-            return
+    prep["w"] = w
+    load = w._do_load(dst, {"resource": bool(ctx.with_archive),
+                            "lua": True, "loose": True})
+    prep["load"] = load
+    if not load or not load.get("ok"):
+        prep["error"] = (load or {}).get("error") or "加载失败"
+    elif ctx.stopped():
+        raise Cancelled()
+    prep["seconds"] = round(time.time() - t0, 2)
+    return prep
 
-        rows = load.get("rows") or []
-        r["rows"] = len(rows)
-        r["tm"] = int(load.get("tmHits") or 0)
-        r["already"] = sum(1 for x in rows if x.get("already"))
-        todo = [j for j, x in enumerate(rows)
-                if not str(x.get("trans") or "").strip()]
-        r["todo"] = len(todo)
-        if not rows:
-            r["empty"] = True
 
-        if ctx.stopped():
-            raise Cancelled()
-        if todo:
-            w._run_translate(todo, ctx.base, ctx.model, ctx.target)
-        if ctx.stopped():
-            raise Cancelled()
+def run_one(ctx, cand, r):
+    """跑一个 mod：复制 → 提取 → 机翻 → 写回副本。"""
+    finish(ctx, cand, prepare(ctx, cand), r)
 
-        # already 行本身已经是中文，写回去等于把原文再抄一遍，跳过。
-        # 译文与原文相同的行同理：模型没翻出来。放过它们会覆盖目标语言文件
-        # 里已经译好的文本（MCM 的 zh-cn.json 被冲成英文就是这个原因）。
-        unchanged = [x for x in rows
-                     if str(x.get("trans") or "").strip() and not x.get("already")
-                     and str(x.get("trans")).strip() == str(x.get("orig") or "").strip()]
-        r["untouched"] = len(unchanged)
-        # 永远没翻出来的行：机翻后译文仍为空（模型没答）+ 译文与原文相同
-        # （模型照抄）。这两种行都会被下面从 items 里剔掉，不写进任何文件，
-        # 以前连计数都没有——25 个归档包漏了约 10 条，报告上却显示 failed=0。
-        empty_trans = [x for x in rows
-                       if not str(x.get("trans") or "").strip()
-                       and not x.get("already")]
-        r["untranslated"] = len(empty_trans) + len(unchanged)
-        r["untranslatedSample"] = [str(x.get("orig") or "")[:60]
-                                   for x in (empty_trans + unchanged)[:5]]
-        items = [x for x in rows
-                 if str(x.get("trans") or "").strip() and not x.get("already")
-                 and str(x.get("trans")).strip() != str(x.get("orig") or "").strip()]
-        r["machine"] = sum(1 for x in items
-                           if (x.get("transSrc") or "") == "machine")
-        if items:
-            # 批量写的是输出根里的副本：这份副本接下来会被整个部署进游戏目录，
-            # 所以不要 `.bak` 也不要撤销记录（两种情况都是 127 份冗余，实测
-            # 19 MB / 112 MB）。写错了重跑一次批量即可，撤销在这里没有落脚点。
-            res = w._do_apply(items, keep_backup=False, make_undo=False)
-            r["baks"] = drop_backups(dst)
-            r["applied"] = int(res.get("ok") or 0)
-            r["settled"] = int(res.get("settled") or 0)
-            r["failed"] = int(res.get("fail") or 0)
-            r["errors"] = [str(x) for x in (res.get("errors") or [])][:20]
-            # 失败原因必须能落到 journal 里。只有总数的话，881 条失败查不下去：
-            # 不知道是「没匹配到原文」还是「代码骨架被拒」还是「目标文件没有该 key」。
-            reasons = {}
-            for f in (res.get("failed") or []):
-                why = str(f.get("reason") or "?").strip() or "?"
-                reasons[why] = reasons.get(why, 0) + 1
-            r["failReasons"] = dict(sorted(reasons.items(),
-                                           key=lambda kv: -kv[1])[:8])
-            r["undoId"] = res.get("undoId") or ""
-            if res.get("archive"):
-                r["archive"] = res.get("archive")
-                r["xl"] = res.get("xl") or ""
-        if ctx.deploy and items:
-            r["deploy"] = _deploy_one(ctx, cand, dst, items)
+
+def finish(ctx, cand, prep, r):
+    """把 `prepare` 的结果翻完、写回、按需部署。"""
+    dst = prep.get("dst") or ""
+    r["dst"] = dst
+    if prep.get("skip"):
+        # 什么都不做就算完成：产物已经在原模组里，且和现在这份源文件对得上
         r["ok"] = True
-    finally:
-        ctx.worker = None
+        r["skippedDone"] = prep["skip"]
+        return
+    cp = prep.get("cp") or {}
+    r.update(copied=cp.get("files", 0), bytes=cp.get("bytes", 0),
+             skipped=cp.get("skipped", 0), own=cp.get("own", 0))
+    if prep.get("error"):
+        r["error"] = prep["error"]
+        return
+
+    w = prep.get("w")
+    load = prep.get("load") or {}
+    rows = load.get("rows") or []
+    r["rows"] = len(rows)
+    r["tm"] = int(load.get("tmHits") or 0)
+    r["already"] = sum(1 for x in rows if x.get("already"))
+    todo = [j for j, x in enumerate(rows)
+            if not str(x.get("trans") or "").strip()]
+    r["todo"] = len(todo)
+    if not rows:
+        r["empty"] = True
+
+    if ctx.stopped():
+        raise Cancelled()
+    if todo:
+        w._run_translate(todo, ctx.base, ctx.model, ctx.target)
+    if ctx.stopped():
+        raise Cancelled()
+
+    # already 行本身已经是中文，写回去等于把原文再抄一遍，跳过。
+    # 译文与原文相同的行同理：模型没翻出来。放过它们会覆盖目标语言文件
+    # 里已经译好的文本（MCM 的 zh-cn.json 被冲成英文就是这个原因）。
+    unchanged = [x for x in rows
+                 if str(x.get("trans") or "").strip() and not x.get("already")
+                 and str(x.get("trans")).strip() == str(x.get("orig") or "").strip()]
+    r["untouched"] = len(unchanged)
+    # 永远没翻出来的行：机翻后译文仍为空（模型没答）+ 译文与原文相同
+    # （模型照抄）。这两种行都会被下面从 items 里剔掉，不写进任何文件，
+    # 以前连计数都没有——25 个归档包漏了约 10 条，报告上却显示 failed=0。
+    empty_trans = [x for x in rows
+                   if not str(x.get("trans") or "").strip()
+                   and not x.get("already")]
+    r["untranslated"] = len(empty_trans) + len(unchanged)
+    r["untranslatedSample"] = [str(x.get("orig") or "")[:60]
+                               for x in (empty_trans + unchanged)[:5]]
+    items = [x for x in rows
+             if str(x.get("trans") or "").strip() and not x.get("already")
+             and str(x.get("trans")).strip() != str(x.get("orig") or "").strip()]
+    r["machine"] = sum(1 for x in items
+                       if (x.get("transSrc") or "") == "machine")
+    if items:
+        # 批量写的是输出根里的副本：这份副本接下来会被整个部署进游戏目录，
+        # 所以不要 `.bak` 也不要撤销记录（两种情况都是 127 份冗余，实测
+        # 19 MB / 112 MB）。写错了重跑一次批量即可，撤销在这里没有落脚点。
+        res = w._do_apply(items, keep_backup=False, make_undo=False)
+        r["baks"] = drop_backups(dst)
+        r["applied"] = int(res.get("ok") or 0)
+        r["settled"] = int(res.get("settled") or 0)
+        r["failed"] = int(res.get("fail") or 0)
+        r["errors"] = [str(x) for x in (res.get("errors") or [])][:20]
+        # 失败原因必须能落到 journal 里。只有总数的话，881 条失败查不下去：
+        # 不知道是「没匹配到原文」还是「代码骨架被拒」还是「目标文件没有该 key」。
+        reasons = {}
+        for f in (res.get("failed") or []):
+            why = str(f.get("reason") or "?").strip() or "?"
+            reasons[why] = reasons.get(why, 0) + 1
+        r["failReasons"] = dict(sorted(reasons.items(),
+                                       key=lambda kv: -kv[1])[:8])
+        r["undoId"] = res.get("undoId") or ""
+        if res.get("archive"):
+            r["archive"] = res.get("archive")
+            r["xl"] = res.get("xl") or ""
+    if ctx.deploy and items:
+        r["deploy"] = _deploy_one(ctx, cand, dst, items, r)
+    r["ok"] = True
 
 
-def _deploy_one(ctx, cand, dst, items):
-    """把副本按文件覆盖回原模组目录，返回报告（不抛异常）。"""
+def _deploy_one(ctx, cand, dst, items, r=None):
+    """把副本按文件覆盖回原模组目录，返回报告（不抛异常）。
+
+    顺便把这一轮的「行数 / 未译 / 失败」记进部署清单：下一次跑的时候，
+    这三个数就是「这个模组能不能整块跳过」的判据（S6）。
+    """
     rep = {"ok": False, "dry": bool(ctx.deploy_dry), "overwritten": 0,
            "added": 0, "same": 0, "notes": [], "error": ""}
     root = cand.get("root") or ""
     if not root or not os.path.isdir(root):
         rep["error"] = "原模组目录不存在"
         return rep
+    stats = {}
+    if r:
+        stats = {"rows": int(r.get("rows") or 0),
+                 "applied": int(r.get("applied") or 0),
+                 "untranslated": int(r.get("untranslated") or 0),
+                 "failed": int(r.get("failed") or 0)}
     try:
         import mod_deploy
         got = mod_deploy.deploy_mod(
             dst, root, undo_root=root, dry_run=ctx.deploy_dry,
-            pairs_list=[(x.get("orig"), x.get("trans")) for x in (items or [])])
+            pairs_list=[(x.get("orig"), x.get("trans")) for x in (items or [])],
+            done=stats)
         rep["ok"] = bool(got.get("ok"))
         rep["overwritten"] = int(got.get("overwritten") or 0)
         rep["added"] = int(got.get("added") or 0)
@@ -384,39 +449,70 @@ def _deploy_one(ctx, cand, dst, items):
 
 
 def run(ctx, cands):
-    """按顺序跑完队列，逐个上报。单个失败不中断。"""
+    """按顺序跑完队列，逐个上报。单个失败不中断。
+
+    S4：复制 + 加载下一个模组和翻当前模组**同时进行**。实测一轮 19.5 分钟里
+    加载 11.8 分钟、机翻 7.7 分钟，而这两段用的是完全不同的资源（WolvenKit
+    子进程与磁盘 vs 模型），串着做等于把短的那一段白等掉。这里留一个预处理
+    线程（同一时刻只有一个，别把磁盘打满），`prepare()` 不发事件，整条事件流
+    仍是单线程按模组顺序发出。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     results = []
     total = len(cands)
     ctx.on_event({"type": "mb-start", "total": total, "outRoot": ctx.out_root})
-    for i, cand in enumerate(cands):
-        if ctx.stopped():
-            ctx.on_event({"type": "mb-done", "cancelled": True,
-                          "done": len(results), "total": total,
-                          "results": results})
-            return results
-        name = cand.get("name") or cand.get("key") or ""
-        t0 = time.time()
-        ctx.on_event({"type": "mb-item", "phase": "start", "index": i,
-                      "total": total, "key": cand.get("key"), "name": name})
-        r = {"key": cand.get("key"), "name": name, "root": cand.get("root", ""),
-             "ok": False, "error": "", "dst": "", "copied": 0, "bytes": 0,
-             "skipped": 0, "own": 0, "rows": 0, "todo": 0, "already": 0, "tm": 0,
-             "machine": 0, "applied": 0, "settled": 0, "failed": 0, "errors": [],
-             "untouched": 0, "untranslated": 0, "untranslatedSample": [],
-             "failReasons": {}, "deploy": None,
-             "undoId": "", "empty": False, "archive": "", "xl": "", "baks": 0}
-        try:
-            run_one(ctx, cand, r)
-        except Cancelled:
-            r["error"] = "cancelled"
-        except Exception as ex:      # noqa: BLE001 - 单个 mod 炸了不该拖垮整队
-            import traceback
-            traceback.print_exc()
-            r["error"] = str(ex)
-        r["seconds"] = round(time.time() - t0, 1)
-        results.append(r)
-        ctx.on_event(dict(r, type="mb-item", phase="done", index=i,
-                          total=total, done=len(results)))
+    pool = ThreadPoolExecutor(max_workers=1)
+
+    def submit(i):
+        return pool.submit(prepare, ctx, cands[i])
+
+    pending = None
+    try:
+        if total:
+            pending = (0, submit(0))
+        for i, cand in enumerate(cands):
+            if ctx.stopped():
+                break
+            name = cand.get("name") or cand.get("key") or ""
+            t0 = time.time()
+            ctx.on_event({"type": "mb-item", "phase": "start", "index": i,
+                          "total": total, "key": cand.get("key"), "name": name})
+            r = {"key": cand.get("key"), "name": name, "root": cand.get("root", ""),
+                 "ok": False, "error": "", "dst": "", "copied": 0, "bytes": 0,
+                 "skipped": 0, "own": 0, "rows": 0, "todo": 0, "already": 0, "tm": 0,
+                 "machine": 0, "applied": 0, "settled": 0, "failed": 0, "errors": [],
+                 "untouched": 0, "untranslated": 0, "untranslatedSample": [],
+                 "failReasons": {}, "deploy": None, "skippedDone": "",
+                 "prepSeconds": 0.0, "workSeconds": 0.0,
+                 "undoId": "", "empty": False, "archive": "", "xl": "", "baks": 0}
+            try:
+                if pending is not None and pending[0] == i:
+                    prep = pending[1].result()
+                else:                    # 上一轮的预处理被取消/没排上
+                    prep = prepare(ctx, cand)
+                pending = None
+                # 拿到这一步的结果就立刻把下一个排上：它会在下面这套翻译、
+                # 写回、部署跑完之前就把复制和解析做完。
+                if i + 1 < total and not ctx.stopped():
+                    pending = (i + 1, submit(i + 1))
+                r["prepSeconds"] = prep.get("seconds") or 0.0
+                t_work = time.time()
+                finish(ctx, cand, prep, r)
+                r["workSeconds"] = round(time.time() - t_work, 2)
+            except Cancelled:
+                r["error"] = "cancelled"
+            except Exception as ex:      # noqa: BLE001 - 单个 mod 炸了不该拖垮整队
+                import traceback
+                traceback.print_exc()
+                r["error"] = str(ex)
+            r["seconds"] = round(time.time() - t0, 1)
+            results.append(r)
+            ctx.on_event(dict(r, type="mb-item", phase="done", index=i,
+                              total=total, done=len(results)))
+    finally:
+        # 取消时可能还有一次复制在飞：让它自己看到 cancel 退出，别把线程丢在后台
+        pool.shutdown(wait=True)
     ctx.on_event({"type": "mb-done", "total": total, "done": len(results),
                   "cancelled": ctx.stopped(), "results": results})
     return results

@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -143,28 +144,69 @@ def _error_tail(lines, keep=8):
     return "\n".join(picked[-keep:])
 
 
+# 多线程同时 CreateProcess 时，一个线程刚建好的管道写端可能被另一个线程正在
+# 启动的进程继承（Windows 的句柄继承是进程级、有窗口期的）。继承者只要活着，
+# 管道就读不到 EOF —— 调用方会一直卡在 communicate() 里。所以「起进程」这一段
+# 串行，输出也不走管道（见下）。
+_SPAWN_LOCK = threading.Lock()
+
+
+def _kill_tree(proc):
+    """连子进程一起杀掉。超时往往就是孙进程占着句柄不放。"""
+    try:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=15)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 def run(cli, args, timeout=DEFAULT_TIMEOUT, log=None):
     """执行一条 CLI 命令，返回过滤后的输出行列表。
 
     失败时抛 WkitError，并把完整输出挂在 .output 上，方便上层展示。
+
+    **输出写临时文件，不走管道。** 走管道时，只要 CLI 启动的子进程继承了写端，
+    主进程提前退出后管道仍不关，`communicate()` 会一直等 EOF —— 实测批量卡死
+    半小时以上：WolvenKit 早就没在跑了，Python 却还堵在读取上（超时之后
+    `subprocess.run` 还会再调一次 `communicate()`，那次没有超时，等于永久挂死）。
+    写完等进程退出再读文件，孙进程占着句柄也没关系。
     """
     if not cli:
         raise WkitError("未找到 WolvenKit.CLI.exe，请先在设置里指定路径。")
     cmd = [str(cli)] + [str(a) for a in args]
+    fd, out_path = tempfile.mkstemp(prefix="wkit-", suffix=".out")
+    os.close(fd)
     try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            timeout=timeout,
-        )
-    except FileNotFoundError:
-        raise WkitError("WolvenKit.CLI.exe 无法启动：%s" % cli)
-    except subprocess.TimeoutExpired:
-        raise WkitError("WolvenKit 超时（%d 秒）：%s" % (timeout, args[0] if args else ""))
+        try:
+            with _SPAWN_LOCK:
+                with open(out_path, "wb") as fh:
+                    proc = subprocess.Popen(cmd, stdout=fh,
+                                            stderr=subprocess.STDOUT,
+                                            stdin=subprocess.DEVNULL)
+        except FileNotFoundError:
+            raise WkitError("WolvenKit.CLI.exe 无法启动：%s" % cli)
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            try:
+                proc.wait(timeout=10)
+            except Exception:
+                pass
+            raise WkitError("WolvenKit 超时（%d 秒）：%s"
+                            % (timeout, args[0] if args else ""))
+        with open(out_path, "rb") as f:
+            text = f.read().decode("utf-8", "replace")
+    finally:
+        try:
+            os.remove(out_path)
+        except OSError:
+            pass
 
-    text = (proc.stdout or b"").decode("utf-8", "replace")
     lines = _filter(text)
     if log:
         for line in lines:

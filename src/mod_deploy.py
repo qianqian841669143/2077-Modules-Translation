@@ -119,11 +119,14 @@ def pairs(mod_root):
     return out
 
 
-def record(mod_root, files=None, pairs_list=None, keep_pairs=True):
+def record(mod_root, files=None, pairs_list=None, keep_pairs=True, done=None):
     """把一次部署的结果并进清单。
 
     `files` 是 {相对路径: {"sha1":..., "added":...}}，与已有条目合并
     （同一个文件重新部署时以最新一次为准）。
+
+    `done` 记这一轮的成绩（行数 / 未译 / 失败），供「已部署且源未变就整块跳过」
+    判断——上一轮还有没翻出来的行，就说明这个模组还没做完，不能跳。
     """
     data = load()
     mods = data.setdefault("mods", {})
@@ -145,14 +148,50 @@ def record(mod_root, files=None, pairs_list=None, keep_pairs=True):
             new_pairs.append([k[0], k[1]])
         if len(new_pairs) > MAX_PAIRS:
             new_pairs = new_pairs[-MAX_PAIRS:]
+    stat = dict(cur.get("done") or {})
+    if done:
+        stat.update(done)
+        stat["at"] = __import__("time").strftime("%Y-%m-%d %H:%M:%S")
     mods[key] = {
         "root": os.path.abspath(str(mod_root or "")),
         "at": __import__("time").strftime("%Y-%m-%d %H:%M:%S"),
         "files": merged,
         "pairs": new_pairs,
+        "done": stat,
     }
     save(data)
     return mods[key]
+
+
+def up_to_date(mod_root):
+    """S6：这个模组是不是「已经部署好、源文件也没动、没有漏译」。
+
+    返回非空字符串 = 可以整块跳过（内容就是报告里的原因）。判据全部来自清单，
+    不重新解析模组：
+
+      * 清单里记过 `done`，且上一轮 `untranslated` / `failed` 都是 0；
+      * 清单里每个文件的 sha1 与磁盘现状一致 —— 这一条同时证明了两件事：
+        我们写进去的译文还在，而且用户没有解压还原过（还原会把原件换回来，
+        hash 立刻变）。
+    """
+    e = entry(mod_root)
+    if not e:
+        return ""
+    done = e.get("done") or {}
+    if not done:
+        return ""
+    if int(done.get("untranslated") or 0) or int(done.get("failed") or 0):
+        return ""
+    files = e.get("files") or {}
+    if not files:
+        return ""
+    for rel, info in files.items():
+        if not isinstance(info, dict) or not info.get("sha1"):
+            return ""
+        p = os.path.join(str(mod_root), str(rel).replace("\\", os.sep))
+        if not os.path.isfile(p) or file_sha1(p) != str(info["sha1"]):
+            return ""
+    return "已部署且源文件未变"
 
 
 def forget_in(mod_root, memory, lang):
@@ -174,7 +213,7 @@ def forget_in(mod_root, memory, lang):
 
 
 def deploy_mod(src_dir, dst_dir, undo_root=None, dry_run=False,
-               label="批量部署", pairs_list=None, log=None):
+               label="批量部署", pairs_list=None, done=None, log=None):
     """把 `src_dir` 里有的文件覆盖到 `dst_dir`，返回报告。
 
     报告字段：
@@ -251,7 +290,7 @@ def deploy_mod(src_dir, dst_dir, undo_root=None, dry_run=False,
             tx.discard()
 
     if not dry_run and rep["files"]:
-        record(dst, files=rep["files"], pairs_list=pairs_list)
+        record(dst, files=rep["files"], pairs_list=pairs_list, done=done)
     if log:
         log("部署 %s: 覆盖 %d / 新增 %d / 相同 %d" % (
             os.path.basename(dst.rstrip("\\/")), rep["overwritten"],

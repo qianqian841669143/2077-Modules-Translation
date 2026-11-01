@@ -10,6 +10,7 @@ tm.py —— 翻译记忆(Translation Memory)
 import hashlib
 import json
 import os
+import threading
 import time
 
 import appconfig
@@ -38,6 +39,10 @@ class Memory(object):
         self.entries = {}
         self._dirty = False
         self._last_save = 0.0
+        # 批量在 S4 里会同时有两个会话在跑（一个加载下一个模组、一个在机翻当前
+        # 模组），两边都可能触发 save()。以前只用同一个 `.tmp` 直接写：
+        # 两段 json 交错写进同一份文件，再 os.replace 就成了坏档。
+        self._save_lock = threading.Lock()
         self.load()
 
     # ------------------------------------------------------------ 磁盘
@@ -62,12 +67,13 @@ class Memory(object):
             return
         self._last_save = now
         try:
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            tmp = self.path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"version": 1, "entries": self.entries}, f,
-                          ensure_ascii=False)
-            os.replace(tmp, self.path)
+            with self._save_lock:
+                os.makedirs(os.path.dirname(self.path), exist_ok=True)
+                tmp = self.path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump({"version": 1, "entries": self.entries}, f,
+                              ensure_ascii=False)
+                os.replace(tmp, self.path)
             self._dirty = False
         except Exception:
             pass

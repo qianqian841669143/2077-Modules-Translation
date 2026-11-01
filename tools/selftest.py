@@ -8,11 +8,14 @@
 没有测试模组时只做「语法/基本行为」自检, 不会失败。
 """
 import io
+import itertools
 import json
 import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "src"))
@@ -3939,6 +3942,145 @@ def check_retranslate_forget():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_skip_up_to_date():
+    """S6：已部署 + 源文件没变 + 上一轮没有漏译，才允许整块跳过。"""
+    import mod_batch as MB
+    import mod_deploy as MD
+
+    old = MD.config_dir
+    tmp = tempfile.mkdtemp(prefix="mt-s6-")
+    try:
+        MD.config_dir = lambda: os.path.join(tmp, "userdata")
+        mod = os.path.join(tmp, "mod")
+        os.makedirs(mod)
+        zh = os.path.join(mod, "zh-cn.json")
+        with io.open(zh, "w", encoding="utf-8") as f:
+            f.write('{"All": "全部"}')
+        good = {"rows": 1, "applied": 1, "untranslated": 0, "failed": 0}
+        MD.record(mod, files={"zh-cn.json": {"sha1": MD.file_sha1(zh),
+                                             "added": True}},
+                  pairs_list=[("All", "全部")], done=good)
+        assert MD.up_to_date(mod), "已部署且源未变，该跳没跳"
+
+        # 用户解压还原了：内容变 -> 不能跳
+        with io.open(zh, "w", encoding="utf-8") as f:
+            f.write('{"All": "All"}')
+        assert not MD.up_to_date(mod), "源文件变了还跳"
+
+        # 上一轮还有漏译：说明这个模组没做完，不能跳
+        with io.open(zh, "w", encoding="utf-8") as f:
+            f.write('{"All": "全部"}')
+        MD.record(mod, files={"zh-cn.json": {"sha1": MD.file_sha1(zh),
+                                             "added": True}},
+                  done={"rows": 2, "applied": 1, "untranslated": 1, "failed": 0})
+        assert not MD.up_to_date(mod), "有漏译还跳"
+
+        # 产物被删了：不能跳
+        MD.record(mod, done=good)
+        os.remove(zh)
+        assert not MD.up_to_date(mod), "产物不在了还跳"
+
+        # 部署关掉 / 只预演时，批量不该走跳过（否则这个模组什么都不产出）
+        ctx_off = MB.Ctx(spawn_worker=lambda: None, out_root=tmp,
+                         deploy=False, deploy_dry=False)
+        ctx_dry = MB.Ctx(spawn_worker=lambda: None, out_root=tmp,
+                         deploy=True, deploy_dry=True)
+        assert MB._skip_reason(ctx_off, {"root": mod}) == ""
+        assert MB._skip_reason(ctx_dry, {"root": mod}) == ""
+    finally:
+        MD.config_dir = old
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_prefetch_pipeline():
+    """S4：下一个模组的复制+加载提前做，事件顺序与结果不变。"""
+    import mod_batch as MB
+
+    tmp = tempfile.mkdtemp(prefix="mt-s4-")
+    try:
+        out = os.path.join(tmp, "out")
+        os.makedirs(out)
+        cands = []
+        for i in range(2):
+            root = os.path.join(tmp, "m%d" % i)
+            os.makedirs(root)
+            with io.open(os.path.join(root, "a.reds"), "w", encoding="utf-8") as f:
+                f.write("class A {}\n")
+            cands.append({"key": "k%d" % i, "name": "m%d" % i, "root": root})
+
+        log = []
+
+        class W(object):
+            def __init__(self, idx):
+                self.idx = idx
+                self.rows = []
+                self._stop = threading.Event()
+
+            def _do_load(self, dst, opts):
+                log.append(("load", self.idx))
+                self.rows = [{"file": "a.reds", "target": "a.reds", "line": 1,
+                              "ctx": "a", "orig": "Hello there", "trans": "",
+                              "kind": "text", "root": dst}]
+                return {"ok": True, "rows": self.rows, "tmHits": 0}
+
+            def _run_translate(self, todo, base, model, tgt):
+                log.append(("mt", self.idx))
+                for j in todo:
+                    self.rows[j]["trans"] = "你好"
+
+            def _do_apply(self, items, keep_backup=False, make_undo=False):
+                log.append(("apply", self.idx))
+                assert items and items[0]["trans"] == "你好", items
+                return {"ok": len(items), "fail": 0, "errors": []}
+
+        counter = itertools.count()
+        ctx = MB.Ctx(spawn_worker=lambda: W(next(counter)),
+                     out_root=out, deploy=False)
+        events = []
+        ctx.on_event = events.append
+        res = MB.run(ctx, cands)
+        assert len(res) == 2, res
+        assert [r["key"] for r in res] == ["k0", "k1"], res
+        assert all(r["ok"] and r["applied"] == 1 for r in res), res
+        # 每个模组都会加载、翻译、写回；预处理线程不改变这个顺序
+        for idx in (0, 1):
+            assert ("load", idx) in log and ("mt", idx) in log \
+                and ("apply", idx) in log, log
+        assert [e["type"] for e in events if e.get("type") == "mb-item"
+                and e.get("phase") == "done"] == ["mb-item", "mb-item"], events
+        assert events[-1]["type"] == "mb-done" and events[-1]["done"] == 2, events[-1]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_wkit_no_pipe_hang():
+    """WolvenKit 的输出不能走管道：孙进程继承写端会让调用方永久挂死。
+
+    实测那次批量：CLI 早就退出了，Python 还堵在 communicate() 里；超时之后
+    subprocess.run 会再 communicate() 一次（那次没有超时），于是永远不返回。
+    现在输出写临时文件，只等主进程退出。
+    """
+    import localization.wkit as W
+
+    hang = "import subprocess,sys\n" \
+           "subprocess.Popen([sys.executable,'-c','import time;time.sleep(8)']," \
+           " stdout=sys.stdout)\n" \
+           "print('ok-line')\n"
+    t0 = time.time()
+    lines = W.run(sys.executable, ["-c", hang], timeout=25)
+    dt = time.time() - t0
+    assert "ok-line" in lines, lines
+    assert dt < 5, "孙进程占着输出句柄时还等了 %.1f 秒" % dt
+
+    t0 = time.time()
+    try:
+        W.run(sys.executable, ["-c", "import time;time.sleep(30)"], timeout=1)
+        raise AssertionError("该超时没超时")
+    except W.WkitError as ex:
+        assert "超时" in str(ex), ex
+    assert time.time() - t0 < 15, "超时后没及时收手"
+
+
 def main():
     print("== 回填自测 ==")
     check_apply_roundtrip()
@@ -4073,6 +4215,12 @@ def main():
     print("   OK: 目标文件里已有的译文不再重写 (settled)")
     check_retranslate_forget()
     print("   OK: 重译按钮 (只删机翻记忆 / 删掉续跑记录那行)")
+    check_skip_up_to_date()
+    print("   OK: 已部署且源未变才整块跳过 (S6)")
+    check_prefetch_pipeline()
+    print("   OK: 预处理流水线 (S4)：下一个模组提前加载，结果与事件不变")
+    check_wkit_no_pipe_hang()
+    print("   OK: WolvenKit 输出不走管道 (孙进程占句柄也不挂) / 超时连树杀掉")
 
     if not os.path.isdir(VORTEX):
         print("\n未找到 Vortex 目录, 跳过真实模组测试: %s" % VORTEX)

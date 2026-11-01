@@ -133,6 +133,9 @@ class Api(object):
         self._mb_results = []
         self._mb_items = []
         self._mb_worker = None
+        # S4 之后同一时刻可能有两个会话在跑（一个加载下一个模组、一个在翻当前
+        # 模组），取消时要把它们都喊停，否则被取消的那一轮还在后台复制。
+        self._mb_workers = []
         # 批量/扫描的事件队列：后台线程只往里塞，前端从 evbus 的只读 HTTP
         # 端口取走（fetch）。不再走 pywebview 的 JS 桥——桥每调一次都要新开
         # 线程再 evaluate_js 回写，跑到几十个 mod 会偶发 0xc0000005。
@@ -1761,6 +1764,9 @@ class Api(object):
                    # 目标文件里本来就有的译文（这次没重写）。第 11 轮 17,060 行
                    # 几乎全是这类，留在记录里才能看出「重跑变快」是不是它们省的。
                    "settled": int(r.get("settled") or 0),
+                   # S6：整块跳过的模组（已部署且源文件没动）。带了原因才好分辨
+                   # 「真的没东西要翻」和「跳错了」。
+                   "skipped": r.get("skippedDone") or "",
                    "errors": [str(x) for x in (r.get("errors") or [])][:5],
                    "at": time.strftime("%Y-%m-%d %H:%M:%S")}
             with open(p, "a", encoding="utf-8") as f:
@@ -1930,10 +1936,12 @@ class Api(object):
         self._bus.clear()
         self._mb_results = []
         self._mb_worker = None
+        self._mb_workers = []
 
         def spawn():
             w = self.spawn_worker()
             self._mb_worker = w
+            self._mb_workers.append(w)
             return w
 
         def work():
@@ -1972,8 +1980,11 @@ class Api(object):
 
     def batch_cancel(self):
         self._mb_cancel.set()
-        w = getattr(self, "_mb_worker", None)
-        if w is not None:
+        # S4 下可能有两个会话（当前模组 + 正在预处理的下一个模组），都喊停
+        workers = list(getattr(self, "_mb_workers", []) or [])
+        if getattr(self, "_mb_worker", None) is not None:
+            workers.append(self._mb_worker)
+        for w in workers:
             try:
                 w._stop.set()
             except Exception:
@@ -2005,7 +2016,8 @@ class Api(object):
         一个 mod 一行：覆盖 / 新增 / 相同 / 失败 / 备注。备注里记的是
         「照覆盖但值得看一眼」的情况（原件已含中文、写入失败……）。
         """
-        rows = [r for r in (results or []) if isinstance(r.get("deploy"), dict)]
+        rows = [r for r in (results or [])
+                if isinstance(r.get("deploy"), dict) or r.get("skippedDone")]
         if not rows:
             return ""
         import csv
@@ -2018,8 +2030,10 @@ class Api(object):
                 w.writerow(["mod", "预演", "覆盖", "新增", "相同",
                             "未译", "失败", "备注"])
                 for r in rows:
-                    d = r["deploy"]
+                    d = r["deploy"] if isinstance(r.get("deploy"), dict) else {}
                     why = []
+                    if r.get("skippedDone"):
+                        why.append("已是最新，跳过：%s" % r["skippedDone"])
                     if d.get("error"):
                         why.append(str(d["error"]))
                     for n in (d.get("notes") or [])[:5]:

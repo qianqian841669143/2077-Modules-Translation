@@ -2374,9 +2374,11 @@ function onMbItem(e) {
   let txt = T("完成");
   if (e.error === "cancelled") { st = "skip"; txt = T("已取消"); }
   else if (e.error) { st = "err"; txt = T("失败"); }
+  else if (e.skippedDone) { txt = T("已是最新"); }
   else if (!e.applied) { st = "skip"; txt = T("无译文可写"); }
   const bits = [];
-  bits.push(T("复制 %d 个文件").replace("%d", e.copied || 0));
+  if (e.skippedDone) bits.push(e.skippedDone);
+  else bits.push(T("复制 %d 个文件").replace("%d", e.copied || 0));
   bits.push(T("待翻 %d").replace("%d", e.todo || 0));
   if (e.tm) bits.push(T("记忆命中 %d").replace("%d", e.tm));
   if (e.machine) bits.push(T("机翻 %d").replace("%d", e.machine));

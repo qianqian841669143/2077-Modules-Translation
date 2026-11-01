@@ -638,22 +638,24 @@ def apply_text_target(path, rows):
             written += appended
         fails.extend((k, o, "目标语言包里没有这个条目") for k, o, _t in rest)
     if edits or appended:
+        # 注意：这里是**追加之后**的形状。以前写成「before + appended」，
+        # 等于把追加的行数算了两遍：目标语言包是模板 stub 时（MBC 的
+        # CutWeightChineseSimplified.reds 要补 1320 条）每次都对不上，
+        # 整份文件被判「会破坏括号结构」而放弃写入 —— 一条也补不进去，
+        # 而报错里打的 before/after 又是一样的，看着像校验错了。
         before = _punct_shape(text, lang)
-        # 从后往前替换, 前面的偏移才不会被打乱（追加在替换之后做, 位置已算好）
+        # 从后往前替换, 前面的偏移才不会被打乱（追加的行在文件末尾，不受影响）
         seen = set()
         for start, end, new in sorted(edits, key=lambda x: x[0], reverse=True):
             if (start, end) in seen:      # 同一个字面量被写了两遍，跳过
                 continue
             seen.add((start, end))
             text = text[:start] + new + text[end:]
-        # 写盘前对一次结构：括号数量必须与写之前一致（追加的每一行自带一对）。
+        # 写盘前对一次结构：括号数量必须与写之前一致。
         # 偏移算错、切掉 `);` 这类事故在 REDscript 里是整份脚本编译失败，
         # 一旦发生就得靠人从压缩包恢复，所以宁可这一批不写。
         after = _punct_shape(text, lang)
-        want = (None if before is None or after is None
-                else (before[0] + appended, before[1] + appended,
-                      before[2], before[3]))
-        if want is not None and after != want:
+        if before is not None and after is not None and after != before:
             return 0, [(k, o, "写回会破坏括号结构（%s -> %s），已放弃"
                         % (before, after)) for k, o, _t in rows]
         try:
