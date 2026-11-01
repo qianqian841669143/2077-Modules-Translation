@@ -330,9 +330,14 @@ label.chk input { margin: 0; }
 .loc-row .loc-lang { color: var(--muted); }
 .loc-row .loc-cnt { color: var(--muted); text-align: right; }
 
-/* 处理中遮罩 */
+/* 处理中遮罩
+ *
+ * 铁律：这层永远在最上面。机翻和批量共用一个 #overlay，跑起来的时候任何
+ * 面板 / 弹窗都不许压在它上面——否则用户以为界面还在响应当前的操作，
+ * 实际上下面还有半截可点的控件。需要看面板就走遮罩上的入口，遮罩临时收起。
+ */
 .overlay {
-  position: fixed; inset: 0; z-index: 80;
+  position: fixed; inset: 0; z-index: 400;
   display: none; align-items: center; justify-content: center;
   flex-direction: column; gap: 14px;
   background: rgba(16, 24, 40, .32);
@@ -349,8 +354,8 @@ label.chk input { margin: 0; }
 .overlay-text { color: #fff; font-size: 13px; text-shadow: 0 1px 3px rgba(0,0,0,.45); }
 /* 机翻：全遮盖，进度与停止都在遮罩里；不用禁用控件，遮罩本身挡住一切 */
 .overlay.tr { background: rgba(10, 15, 25, .88); backdrop-filter: blur(2px); }
-/* 批量：同样的盖法。面板本身是 .mask(50)，运行时加 .mask.top(300) 浮在遮罩上，
-   用户把面板关掉也不影响遮罩继续挡住主界面。 */
+/* 批量：同样的盖法。遮罩在最上层（400），面板(50) 在下面；要看列表就点遮罩上的
+   「显示面板」，遮罩临时收起、面板关掉后立刻回来。 */
 .overlay.batch { background: rgba(10, 15, 25, .88); backdrop-filter: blur(2px); }
 .ov-progress { display: none; flex-direction: column; gap: 10px;
                width: min(420px, 72vw); }

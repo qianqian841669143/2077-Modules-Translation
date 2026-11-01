@@ -392,13 +392,20 @@ function bind() {
     if (mode === "batch") await pywebview.api.batch_cancel();
     else await pywebview.api.stop_translate();
   };
-  $("btn-ov-panel").onclick = () => openModal("modal-queue");
+  $("btn-ov-panel").onclick = () => showBatchPanel();
 
+  const closeMask = (m) => {
+    if (!m) return;
+    m.classList.remove("on");
+    // 批量还在跑：面板一关就把遮罩放回去。遮罩永远在最上层，才是真正挡住
+    // 主界面的那一层；只靠面板会把「关掉面板还能点别的」这个口子留着。
+    if (m.id === "modal-queue" && state.mbRunning) enterBatchMask();
+  };
   document.querySelectorAll("[data-close]").forEach((b) => {
-    b.onclick = () => b.closest(".mask").classList.remove("on");
+    b.onclick = () => closeMask(b.closest(".mask"));
   });
   document.querySelectorAll(".mask").forEach((m) => {
-    m.onclick = (e) => { if (e.target === m) m.classList.remove("on"); };
+    m.onclick = (e) => { if (e.target === m) closeMask(m); };
   });
 
   $("btn-test").onclick = async () => {
@@ -2077,18 +2084,18 @@ async function pollMbEvents() {
 }
 
 function openQueue() {
+  if (state.mbRunning) { showBatchPanel(); return; }  // 跑着的时候遮罩在最上层
   openModal("modal-queue");
   refreshQueueInfo();
   if (state.mbItems.length) renderQueue();
-  if (state.mbRunning) enterBatchMask();   // 面板可能在跑的时候被关掉过
   startMbPoll();   // 面板一打开就开始取事件：后面可能已经有一轮在跑
 }
 
 /* 批量遮罩：和机翻同一个思路，跑的时候整块界面盖住，停止入口在遮罩里。
  *
- * 批量面板本身是 .mask，开着的时候已经挡住主界面——问题是它能被随手关掉，
- * 关掉之后主界面就活了，还能点出第二次批量。所以遮罩独立于面板存在：
- * 面板开着时给它加 .mask.top(300) 浮在遮罩(80) 之上，关掉面板后遮罩仍在。
+ * 遮罩永远在最上层（style.css 里 .overlay 的 z-index 是 400，比 .mask.top 的
+ * 300 还高）。批量面板本身是 .mask，跑起来会被遮罩盖住——要看列表就点遮罩上
+ * 的「显示面板」，遮罩临时收起；面板一关，遮罩立刻回来接着挡。
  */
 function enterBatchMask() {
   const ov = $("overlay");
@@ -2101,8 +2108,6 @@ function enterBatchMask() {
   const st = $("btn-tr-stop");
   if (st) { st.dataset.mode = "batch"; st.textContent = T("停止批量"); st.disabled = false; }
   if ($("btn-ov-panel")) $("btn-ov-panel").style.display = "";
-  const qm = $("modal-queue");
-  if (qm) qm.classList.add("top");
   const app = document.querySelector("main.app");
   if (app) app.inert = true;
   state.busy = true;
@@ -2115,11 +2120,17 @@ function exitBatchMask() {
   const st = $("btn-tr-stop");
   if (st) { delete st.dataset.mode; st.textContent = T("停止机翻"); st.disabled = false; }
   if ($("btn-ov-panel")) $("btn-ov-panel").style.display = "none";
-  const qm = $("modal-queue");
-  if (qm) qm.classList.remove("top");
   const app = document.querySelector("main.app");
   if (app) app.inert = false;
   state.busy = false;
+}
+
+/* 遮罩上的「显示面板」：先收起遮罩再看列表。面板本身是全屏 .mask，收起期间
+ * 依旧挡得住主界面；面板关掉时再把遮罩放回去。 */
+function showBatchPanel() {
+  const ov = $("overlay");
+  if (ov) ov.classList.remove("on");
+  openModal("modal-queue");
 }
 
 async function pickMbOutDir() {
@@ -2147,7 +2158,9 @@ async function refreshQueueInfo() {
     if (r.running) {
       state.mbRunning = true;
       $("btn-q-cancel").style.display = "";
-      enterBatchMask();
+      // 面板开着的时候不要再把遮罩压上来（那会把自己盖住）
+      const qm = $("modal-queue");
+      if (!(qm && qm.classList.contains("on"))) enterBatchMask();
     }
   } catch (_) {}
 }
