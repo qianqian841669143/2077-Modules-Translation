@@ -4,12 +4,16 @@ web_app.py —— pywebview 版前端(HTML/CSS/JS) + Python 后端
 
 界面在 web/ 下, 通过 js_api 调用这里的方法; 长任务用 evaluate_js 回推事件。
 """
+import collections
+import faulthandler
+import hashlib
 import json
 import os
 import re
 import sys
 import tempfile
 import threading
+import time
 
 import webview
 
@@ -114,9 +118,13 @@ class Api(object):
         # 表格那边的 self.rows 完全不受影响；这里只留队列自己的标志。
         self._mb_cancel = threading.Event()
         self._mb_running = False
+        self._mb_scanning = False
         self._mb_results = []
         self._mb_items = []
         self._mb_worker = None
+        # 批量/扫描的事件队列：后台线程只往里塞，前端 batch_poll 取走。
+        # 直接 evaluate_js 是跨线程碰 WebView2，跑几十个 mod 会偶发 0xc0000005。
+        self._mb_q = None
         # Vortex 三层映射（下载包 / 安装缓存 / 游戏部署）的扫描缓存。
         # 目录一变就作废；只读不写，不会影响 Vortex。
         self._vmap = None
@@ -1494,6 +1502,142 @@ class Api(object):
             return ""
         return d
 
+    # ---------------------------------------------------------- 批量事件 / 续跑
+    #
+    # 2026-11-01 两次 0xc0000005（python314.dll）：崩溃转储里最后一条事件是
+    # mb-item 的 evaluate_js 脚本，说明后台线程直接调 pywebview 的
+    # window.evaluate_js 是元凶——那是跨到 WebView2 UI 线程的操作，单次没事，
+    # 连着推几十个 mod 就会踩中。改成「后台线程只塞 deque，前端定时 batch_poll
+    # 取走」：队列操作只碰 Python 对象，跨线程安全。
+
+    def _batch_log(self, line):
+        """批量进度日志。窗口被 C 层崩溃带走时，这里能看到断在第几个 mod。"""
+        try:
+            d = os.path.join(config_dir(), "logs")
+            os.makedirs(d, exist_ok=True)
+            p = os.path.join(d, "batch.log")
+            if os.path.exists(p) and os.path.getsize(p) > 512 * 1024:
+                os.replace(p, p + ".old")
+            with open(p, "a", encoding="utf-8") as f:
+                f.write("%s %s\n" % (time.strftime("%m-%d %H:%M:%S"), line))
+        except Exception:
+            pass
+
+    def _mb_push(self, obj):
+        """把事件放进队列（可在任意线程调用），顺手记日志与续跑记录。"""
+        q = getattr(self, "_mb_q", None)
+        if q is not None:
+            try:
+                q.append(obj)
+            except Exception:
+                pass
+        t = obj.get("type") or ""
+        if t == "mb-item":
+            if obj.get("phase") == "start":
+                self._batch_log("start %s/%s %s" % (
+                    int(obj.get("index") or 0) + 1, int(obj.get("total") or 0),
+                    obj.get("name") or ""))
+            else:
+                self._batch_log("done  %s ok=%s rows=%s todo=%s applied=%s failed=%s %s" % (
+                    obj.get("name") or "", obj.get("ok"), obj.get("rows"),
+                    obj.get("todo"), obj.get("applied"), obj.get("failed"),
+                    obj.get("error") or ""))
+                self._mb_journal(obj)
+        elif t in ("mb-start", "mb-scanned", "mb-done"):
+            keys = ("total", "done", "cancelled", "usable", "cached")
+            self._batch_log("%s %s" % (t, {k: obj[k] for k in keys if k in obj}))
+
+    def batch_poll(self, limit=300):
+        """前端定时取事件。批量线程不碰 WebView2，只有这里（UI 线程侧的轮询）碰。"""
+        out = []
+        q = getattr(self, "_mb_q", None)
+        if q is not None:
+            n = 0
+            while q and n < int(limit or 300):
+                try:
+                    out.append(q.popleft())
+                except Exception:
+                    break
+                n += 1
+        return {"ok": True, "events": out,
+                "running": bool(self._mb_running or self._mb_scanning)}
+
+    def _mb_journal_path(self):
+        d = os.path.join(config_dir(), "batch")
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            return ""
+        return os.path.join(d, "run.jsonl")
+
+    @staticmethod
+    def _mb_sig(staging, with_archive, skip_assets, target, model):
+        """参数指纹：换了模型 / 目标语言 / 复制规则，上次的续跑记录就作废。"""
+        raw = "|".join([staging or "", "1" if with_archive else "0",
+                        "1" if skip_assets else "0", target or "", model or ""])
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+    def _mb_journal(self, r):
+        """每跑完一个 mod 追加一行。崩了以后重跑能接着来，不用从头再等一小时。"""
+        p = self._mb_journal_path()
+        if not p:
+            return
+        try:
+            rec = {"key": r.get("key"), "ok": bool(r.get("ok")),
+                   "dst": r.get("dst") or "", "rows": r.get("rows"),
+                   "todo": r.get("todo"), "applied": r.get("applied"),
+                   "failed": r.get("failed"), "error": r.get("error") or "",
+                   "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+    def _mb_journal_open(self, sig, staging):
+        """开始新一轮：写参数指纹头。同参数的旧记录留着续跑，参数变了就重开。"""
+        p = self._mb_journal_path()
+        if not p:
+            return {}
+        done = self._mb_journal_read(sig)
+        if done:
+            return done
+        try:
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"__sig": sig, "staging": staging,
+                                    "at": time.strftime("%Y-%m-%d %H:%M:%S")},
+                                   ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+        return {}
+
+    def _mb_journal_read(self, sig):
+        """读回同一套参数下已经成功的条目（产物目录还在才算数）。"""
+        p = self._mb_journal_path()
+        done = {}
+        if not p or not os.path.isfile(p):
+            return done
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        o = json.loads(line)
+                    except Exception:
+                        continue          # 崩溃留下的半行，跳过
+                    if o.get("__sig"):
+                        if o["__sig"] != sig:
+                            return {}     # 参数变了，旧记录全部作废
+                        continue
+                    k = str(o.get("key") or "")
+                    dst = o.get("dst") or ""
+                    if k and o.get("ok") and dst and os.path.isdir(dst):
+                        done[k] = o
+        except Exception:
+            return {}
+        return done
+
     def spawn_worker(self):
         """派生一个独立会话，给批量在副本上跑单模组流程。
 
@@ -1520,8 +1664,10 @@ class Api(object):
             return {"ok": False,
                     "error": self._tr("请先在设置里指定 Vortex 安装缓存目录")}
         target = locale_pack.target_code(self.settings.get("target_lang", "简体中文"))
-        self._emit({"type": "busy", "on": True,
-                    "text": i18n.tr("正在预扫模组目录 ...")})
+        self._mb_q = collections.deque(maxlen=20000)
+        self._mb_scanning = True
+        self._mb_push({"type": "busy", "on": True,
+                       "text": i18n.tr("正在预扫模组目录 ...")})
 
         def work():
             try:
@@ -1536,21 +1682,23 @@ class Api(object):
                     it.update(info)
                     keep.append(it)
                     if i % 5 == 0 or i == total - 1:
-                        self._emit({"type": "mb-scan", "done": i + 1,
-                                    "total": total, "name": it["name"]})
+                        self._mb_push({"type": "mb-scan", "done": i + 1,
+                                       "total": total, "name": it["name"]})
                 self._mb_items = keep
                 usable = [x for x in keep if x.get("todo")]
-                self._emit({"type": "mb-scanned", "items": keep,
-                            "total": len(keep), "usable": len(usable),
-                            "rows": sum(int(x.get("todo") or 0) for x in keep),
-                            "staging": root})
+                self._mb_push({"type": "mb-scanned", "items": keep,
+                               "total": len(keep), "usable": len(usable),
+                               "rows": sum(int(x.get("todo") or 0) for x in keep),
+                               "staging": root})
             except Exception as ex:
                 import traceback
                 traceback.print_exc()
-                self._emit({"type": "error", "action": "mb-scan",
-                            "message": str(ex)})
+                self._batch_log("scan error %s" % (ex,))
+                self._mb_push({"type": "error", "action": "mb-scan",
+                               "message": str(ex)})
             finally:
-                self._emit({"type": "busy", "on": False})
+                self._mb_scanning = False
+                self._mb_push({"type": "busy", "on": False})
 
         self._mb_cancel.clear()
         threading.Thread(target=work, daemon=True).start()
@@ -1577,8 +1725,24 @@ class Api(object):
         tgt = self.settings.get("target_lang", "简体中文")
         model = self.settings.get("model", "").strip()
 
+        # 续跑：同一套参数下已经跑完、产物目录还在的，直接跳过。
+        # 崩溃 / 手动关掉之后再点一次「开始」就接着来，不用从头再等一小时。
+        staging = (self.settings.get("staging_dir") or "").strip()
+        sig = self._mb_sig(staging, with_archive, skip_assets, tgt, model)
+        done = self._mb_journal_open(sig, staging)
+        cached = [it for it in items if str(it.get("key")) in done]
+        if cached:
+            items = [it for it in items if str(it.get("key")) not in done]
+            self._batch_log("resume: skip %d done, %d left" % (len(cached), len(items)))
+        if not items:
+            return {"ok": True, "started": False, "cached": len(cached),
+                    "total": 0,
+                    "message": self._tr("这 %d 个 mod 上次已经跑完了。要重跑请先「清空输出」。")
+                               % len(cached)}
+
         self._mb_running = True
         self._mb_cancel.clear()
+        self._mb_q = collections.deque(maxlen=20000)
         self._mb_results = []
         self._mb_worker = None
 
@@ -1594,20 +1758,24 @@ class Api(object):
                              with_archive=bool(with_archive),
                              skip_assets=bool(skip_assets),
                              base=base, model=model, target=tgt,
-                             on_event=self._emit, cancel=self._mb_cancel)
+                             on_event=self._mb_push, cancel=self._mb_cancel)
                 self._mb_results = MB.run(ctx, items)
             except Exception as ex:
                 import traceback
                 traceback.print_exc()
-                self._emit({"type": "error", "action": "mb",
-                            "message": str(ex)})
+                self._batch_log("run error %r" % (ex,))
+                self._mb_push({"type": "error", "action": "mb",
+                               "message": str(ex)})
             finally:
                 self._mb_running = False
                 self._mb_worker = None
 
+        self._batch_log("run start: %d mods, archive=%s assets_skip=%s base=%s model=%s"
+                        % (len(items), bool(with_archive), bool(skip_assets),
+                           base, model))
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True, "started": True, "total": len(items),
-                "outRoot": out_root}
+                "cached": len(cached), "outRoot": out_root}
 
     def batch_cancel(self):
         self._mb_cancel.set()
@@ -1665,6 +1833,13 @@ class Api(object):
                     pass
         except Exception as ex:
             return {"ok": False, "error": str(ex)}
+        # 续跑记录一起删掉，否则「清空输出」后重跑还会被当成已完成跳过。
+        try:
+            jp = self._mb_journal_path()
+            if jp and os.path.isfile(jp):
+                os.remove(jp)
+        except Exception:
+            pass
         return {"ok": True, "removed": n}
 
     # ------------------------------------------------------------ 语言包
@@ -2955,6 +3130,7 @@ class Api(object):
 
 
 _MUTEX = []
+_CRASH_FILES = []     # crash.log 的句柄必须活到进程结束，别让 GC 关掉
 
 
 def _startup_log(msg):
@@ -2986,8 +3162,49 @@ def single_instance():
         return True
 
 
+def _crash_ready():
+    """把会直接带走进程的 C 层崩溃写成日志。
+
+    2026-11-01 批量跑到第 28 个 mod 时整窗消失，事件日志里只有
+    `2077ModTranslator.exe … python314.dll … 0xc0000005`，没有 Python 栈，
+    等于没有现场。faulthandler 会在收到访问冲突时把**所有线程**的 Python
+    栈打出来，看得见是哪一行。
+    """
+    try:
+        d = os.path.join(config_dir(), "logs")
+        os.makedirs(d, exist_ok=True)
+        f = open(os.path.join(d, "crash.log"), "a", buffering=1, encoding="utf-8")
+        _CRASH_FILES.append(f)
+        f.write("\n==== %s  %s  pid=%s ====\n"
+                % (time.strftime("%Y-%m-%d %H:%M:%S"), VERSION, os.getpid()))
+        faulthandler.enable(f, all_threads=True)
+    except Exception:
+        pass
+
+    def _hook(kind):
+        def _dump(exc_type, exc, tb):
+            try:
+                import traceback
+                with open(os.path.join(config_dir(), "logs", "crash.log"),
+                          "a", encoding="utf-8") as f:
+                    f.write("---- %s %s ----\n"
+                            % (time.strftime("%Y-%m-%d %H:%M:%S"), kind))
+                    traceback.print_exception(exc_type, exc, tb, file=f)
+            except Exception:
+                pass
+        return _dump
+
+    try:
+        sys.excepthook = _hook("uncaught")
+        threading.excepthook = lambda a: _hook("thread")(
+            a.exc_type, a.exc_value, a.exc_traceback)
+    except Exception:
+        pass
+
+
 def main():
     _startup_log("main start")
+    _crash_ready()
     if not single_instance():
         _startup_log("single_instance: already running")
         try:

@@ -536,6 +536,8 @@
     "将要处理 %d 个 mod：先复制到输出目录，再翻译、写回副本。\\n同名目录会被覆盖。继续？": "About to process %d mods: copy into the output folder, translate, write back into the copy.\nFolders with the same name will be overwritten. Continue?",
     "扫描": "Scan",
     "请先勾选要翻译的 mod": "Select the mods to translate first",
-    "批量翻译": "Batch translate"
+    "批量翻译": "Batch translate",
+    "这 %d 个 mod 上次已经跑完了。要重跑请先「清空输出」。": "These %d mods were already finished last run. Click \"Clear output\" to run them again.",
+    "（跳过上次已完成的 %d 个）": "(%d already done last run, skipped)"
   }
 }

@@ -53,6 +53,14 @@ v2.42 把批量换成单模组流程之后，批量跑一遍就会把单模组�
    （如 `name + " (zh)"`）避开同名冲突，不要覆盖已存在的同名目录。
    待定：以上风险里哪些算「不能替换」、要不要让用户逐个确认，开工前定。
 
+## 已修（v2.42.2）
+
+| 条目 | 做法 |
+|---|---|
+| 批量跑到第 28 个 mod 整窗消失（`0xc0000005` / `python314.dll`） | 后台线程不再直接 `window.evaluate_js`，事件先塞 `deque`，前端 `batch_poll` 每 150 ms 取走；后端线程完全不碰 WebView2 COM |
+| 崩一次就白跑 | `userdata/batch/run.jsonl` 每个 mod 落一行，重跑自动跳过已完成的（参数指纹变了才作废）；「清空输出」连带删掉 |
+| 没有现场 | `userdata/logs/crash.log`（`faulthandler`，含所有线程的 Python 栈）+ `batch.log`（每个 mod 的 start/done） |
+
 ## 已修（v2.42.1）
 
 | 条目 | 做法 |

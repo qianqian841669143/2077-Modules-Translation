@@ -1880,7 +1880,7 @@ async function continueTranslate() {
   setStatus(T("重试剩下的 %d 条 ...").replace("%d", r.total));
 }
 
-window.__evt = (e) => {
+function onEvt(e) {
   if (!e) return;
   if (e.type === "trans-report") { onTransReport(e); return; }
   if (e.type === "loaded") { onLoaded(e); return; }
@@ -1978,14 +1978,56 @@ window.__evt = (e) => {
     }
     setStatus(T("机翻失败: %s").replace("%s", e.message));
   }
-};
+}
+window.__evt = onEvt;
 
 /* ---------------- 批量（单模组功能） ---------------- */
+
+/* 批量/扫描的事件走轮询而不是后端推过来。
+ *
+ * 后端以前在批处理线程里直接调 window.evaluate_js，那是跨线程碰 WebView2 的
+ * UI 线程：单次没事，连着跑几十个 mod 会偶发 0xc0000005（2026-11-01 两次整窗
+ * 消失，转储里最后一条事件就是 mb-item）。现在后端只把事件塞进 deque，
+ * 由这里定时取走，后端线程完全不碰 COM。
+ */
+let _mbPollTimer = null;
+let _mbPollBusy = false;
+
+function startMbPoll() {
+  if (_mbPollTimer) return;
+  _mbPollTimer = setInterval(pollMbEvents, 150);
+}
+
+function stopMbPoll() {
+  if (_mbPollTimer) {
+    clearInterval(_mbPollTimer);
+    _mbPollTimer = null;
+  }
+}
+
+async function pollMbEvents() {
+  if (_mbPollBusy) return;      // 上一次还没回来，别叠加桥调用
+  _mbPollBusy = true;
+  try {
+    const r = await pywebview.api.batch_poll();
+    if (!r || !r.ok) { stopMbPoll(); return; }
+    const evs = r.events || [];
+    evs.forEach(onEvt);
+    // 队列空了且后端也没在跑 → 收工。扫描中 running 也算 true，
+    // 否则预扫一开始就会被这里停掉。
+    if (!evs.length && !r.running) stopMbPoll();
+  } catch (_) {
+    stopMbPoll();
+  } finally {
+    _mbPollBusy = false;
+  }
+}
 
 function openQueue() {
   openModal("modal-queue");
   refreshQueueInfo();
   if (state.mbItems.length) renderQueue();
+  startMbPoll();   // 面板一打开就开始取事件：后面可能已经有一轮在跑
 }
 
 async function refreshQueueInfo() {
@@ -2013,6 +2055,7 @@ async function scanQueue() {
   $("q-summary").textContent = T("正在预扫，全部跑完大约 1 分钟 ...");
   const r = await pywebview.api.batch_scan(dir);
   if (!r || !r.ok) toast((r && r.error) || "error", "err");
+  else startMbPoll();
 }
 
 function mbUsable(it) {
@@ -2085,7 +2128,11 @@ function onMbStart(e) {
   $("btn-q-cancel").style.display = "";
   $("q-progress").classList.add("on");
   $("q-bar").style.width = "0%";
-  $("q-summary").textContent = T("开始处理 %d 个 mod ...").replace("%d", e.total || 0);
+  let msg = T("开始处理 %d 个 mod ...").replace("%d", e.total || 0);
+  if (state.mbCached) {
+    msg += " " + T("（跳过上次已完成的 %d 个）").replace("%d", state.mbCached);
+  }
+  $("q-summary").textContent = msg;
 }
 
 function onMbItem(e) {
@@ -2155,7 +2202,14 @@ async function startQueue() {
     if (((r && r.error) || "").includes("API")) openSettings();
     return;
   }
+  if (r.started === false) {          // 全都在上一次跑完了
+    toast(r.message || "ok", "ok");
+    $("q-summary").textContent = r.message || "";
+    return;
+  }
   state.mbRunning = true;
+  state.mbCached = r.cached || 0;
+  startMbPoll();
 }
 
 async function clearQueueOut() {
