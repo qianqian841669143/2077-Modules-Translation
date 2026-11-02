@@ -4293,6 +4293,84 @@ def check_repair_markup_escaped():
     assert fixed3.count("<Rich") == 2, fixed3
 
 
+def check_cache_tools():
+    """设置页「缓存清理」：统计准、只删选中的、印章和真数据不碰。
+
+    这个功能会递归删用户目录，判据必须钉死：
+      * 只删 SCOPES 里登记的目录内容，`memory.json` / `official_tm.sqlite` 一个字节不动；
+      * 批量输出目录的 `.mb-out-root` 印章要留着（否则 `batch_clear` 下次拒绝认领）；
+      * 不认识的 key 忽略；`../` 越界的路径直接拒绝。
+    """
+    import cache_tools as CT
+
+    tmp = tempfile.mkdtemp(prefix="mt-cache-")
+    try:
+        base = os.path.join(tmp, "userdata")
+        for rel in ("cache", "work/m1", "batch/out/modA", "undo/u1", "corpus/en",
+                    "logs", "reports"):
+            os.makedirs(os.path.join(base, *rel.split("/")), exist_ok=True)
+
+        def put(rel, data):
+            p = os.path.join(base, *rel.split("/"))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with io.open(p, "wb") as f:
+                f.write(data)
+
+        put("cache/archive_toc.json", b"x" * 100)
+        put("work/m1/a.json", b"y" * 200)
+        put("work/m1/sub/b.json", b"z" * 300)
+        put("batch/out/.mb-out-root", b"mark")
+        put("batch/out/modA/init.lua", b"w" * 400)
+        put("batch/run.jsonl", b"j" * 30)
+        put("batch/deployed.json", b"keep-me-3")
+        put("undo/u1/0001.bin", b"u" * 50)
+        put("corpus/en/lang.json", b"c" * 70)
+        put("logs/batch.log", b"l" * 10)
+        put("reports/scan.csv", b"r" * 20)
+        put("memory.json", b"keep-me")
+        put("official_tm.sqlite", b"keep-me-too")
+        put("settings.json", b"{}")
+
+        info = CT.scan(base)
+        by_key = {it["key"]: it for it in info["items"]}
+        assert by_key["work"]["bytes"] == 500, by_key["work"]
+        assert by_key["work"]["files"] == 2, by_key["work"]
+        assert by_key["batch"]["bytes"] == 430, by_key["batch"]
+        assert by_key["logs"]["bytes"] == 30, by_key["logs"]
+        # 印章算进大小，但不该被当成「产物」删掉
+        assert by_key["cache"]["files"] == 1, by_key["cache"]
+
+        res = CT.clear(["work", "batch", "nope"], base)
+        assert res["ok"], res
+        assert res["freed"] == 930, res
+        assert not os.path.isdir(os.path.join(base, "work", "m1")), "work 没清干净"
+        assert os.path.isdir(os.path.join(base, "batch", "out")), "输出目录本身不该删"
+        assert os.path.isfile(os.path.join(base, "batch", "out", ".mb-out-root")), \
+            "产物印章被删了，batch_clear 下次会拒绝认领"
+        assert not os.path.exists(os.path.join(base, "batch", "out", "modA"))
+        # 输出没了，续跑记录留着会让下一轮整块跳过 -> 必须一起删；部署清单要留
+        assert not os.path.exists(os.path.join(base, "batch", "run.jsonl")), \
+            "清空输出时 run.jsonl 没删，下一轮会把完成的模组全跳过"
+        assert os.path.exists(os.path.join(base, "batch", "deployed.json")), \
+            "部署清单不该被缓存清理删掉"
+        # 没选中的、以及根本不是缓存的，一个都不能动
+        for rel in ("undo/u1/0001.bin", "corpus/en/lang.json", "logs/batch.log",
+                    "cache/archive_toc.json", "memory.json",
+                    "official_tm.sqlite", "settings.json"):
+            assert os.path.exists(os.path.join(base, *rel.split("/"))), \
+                "误删: %s" % rel
+
+        # 越界路径必须拒绝
+        try:
+            CT._abs(base, "../outside")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("_abs 没拦住 ../ 越界")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_i18n_coverage():
     """界面用到的每个中文 key 都必须有英文译文，占位符不能丢。
 
@@ -4547,6 +4625,8 @@ def main():
     print("   OK: 注册器别名 (A = Settings.RegisterAction) 找全 / 查表函数别名不进表")
     check_repair_markup_escaped()
     print("   OK: <Rich …> 的 \\\" 转义不会让补标记补两遍")
+    check_cache_tools()
+    print("   OK: 缓存清理只删选中的目录 / 印章与记忆文件不动")
     check_official_weak_words()
     print("   OK: 语言包单词条不采用官方弱匹配 (Body→尸体 这类)")
     check_i18n_coverage()

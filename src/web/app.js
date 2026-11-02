@@ -508,6 +508,23 @@ function bind() {
     refreshMemoryInfo();
     toast(T("已清空翻译记忆"), "ok");
   };
+  $("btn-cache-refresh").onclick = () => { refreshCacheInfo(); };
+  $("btn-cache-clear").onclick = async () => {
+    const box = $("cache-list");
+    const picked = [...box.querySelectorAll("input[data-cache]:checked")];
+    if (!picked.length) { toast(T("先勾选要清理的项目"), "warn"); return; }
+    const names = picked.map((x) => x.dataset.name || x.dataset.cache).join("、");
+    if (!confirm(T("删除这些缓存？\n\n%s\n\n删掉以后下次用到会重新生成；翻译记忆与官方语料不动。")
+                 .replace("%s", names))) return;
+    const r = await pywebview.api.cache_clear(picked.map((x) => x.dataset.cache));
+    if (!r || !r.ok) {
+      toast((r && r.error) || T("清理失败"), "err");
+      refreshCacheInfo();
+      return;
+    }
+    refreshCacheInfo();
+    toast(T("已清理 %s").replace("%s", fmtBytes(r.freed)), "ok");
+  };
   $("btn-glossary").onclick = async () => {
     state.glossary = await pywebview.api.glossary_get();
     renderGlossary(); openModal("modal-glossary");
@@ -3045,6 +3062,7 @@ function openSettings() {
   $("test-result").textContent = "";
   $("cfg-path").textContent = (state.configFile || "") ? (T("配置文件: %s").replace("%s", state.configFile)) : "";
   refreshMemoryInfo();
+  refreshCacheInfo();
   openModal("modal-settings");
 }
 
@@ -3107,6 +3125,39 @@ async function refreshLocalModel() {
   if (st.error) bits.push(String(st.error).slice(0, 60));
   el.textContent = bits.join(" · ");
   $("set-local").checked = st.enabled !== false;
+}
+
+/* ---------------- 缓存清理 ---------------- */
+function fmtBytes(n) {
+  let v = Number(n) || 0;
+  if (v < 1024) return v + " B";
+  const units = ["KB", "MB", "GB", "TB"];
+  let i = -1;
+  do { v /= 1024; i++; } while (v >= 1024 && i < units.length - 1);
+  return (v >= 10 ? v.toFixed(0) : v.toFixed(1)) + " " + units[i];
+}
+
+async function refreshCacheInfo() {
+  const box = $("cache-list");
+  if (!box) return;
+  $("cache-info").textContent = T("正在统计…");
+  let info = null;
+  try { info = await pywebview.api.cache_info(); } catch (_) { info = null; }
+  if (!info || !info.ok || !info.items) {
+    box.innerHTML = "";
+    $("cache-info").textContent = (info && info.error) || T("读不到缓存大小");
+    return;
+  }
+  box.innerHTML = info.items.map((it) => `
+    <label class="check cache-row${it.exists ? "" : " gone"}"
+           title="${esc(it.dirs && it.dirs.length ? it.dirs.join(" · ") : "-")}">
+      <input type="checkbox" data-cache="${esc(it.key)}"
+             data-name="${esc(T(it.label))}"${it.exists ? "" : " disabled"}>
+      <span class="cache-name">${esc(T(it.label))}</span>
+      <span class="cache-note">${esc(T(it.note))}</span>
+      <span class="cache-size">${esc(it.exists ? fmtBytes(it.bytes) : T("已空"))}</span>
+    </label>`).join("");
+  $("cache-info").textContent = T("合计 %s").replace("%s", fmtBytes(info.total));
 }
 
 async function refreshMemoryInfo() {

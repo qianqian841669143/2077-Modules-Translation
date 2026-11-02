@@ -263,6 +263,15 @@
       <label class="check"><input type="checkbox" id="set-official-tm"> <span data-i18n="作为基线优先套用（手改 &gt; 官方 &gt; 机翻）">作为基线优先套用（手改 &gt; 官方 &gt; 机翻）</span></label>
       <label class="check"><input type="checkbox" id="set-official-weak"> <span data-i18n="单词条的官方命中也算（标「待核」，可单独筛选复核）">单词条的官方命中也算（标「待核」，可单独筛选复核）</span></label>
       <div class="divider"></div>
+      <p class="hint" data-i18n="缓存清理：只删下面这些「用到会重新生成」的目录，翻译记忆、官方语料、设置与术语表都不在里面。">
+        缓存清理：只删下面这些「用到会重新生成」的目录，翻译记忆、官方语料、设置与术语表都不在里面。</p>
+      <div class="cache-list" id="cache-list"></div>
+      <div class="row gap" style="padding:2px 0 0">
+        <button class="btn" id="btn-cache-refresh" data-i18n="刷新大小">刷新大小</button>
+        <button class="btn" id="btn-cache-clear" data-i18n="清理选中">清理选中</button>
+        <span class="hint" id="cache-info"></span>
+      </div>
+      <div class="divider"></div>
       <div class="row gap" style="padding:10px 0 0">
         <span class="hint" id="mem-info"></span>
         <div class="spacer"></div>

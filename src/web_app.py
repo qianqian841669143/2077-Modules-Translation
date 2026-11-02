@@ -3522,6 +3522,31 @@ class Api(object):
         self._memory_store.clear()
         return {"ok": True}
 
+    # ------------------------------------------------------------ 缓存清理
+    def cache_info(self):
+        """设置页问「各类缓存占多少地方」。只统计，不动任何文件。"""
+        import cache_tools
+        try:
+            out = cache_tools.scan(config_dir())
+        except Exception as ex:
+            return {"ok": False, "error": str(ex), "items": [], "total": 0}
+        out["ok"] = True
+        return out
+
+    def cache_clear(self, keys):
+        """清掉勾选的缓存。正在批量/机翻时拒绝——清的是别人正在写的目录。"""
+        if self._mb_running:
+            return {"ok": False,
+                    "error": self._tr("批量正在运行，先停下来再清理缓存")}
+        if self._busy:
+            return {"ok": False,
+                    "error": self._tr("机翻或写回正在运行，先等它结束")}
+        import cache_tools
+        try:
+            return cache_tools.clear(keys, config_dir())
+        except Exception as ex:
+            return {"ok": False, "error": str(ex), "freed": 0, "files": 0}
+
     # ------------------------------------------------------------ 其它
     def test_api(self, url):
         import mt_client

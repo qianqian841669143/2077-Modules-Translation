@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.48.1**
+当前版本：**v2.49.0**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -14,6 +14,26 @@
 > `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.49.0 更新：设置里能清缓存了
+
+跑过几轮批量之后 `userdata\` 会越来越大（实测：批量副本 2.4 GB、中间文件 513 MB、
+官方语料导出 621 MB、撤销快照 146 MB）。设置页底部新增**缓存清理**：
+
+- 列出六类缓存各占多少、多少个文件，勾选后一次清掉，清完显示这次释放了多少；
+- 只清「用到会重新生成」的目录：提取缓存、中间文件、批量输出副本、撤销记录、
+  官方语料导出、日志与报告；清批量输出时连 `batch\run.jsonl` 续跑记录一起删
+  （留着的话下一轮会把已完成的模组整块跳过，一个产物都不产出）；
+- 目录本身与批量输出目录的 `.mb-out-root` 印章留着（印章没了 `batch_clear`
+  就不肯认领那个目录）；
+- `memory.json`（翻译记忆）、`official_tm.sqlite`（官方语料）、`settings.json`、
+  `glossary.json`、`locales\` 一个字节都不动——它们各有各的入口；
+- 批量或机翻正在跑时拒绝清理（清的是别人正在写的目录），并给出原因。
+
+界面上中英双语（多语言仍是「文本即键」，新文案已补齐英文），自测新增
+`check_cache_tools()` 钉住「只删选中的 / 印章与记忆文件不动 / `../` 越界拒绝」。
+
+![设置 · 缓存清理](docs/ui-cache.png)
 
 ## v2.48.1 更新：`<Rich …>` 标记补两遍 / 不闭合，游戏里整段标记原样显示
 
