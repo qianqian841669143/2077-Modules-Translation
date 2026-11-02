@@ -204,6 +204,8 @@ def is_translatable(s):
         return False
     if t.startswith("#") or t.startswith("$"):
         return False
+    if looks_like_code_token(t):
+        return False
     words = re.findall(r"[A-Za-z]{2,}", t)
     return len(words) >= 2
 
@@ -653,6 +655,10 @@ WRAPPER_PARAM_TYPES = {
     "text": TYPE_UI, "message": TYPE_UI, "msg": TYPE_UI,
 }
 
+# 形参里出现这些词，说明这个函数是「带标签的回调执行器」而不是设置项包装：
+# local function safeCall(label, callback, quiet) —— label 只进日志。
+_CALLBACK_PARAMS = {"callback", "cb", "fn", "func", "handler", "closure"}
+
 # 这些变量里累积的字符串通常会作为界面提示显示出来。
 UI_TEXT_VARS = {
     "message", "msg", "text", "label", "caption", "title", "desc",
@@ -980,9 +986,15 @@ def _wrapper_rules(text):
         name = re.split(r"[.:]", m.group(1))[-1].lower()
         if not name or name in CALL_RULES:
             continue
+        params = [p.strip().split("=")[0].strip().lower()
+                  for p in m.group(2).split(",")]
+        # 「标签 + 回调」执行器：safeCall(label, callback) 是 pcall 包装，
+        # label 只出现在出错时的调试信息里。把它当显示名，就会把
+        # "fppCamera:ResetPitch" 这类事件名翻成中文写回代码。
+        if any(p in _CALLBACK_PARAMS for p in params):
+            continue
         rules = []
-        for idx, p in enumerate(m.group(2).split(",")):
-            param = p.strip().split("=")[0].strip().lower()
+        for idx, param in enumerate(params):
             typ = WRAPPER_PARAM_TYPES.get(param)
             if typ:
                 rules.append((idx, typ))
@@ -1069,6 +1081,119 @@ def _is_name_literal(s):
 def looks_like_protocol_list(t):
     '''点分逗号清单: "meta.read,perspective.read,events.push,"。'''
     return NOISE.is_protocol_list(t)
+
+
+# 无空格、却带代码符号的字面量: 调用链 / 事件签名 / 枚举路径。
+# 例如 safeCall("fppCamera:ResetPitch", fn) 的标签、
+# Logger("handle:GameSessionEvent") 的签名、
+# "TakeOverControlSystem:EnablePlayerTPPRepresenation(false)"。
+# 它们靠 is_translatable 的「至少两个英文词」是拦不住的 —— camelCase 一个
+# 标识符就能拆出两段 —— 所以按形状单独挡（P21 位置证据的补充）。
+_CODE_TOKEN_RE = re.compile(r"[:()=<>]")
+# 调色板里的色值: `Lemon = "FFFACD"`，形状上是「大写字母」，认成标签就会把
+# 颜色表整片翻掉（Garage Manager 的 ColorSwatches 实测命中 14 条）。
+_HEX_COLOR_RE = re.compile(r"^#?(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
+
+
+def looks_like_code_token(s):
+    t = (s or "").strip()
+    return bool(t) and not _WS_RE.search(t) and bool(_CODE_TOKEN_RE.search(t))
+
+
+def _entry_value_ok(s, is_desc=False):
+    """成对文本表里，一个值像不像界面文本。
+
+    无空格的单个 token 只接受「像界面词」的（`Off` / `Height`），
+    名字形状的一律不收：`glove` / `night_out` / `seat_front_left` /
+    `NPCStatPreset.AllDOTImmunity_inline1` / `handle:GameSessionEvent`。
+    """
+    t = (s or "").strip()
+    if not t or looks_like_code_token(t):
+        return False
+    if _HEX_COLOR_RE.match(t):
+        return False
+    if not _WS_RE.search(t):
+        if ("." in t or "_" in t or t.islower()
+                or any(ch.isdigit() for ch in t)):
+            return False
+    return is_translatable(t) if is_desc else is_label_text(t)
+
+
+def _pair_table_entries(toks):
+    """按形状找「成对文本表」，返回 [(字面量 start, 条目名, 是否第二项)]。
+
+    `NAME = { A = { "标签", "描述" }, B = { "一行" }, … }` 这种表：整张表的
+    **直接条目**都是 1~2 个裸字符串、且至少 3 条。单个 `{ "a", "b" }` 多半是
+    坐标/键值对，不收；条目里出现 `id = …` 之类的字段也不算（那是有结构的数据）。
+
+    只从 token 流判断，不猜语义：值像不像界面词交给 `_entry_value_ok`。
+    """
+    n = len(toks)
+    out = []
+
+    def op(k, v):
+        return k < n and toks[k].kind == "op" and toks[k].val == v
+
+    def entry(k):
+        """k 指向条目名，返回 (名字, [字面量 start], 下一个 token, 是否带 {} 值)。
+
+        两种形状都算条目：`key = "一行"` 与 `key = { "标签" [, "描述"] }`。
+        ITP 的 TEXT 表就是混着写的（`keyNote = "…"` 夹在一堆 `{}` 里）。
+        """
+        if k >= n or toks[k].kind != "ident":
+            return None, None, k, False
+        name = toks[k].val
+        if not op(k + 1, "="):
+            return None, None, k, False
+        if k + 2 < n and toks[k + 2].kind == "str":
+            return name, [toks[k + 2].start], k + 3, False
+        if not op(k + 2, "{"):
+            return None, None, k, False
+        j = k + 3
+        starts = []
+        while j < n and toks[j].kind == "str":
+            starts.append(toks[j].start)
+            j += 1
+            if op(j, ","):
+                j += 1
+                if op(j, "}"):
+                    break
+                if len(starts) >= 2:
+                    return None, None, k, False
+                continue
+            break
+        if not starts or len(starts) > 2 or not op(j, "}"):
+            return None, None, k, False
+        return name, starts, j + 1, True
+
+    i = 0
+    while i < n - 2:
+        if toks[i].kind == "ident" and op(i + 1, "=") and op(i + 2, "{"):
+            j = i + 3
+            entries = []
+            braced = 0
+            while j < n and not op(j, "}"):
+                name, starts, nxt, is_braced = entry(j)
+                if name is None:
+                    entries = []
+                    break
+                entries.append((name, starts))
+                braced += 1 if is_braced else 0
+                j = nxt
+                if op(j, ","):
+                    j += 1
+            # 记录表（`desc = { district = "WESTBROOK", … }` /
+            # `GameUI.Event = { Camera = "Camera", … }`）也是「一条一名一串」，
+            # 但它们是数据不是界面文案：要求带 {} 的条目过半，只把
+            # `key = { "标签", "描述" }` 这种当成文本表。
+            if (j < n and op(j, "}") and len(entries) >= 3
+                    and braced * 2 >= len(entries)):
+                for name, starts in entries:
+                    for idx, st in enumerate(starts):
+                        out.append((st, name, idx == 1))
+                i = j
+        i += 1
+    return out
 
 
 def name_position_starts(toks, spans, by_start):
@@ -1325,6 +1450,24 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
             continue
         if is_label_text(lit.inner):
             take(lit, TYPE_OPT, m.group(1) + " = {...}")
+
+    # ---- 2c) 成对文本表:  key = { "标签", "描述" } / key = { "一行" }
+    #
+    # Immersive Third Person 的设置界面整张表都是这种形状 (60 多条)：左值是
+    # 短标签、右值是描述。单看每一对，都不是「已知 UI 调用」、表名也不在
+    # LIST_KEYS / TEXT_TABLE_NAME_RE 里，于是短标签永远进不了行；只有描述因为
+    # 「像长句」被兜底收走 —— 界面上看到的就是「一对里只译了后半」。
+    # 判据全在形状上（见 `_pair_table_entries`），值再按 `_entry_value_ok` 过一遍。
+    for st, key, is_desc in _pair_table_entries(toks):
+        lit = by_start.get(st)
+        if lit is None or lit.start in taken:
+            continue
+        if table_keys and lit.inner in table_keys:
+            drop(NOISE.FAMILY_TABLE)
+            continue
+        if not _entry_value_ok(lit.inner, is_desc):
+            continue
+        take(lit, TYPE_DESC if is_desc else TYPE_NAME, key + " ={...}")
 
     # ---- 3b) 通知缓冲区 / message 变量 / string.format 提示文本
     for name, oi, close in spans:

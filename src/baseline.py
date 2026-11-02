@@ -88,6 +88,20 @@ def _normalize(text):
 # 纯数字/型号/符号没必要走基线；命中了也没什么意思
 _JUNK_RE = re.compile(r"^[\s\d\W_]+$", re.UNICODE)
 
+# 语言包里「一个英文单词」的条目（Body / Black / Paint / All …）：它们几乎都是
+# 界面标签，而官方语料里同形的多半是字幕里的另一个义项 —— 实测
+# Body → 尸体、Black → 布莱克（Garage Manager / Vehicle Core 就这么写进去的）。
+# 这类条目不自动采用官方弱匹配：模型按词面给的「身体 / 黑色」虽然不一定是
+# 车漆行话，但至少不是另一个意思。
+_SINGLE_WORD_RE = re.compile(r"^[A-Za-z][A-Za-z'\u2019\-]*$")
+
+
+def _weak_word_label(row, src):
+    """这一行是不是「语言包里的单词标签」，官方的弱匹配对它不可靠。"""
+    if str(row.get("kind") or "") != "json":
+        return False
+    return bool(_SINGLE_WORD_RE.match(str(src or "").strip()))
+
 
 def rank(origin):
     return ORIGIN_RANK.get(origin or "", 0)
@@ -195,6 +209,7 @@ def fill_rows(rows, official=None, memory=None, memory_lang="简体中文",
 
     # 3) 落值：官方优先，其次记忆里的机翻
     for r, src, entry in pending:
+        risky = _weak_word_label(r, src)
         info = hits.get(_normalize(src)) if src else None
         if info:
             dst = info.get("dst") or ""
@@ -202,14 +217,14 @@ def fill_rows(rows, official=None, memory=None, memory_lang="简体中文",
             # 实测单词条会撞上同形的专名/人名（Mark→马克、Pan→潘），
             # 而 Crosshair→准星 又是对的——分不出对错，就标出来别装看不见。
             weak = not (len(src.split()) >= 2 and int(info.get("distinct") or 1) == 1)
-            if weak and not allow_weak:
+            if weak and (not allow_weak or risky):
                 info = None
             elif dst and not _JUNK_RE.match(dst):
                 r[field] = dst
                 r[origin_field] = ORIGIN_OFFICIAL_WEAK if weak else ORIGIN_OFFICIAL
                 stats["officialWeak" if weak else "official"] += 1
                 continue
-        if entry:
+        if entry and not (risky and (entry.get("origin") or "") == ORIGIN_OFFICIAL_WEAK):
             r[field] = entry["text"]
             r[origin_field] = entry.get("origin") or ORIGIN_MEMORY
             stats["memory"] += 1
