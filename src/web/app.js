@@ -123,7 +123,7 @@ function fillSelects(d) {
 
   const tgt = $("set-target");
   tgt.innerHTML = (d.targetLangs || []).map(
-    (l) => `<option value="${l}">${l}</option>`).join("");
+    (l) => `<option value="${l}">${esc(T(l))}</option>`).join("");
   tgt.value = state.settings.target_lang || "简体中文";
 }
 
@@ -1790,7 +1790,7 @@ function renderVmap() {
   }
   box.innerHTML = rows.map((r, i) => {
     const label = T(labels[r.state] || r.state);
-    const name = r.title || r.dir || "(未命名)";
+    const name = r.title || r.dir || T("(未命名)");
     const n = r.state === "not_installed" ? "-" : String(r.files || 0);
     return `<div class="vmap-row${r.active ? "" : " off"}" data-i="${i}"
                  title="${esc(r.dir || r.path || name)}">
@@ -2030,8 +2030,9 @@ function showStall(fails) {
     return;
   }
   el.style.display = "";
-  el.textContent = "事件通道已经 " + sec + " 秒没有响应，批量可能卡在某个模组上。"
-    + "可以关掉窗口重开，再点「开始批量翻译」——已完成的模组会自动跳过。";
+  el.textContent = T("事件通道已经 %s 秒没有响应，批量可能卡在某个模组上。"
+    + "可以关掉窗口重开，再点「开始批量翻译」——已完成的模组会自动跳过。")
+    .replace("%s", sec);
 }
 
 function startMbPoll() {

@@ -11,6 +11,7 @@ import io
 import itertools
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -4113,6 +4114,190 @@ def check_batch_flags_saved():
         web_app.save_settings = old
 
 
+def check_pair_text_table():
+    """`Key = { "标签", "描述" }` 表：短标签也要提取，数据表不许误伤。
+
+    Immersive Third Person 的设置界面整张表都是这种形状，以前只有描述被
+    「长句兜底」收走，标签永远进不了行 —— 界面上就是「一对里只译了后半」。
+    """
+    tmp = tempfile.mkdtemp(prefix="mt-pair-")
+    try:
+        root = os.path.join(tmp, "mod")
+        os.makedirs(root)
+        lua = (
+            "local TEXT = {\n"
+            "  bindToggle = { 'Switch perspective', 'Switch between first "
+            "and third person.' },\n"
+            "  photoModeLocked = { 'PERSPECTIVE SWITCH DISABLED IN PHOTO MODE' },\n"
+            "  keyNote = 'Press a key or a controller button.',\n"
+            "  distance = { 'Distance', 'Distance behind V.' },\n"
+            "}\n"
+            "local COLORS = { Lemon = 'FFFACD', Red = 'EF4C43', White = 'FDFBFC' }\n"
+            "local PARTS = { a = { 'seat_front_left', 'seat_front_right' },\n"
+            "                b = { 'player_crouch_enter', 'player_crouch_exit' },\n"
+            "                c = { 'NPCStatPreset.AllDOT', 'CoverActions.X' } }\n"
+        )
+        with io.open(os.path.join(root, "init.lua"), "w", encoding="utf-8") as f:
+            f.write(lua)
+        data, _meta = E.extract_root_ex(root, keep_target=True)
+        rows = [it for items in data.values() for it in items]
+        origs = {o for (_l, _t, _c, o) in rows}
+        for want in ("Switch perspective",
+                     "PERSPECTIVE SWITCH DISABLED IN PHOTO MODE",
+                     "Press a key or a controller button.", "Distance",
+                     "Distance behind V."):
+            assert want in origs, "%r 没被提取: %r" % (want, sorted(origs))
+        for bad in ("FFFACD", "Lemon", "Red", "seat_front_left",
+                    "player_crouch_enter", "NPCStatPreset.AllDOT"):
+            assert bad not in origs, "%r 是数据，不该进待译行" % (bad,)
+        # 描述按「描述」分类，标签按「显示名称」
+        types = {o: t for (_l, t, _c, o) in rows}
+        assert types["Distance behind V."] == "描述", types.get("Distance behind V.")
+        assert types["Distance"] == "显示名称", types.get("Distance")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_code_token_and_safecall():
+    """无空格却带代码符号的字面量不是界面文本；safeCall 的 label 只是日志标签。"""
+    for bad in ("fppCamera:ResetPitch",
+                "handle:GameSessionEvent",
+                "TakeOverControlSystem:EnablePlayerTPPRepresenation(false)"):
+        assert not E.is_translatable(bad), "%r 不该算可译文本" % (bad,)
+    assert E.is_translatable("Cyberpunk: Edgerunners"), "带空格的冒号标题仍是文本"
+
+    tmp = tempfile.mkdtemp(prefix="mt-tag-")
+    try:
+        root = os.path.join(tmp, "mod")
+        os.makedirs(root)
+        lua = (
+            "local function safeCallQuiet(callback) return callback() end\n"
+            "local function safeCall(label, callback, quiet)\n"
+            "  return safeCallQuiet(callback)\n"
+            "end\n"
+            "local function switch(path, label, desc)\n"
+            "  return label, desc\n"
+            "end\n"
+            "local function run()\n"
+            "  safeCall('fppCamera:ResetPitch', function() end)\n"
+            "  switch('p', 'Voice volume', 'How loud the voice is.')\n"
+            "end\n"
+        )
+        with io.open(os.path.join(root, "init.lua"), "w", encoding="utf-8") as f:
+            f.write(lua)
+        data, _meta = E.extract_root_ex(root, keep_target=True)
+        origs = {o for items in data.values() for (_l, _t, _c, o) in items}
+        assert "fppCamera:ResetPitch" not in origs, sorted(origs)
+        for want in ("Voice volume", "How loud the voice is."):
+            assert want in origs, "正常包装函数的标签被一起挡掉了: %r" % (sorted(origs),)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_i18n_coverage():
+    """界面用到的每个中文 key 都必须有英文译文，占位符不能丢。
+
+    文本即键（locales/*.json）：源码里 `tr("…")` / `T("…")` / `data-i18n` 写的
+    中文原文就是查表键。少一条就退回中文——界面上看着「翻了一半」，很难发现。
+    """
+    import i18n
+
+    root = os.path.dirname(HERE)
+    src = os.path.join(root, "src")
+    cjk = re.compile(r"[\u4e00-\u9fff]")
+    en = json.load(io.open(os.path.join(src, "locales", "en-US.json"),
+                           encoding="utf-8-sig"))["strings"]
+
+    esc = re.compile(r"\\(u[0-9a-fA-F]{4}|n|t|r|\"|'|\\|/)")
+
+    def unesc(s):
+        def rep(m):
+            g = m.group(1)
+            return {"n": "\n", "t": "\t", "r": "\r"}.get(g) or (
+                chr(int(g[1:], 16)) if g.startswith("u") else g)
+        return esc.sub(rep, s)
+
+    used = {}
+    html = io.open(os.path.join(src, "web", "index.html"),
+                   encoding="utf-8").read()
+    for k in re.findall(r'data-i18n(?:-ph)?="([^"]+)"', html):
+        used.setdefault(k, "index.html")
+    js = io.open(os.path.join(src, "web", "app.js"), encoding="utf-8").read()
+    for k in re.findall(r'\bT\(\s*"((?:[^"\\]|\\.)*)"\s*\)', js):
+        used.setdefault(unesc(k), "app.js")
+    py = io.open(os.path.join(src, "web_app.py"), encoding="utf-8").read()
+    for k in re.findall(r'(?:_tr|(?<![A-Za-z_])tr)\(\s*"((?:[^"\\]|\\.)*)"', py):
+        used.setdefault(unesc(k), "web_app.py")
+
+    missing = sorted(k for k in used if cjk.search(k) and k not in en)
+    assert not missing, "缺少英文译文 %d 条: %r" % (len(missing), missing[:10])
+
+    # 占位符必须原样保留，否则 .replace("%d", …) 会静默失败
+    bad = []
+    for k in used:
+        if k not in en:
+            continue
+        for ph in set(re.findall(r"%[ds]", k)):
+            if k.count(ph) != en[k].count(ph):
+                bad.append((k, ph))
+                break
+    assert not bad, "占位符数量对不上: %r" % (bad[:5],)
+
+    # 语言目录本身要能被加载（code/name/strings 齐全）
+    i18n.load_locales(force=True)
+    langs = dict(i18n.available())
+    assert "en-US" in langs and langs.get("en-US") == "English", langs
+    assert i18n.set_language("en-US") == "en-US"
+    assert i18n.tr("失败") == "Failed", i18n.tr("失败")
+    assert i18n.tr("这个中文没有译文") == "这个中文没有译文", "缺译文要退回中文"
+    i18n.set_language("zh-CN")
+    assert i18n.tr("失败") == "失败"
+
+
+def check_official_weak_words():
+    """语言包里的单词标签不采用官方弱匹配（Body→尸体 / Black→布莱克）。"""
+    import baseline as Lbase
+
+    class _Off(object):
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+        def lookup_many(self, texts, detailed=True):
+            return {Lbase._normalize(t): self.mapping[t]
+                    for t in texts if t in self.mapping}
+
+        def close(self):
+            pass
+
+    off = _Off({"Body": {"dst": "尸体", "distinct": 1},
+                "Black": {"dst": "布莱克", "distinct": 1},
+                "Crosshair": {"dst": "准星", "distinct": 1},
+                "Paint job": {"dst": "涂装", "distinct": 1}})
+    rows = [{"orig": "Body", "kind": "json", "trans": ""},
+            {"orig": "Black", "kind": "json", "trans": ""},
+            {"orig": "Crosshair", "kind": "json", "trans": ""},
+            {"orig": "Paint job", "kind": "json", "trans": ""},
+            {"orig": "Body", "kind": "source", "trans": ""}]
+    st = Lbase.fill_rows(rows, official=off, memory=None)
+    assert not rows[0]["trans"], "语言包单词条不该采用官方弱匹配: %r" % (rows[0],)
+    assert not rows[1]["trans"], "%r" % (rows[1],)
+    assert not rows[2]["trans"], "%r" % (rows[2],)
+    assert rows[3]["trans"] == "涂装", rows[3]
+    assert rows[4]["trans"] == "尸体", "源码层单词条保持原行为: %r" % (rows[4],)
+    assert st["left"] == 3 and st["official"] == 1, st
+
+    # 记忆里已经存下的 official-weak 也不许顶上来（否则下一轮又填回尸体）
+    class _Mem(object):
+        def get_entry(self, src, lang):
+            if src == "Body":
+                return {"text": "尸体", "origin": "official-weak"}
+            return None
+
+    rows2 = [{"orig": "Body", "kind": "json", "trans": ""}]
+    Lbase.fill_rows(rows2, official=None, memory=_Mem())
+    assert not rows2[0]["trans"], rows2[0]
+
+
 def main():
     print("== 回填自测 ==")
     check_apply_roundtrip()
@@ -4255,6 +4440,14 @@ def main():
     print("   OK: WolvenKit 输出不走管道 (孙进程占句柄也不挂) / 超时连树杀掉")
     check_batch_flags_saved()
     print("   OK: 批量面板三个勾选能存进设置 (覆盖回原模组/预演/折叠无需翻译)")
+    check_pair_text_table()
+    print("   OK: 成对文本表 Key = { 标签, 描述 } 也提取 / 数据表不误伤")
+    check_code_token_and_safecall()
+    print("   OK: 代码符号字面量不是文本 / safeCall 的 label 不进表")
+    check_official_weak_words()
+    print("   OK: 语言包单词条不采用官方弱匹配 (Body→尸体 这类)")
+    check_i18n_coverage()
+    print("   OK: 界面中文 key 都有英文译文 / 占位符原样保留")
 
     if not os.path.isdir(VORTEX):
         print("\n未找到 Vortex 目录, 跳过真实模组测试: %s" % VORTEX)

@@ -739,9 +739,10 @@ class Api(object):
                             loc_meta["sourceLocale"] = pairs[0].get("source_locale", "")
                         first = pairs[0] if pairs else None
                         source_desc = (("%s → %s" % (
-                            first["provider"], first["source"])) if first else "语言包")
+                            first["provider"], first["source"])) if first
+                            else self._tr("语言包"))
                         if len(pairs) > 1:
-                            source_desc += " 等 %d 对" % len(pairs)
+                            source_desc += self._tr(" 等 %d 对") % len(pairs)
                         loc_info = {"mode": "provider", "source": source_desc,
                                     "target": target, "pairCount": len(pairs),
                                     "unpaired": len(pair_issues),
@@ -764,7 +765,8 @@ class Api(object):
                         loc_meta = lmeta
                         loc_info = {"mode": "locale", "target": target,
                                     "source": (srcs[0]["rel"] if len(srcs) == 1 else
-                                               "%s 等 %d 个文件" % (srcs[0]["rel"], len(srcs))),
+                                               self._tr("%s 等 %d 个文件")
+                                               % (srcs[0]["rel"], len(srcs))),
                                     "localeTotal": len(locale_files),
                                     "sourceFiles": len(srcs)}
                         mode = "locale"
@@ -1062,7 +1064,9 @@ class Api(object):
             from localization import archive as Larch
             from localization import wkit as Lwkit
         except Exception as ex:
-            return {"ok": False, "error": "资源模式引擎加载失败: %s" % ex, "problems": []}
+            return {"ok": False,
+                    "error": self._tr("资源模式引擎加载失败: %s") % ex,
+                    "problems": []}
         cfg = self._l10n_cfg()
         cli = Lwkit.find_cli(cfg["wkit_path"] or None)
         game = Larch.find_game(cfg["game_dir"] or None)

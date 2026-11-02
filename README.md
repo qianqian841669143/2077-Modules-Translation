@@ -2,7 +2,57 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.45.3**
+当前版本：**v2.47.0**
+
+> **English (quick start)** — This is a local desktop tool that extracts translatable
+> text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
+> files, CET Lua settings UI, `@runtimeProperty` strings and `.archive` localization),
+> lets you fill in or machine-translate them, then writes them back per line with
+> undo. Batch mode copies each mod to an output folder, translates the copy and can
+> deploy it back into the Vortex staging folder. The UI ships in Chinese and English
+> (Settings → Interface language); extra languages can be dropped into
+> `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
+
+![English UI](docs/ui-en.png)
+
+## v2.47.0 更新：英文界面补全；新增完整功能说明
+
+**一、英文界面补全。** 界面文案一直是「文本即键」：源码里写中文原文，`locales/*.json`
+给出译文。但 `en-US.json` 只覆盖了一部分：界面用到的 517 个 key 里有 82 个没有译文，
+切到英文后这些按钮、提示、对话框仍然是中文。这次补齐到 **649 条，覆盖率 100%**，并把
+之前没走翻译的地方都接上：
+
+- 设置页的目标语言下拉（`简体中文 / 繁體中文 / 日本語 …`）现在按界面语言显示；
+- 「(未命名)」、批量卡住的长提示、语言包来源描述、资源模式报错等改走 `_tr()` / `T()`；
+- 新增自测 `check_i18n_coverage()`：界面用到的每个中文 key 必须在 `en-US.json` 里有译文，
+  且 `%s` / `%d` 占位符数量一致——漏翻会退回中文，以后不会再悄悄发生。
+
+**二、新增 [docs/功能说明.md](docs/功能说明.md)。** 一份完整的功能清单：三类文本来源、
+单模组流程、批量翻译（续跑/预演/覆盖回原模组/已是最新）、翻译记忆与官方语料的优先级、
+归档模式、多语言机制、Vortex 注意事项、设置项逐条、目录结构、自测与排查、已知限制。
+
+## v2.46.0 更新：设置界面的「标题 + 描述」成对表也翻；官方弱匹配不再毁单词
+
+**一、成对文本表也能提取了。** 形如 `bindToggle = { "Switch perspective", "在
+第一人称和第三人称之间切换。" }` 的表（一个文件里几十上百条）以前没有任何规则认领：
+表名不在选项表白名单里、也不是已知 UI 调用，只有「像长句」的那一半被长句兜底收走。
+Immersive Third Person 的设置界面正是这样——描述是中文、标题全是英文。现在按形状认表：
+整张表的直接条目都是 1–2 个字符串、带 `{}` 的条目过半、至少 3 条，左值当「显示名称」、
+右值当「描述」。记录表（`desc = { district = "WESTBROOK" }`、`GameUI.Event = { Camera =
+"Camera" }`、色值表 `Lemon = "FFFACD"`）和名字表（`player_crouch_enter`、
+`NPCStatPreset.X`）一律不收。实测 48 个模组的待译行 3,421 → 3,532：ITP 6 → 131 行，
+其余都是个位数增减（多收的是语音标签、少收的是事件名）。
+
+**二、`safeCall("fppCamera:ResetPitch", fn)` 这类事件名不再当文案。** 无空格却带
+`:` / `()` / `=` / `<>` 的字面量一律不算界面文本；`safeCall` / `safeCallQuiet` 这种
+「标签 + 回调」的包装也不再按 UI 包装推导参数位。之前它确实把
+`fppCamera:ResetPitch` 写成了 `fppCamera:重置俯仰角`、`SetLocalPosition(origin)` 写成了
+`(来源)`（`safeCall` 只用 callback，所以不会崩，但那是把标识符写成了中文）。
+
+**三、语言包里的单词条不再采用官方弱匹配。** `Body → 尸体`、`Black → 布莱克` 是官方
+语料里同形的另一个义项（字幕里的「尸体」和人名「布莱克」），Garage Manager 有 13/22 条、
+Vehicle Core 6/20 条就是这么填的。现在单词条目不自动采用官方命中，交给模型按词面译；
+多词条目的官方命中照旧。记忆里已经存下的 official-weak 也不会再顶上来。
 
 ## v2.45.3 更新：「跑完覆盖回原模组」勾了会真的生效
 
