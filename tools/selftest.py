@@ -4259,6 +4259,40 @@ def check_register_action_alias():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_repair_markup_escaped():
+    """原文的 `<Rich …>` 带 \\" 转义时，补标记不能把同一段标签再加一遍。
+
+    SenSen 四个模组的说明文字整段变成 `<Rich …><Rich …>3% …</>`：游戏把标记
+    当普通文字显示出来。原因是原文（.reds 字面量）里的引号是 `\\"`，模型的译文
+    是裸引号，`lead in trans` 永远不命中，于是「补开头标签」又补了一份。
+    """
+    lead = ('<Rich color=\\"TooltipText.cyberwareDescriptionHighlightColor\\" '
+            'style=\\"Semi-Bold\\">')
+    plain = lead.replace('\\"', '"')
+    src = lead + "{int_0}%</> of the damage you take comes back as RAM."
+
+    # 模型把标记原样带回来了（裸引号）：一个字都不该补
+    trans = plain + "{int_0}%</> 受到的伤害会转化为 RAM 返还。"
+    fixed, lost = E.repair_markup(src, trans)
+    assert fixed.count("<Rich") == 1, "标签被补了两遍: %r" % (fixed,)
+    assert not lost, lost
+
+    # 模型把开头标记删了：补一份，且引号仍是原文的转义形态
+    fixed2, lost2 = E.repair_markup(src, "{int_0}%</> 受到的伤害会转化为 RAM 返还。")
+    assert fixed2.count("<Rich") == 1, "该补的没补上: %r" % (fixed2,)
+    assert fixed2.startswith("<Rich"), fixed2
+    assert not lost2, lost2
+
+    # 译文少了一个 </>：标记不闭合，游戏会把整段 <Rich …> 当普通文字显示
+    two = ('<Rich color=\\"MainColors.Red\\">成本</>: '
+           '<Rich color=\\"MainColors.Red\\">-{int_2}%</> max health.')
+    trans3 = ('<Rich color="MainColors.Red">成本</>: '
+              '<Rich color="MainColors.Red">-{int_2}% 最大生命值。')
+    fixed3, _lost3 = E.repair_markup(two, trans3)
+    assert fixed3.count("</>") == 2, "缺的关闭标记没补上: %r" % (fixed3,)
+    assert fixed3.count("<Rich") == 2, fixed3
+
+
 def check_i18n_coverage():
     """界面用到的每个中文 key 都必须有英文译文，占位符不能丢。
 
@@ -4511,6 +4545,8 @@ def main():
     print("   OK: 代码符号字面量不是文本 / safeCall 的 label 不进表")
     check_register_action_alias()
     print("   OK: 注册器别名 (A = Settings.RegisterAction) 找全 / 查表函数别名不进表")
+    check_repair_markup_escaped()
+    print("   OK: <Rich …> 的 \\\" 转义不会让补标记补两遍")
     check_official_weak_words()
     print("   OK: 语言包单词条不采用官方弱匹配 (Body→尸体 这类)")
     check_i18n_coverage()

@@ -2041,6 +2041,18 @@ def _count(seq):
     return out
 
 
+def _plain_escapes(s):
+    """把转义引号还原成引号。
+
+    只用在「这段标签在不在译文里」这类包含判断上：原文是 .reds 里的字面量，
+    带 `\\"`（`<Rich color=\\"TooltipText…\\">`），而模型给回来的译文一律是裸引号。
+    直接拿带反斜杠的那份去 `in` 判断永远不命中，于是补标记时会把同一段标签
+    再加一遍 —— 结果是 `<Rich …><Rich …>文字</>`：游戏里整段标记被当普通文字
+    显示出来（SenSen 四个模组就是这么坏的）。
+    """
+    return s.replace('\\"', '"').replace("\\'", "'")
+
+
 def repair_markup(orig, trans):
     """把译文丢掉的包裹标记补回来，返回 ``(译文, 补不回来的占位符列表)``。
 
@@ -2065,10 +2077,13 @@ def repair_markup(orig, trans):
     if trail and trail == lead:
         trail = ""                      # 只有一个自闭合标签, 不是包裹
     fixed = trans
-    if lead and lead not in fixed:
+    plain = _plain_escapes(fixed)
+    if lead and _plain_escapes(lead) not in plain:
         fixed = lead + fixed
-    if trail and trail not in fixed:
+        plain = _plain_escapes(fixed)
+    if trail and _plain_escapes(trail) not in plain:
         fixed = fixed + trail
+        plain = _plain_escapes(fixed)
 
     # 模型把 {value} 写成 %s：各多一个、彼此都没有，按顺序换回来。
     want = _count(_PLACEHOLDER_RE.findall(orig))
@@ -2083,10 +2098,14 @@ def repair_markup(orig, trans):
         have = _count(_PLACEHOLDER_RE.findall(fixed))
         lost_ph = [k for k, n in want.items() if have.get(k, 0) < n]
 
-    # 关闭标记补在末尾（只补一个，多个的话分不清该盖住哪几段）。
+    # 关闭标记数量对不上：少一个就等于整段标记没闭合，游戏会把 `<Rich …>` 当普通
+    # 文字原样显示出来（SenSen 四个模组的说明文字整段变成 `<Rich color=…>3% …`）。
+    # 多个缺口的真实位置分不清，统一补在末尾：结果是高亮范围偏大一点，文案照样能读。
     closes = [t for t in _MARKUP_TAG_RE.findall(orig) if t.startswith("</")]
-    if len(closes) == 1 and _MARKUP_TAG_RE.findall(fixed).count(closes[0]) == 0:
-        fixed = fixed + closes[0]
+    closes_have = [t for t in _MARKUP_TAG_RE.findall(fixed) if t.startswith("</")]
+    need = len(closes) - len(closes_have)
+    if need > 0 and closes:
+        fixed = fixed + closes[0] * need
 
     lost = list(lost_ph)
     for name, n in want_pct.items():

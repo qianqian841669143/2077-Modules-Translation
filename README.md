@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.48.0**
+当前版本：**v2.48.1**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -14,6 +14,24 @@
 > `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.48.1 更新：`<Rich …>` 标记补两遍 / 不闭合，游戏里整段标记原样显示
+
+SenSen 四个模组的义体说明在游戏里变成 `<Rich color="TooltipText.cyberwareDescription…">3% 受到的伤害…`
+这样一整段裸标签。两个原因都在「补标记」这一步：
+
+**一、`\"` 转义导致同一段标签被补两遍。** 原文是 `.reds` 字面量，标签里的引号写作
+`<Rich color=\"TooltipText…\">`；模型给回来的译文一律是裸引号。`repair_markup()`
+拿带反斜杠的那份去判断「这段标签在不在译文里」，永远不命中，于是又把开头标签补了一份
+——结果 `<Rich …><Rich …>{int_0}%</>`：两个开标签一个闭标签，游戏不再把它当标记解析，
+整段原样显示。
+
+**二、关闭标记数量对不上时原来不补。** 旧规则只在「原文恰好一个 `</>`」时补一次，
+一句话里有多段高亮时（`成本: -{int_2}%`）漏掉的 `</>` 就一直缺着，同样不闭合。
+现在按两边数量差补：缺几个补几个，统一补在末尾（高亮范围会偏大一点，文案照样能读）。
+
+顺带把已经写坏的数据修了：4 个语言包里 9 处重复标签、3 条不闭合说明，外加翻译记忆里
+8 条同形条目。自测新增 `check_repair_markup_escaped()` 钉住这两条。
 
 ## v2.48.0 更新：模组自己的菜单注册器认得了；升级后已部署的模组会重新过一遍
 
