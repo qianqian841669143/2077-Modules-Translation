@@ -24,6 +24,14 @@ except ImportError:                     # 单文件入口(pyinstaller / 直接�
     import text_noise as NOISE
 
 # ---------------------------------------------------------------- 类型常量
+# 提取规则版本：凡是改了「认哪些字面量」的规则就 +1。
+# mod_deploy 用它判断「已部署且源未变」还能不能整块跳过 —— 换了规则不失效的话,
+# 新规则认出来的行永远进不了表（v2.46.0 的成对表、v2.48.0 的注册器别名都吃这个亏）。
+#   1: 初版
+#   2: v2.46.0 成对文本表 / 事件名守卫 / 官方弱匹配
+#   3: v2.48.0 注册器别名 / 菜单标题 return "…", opts
+RULES_VERSION = 3
+
 TYPE_NAME = "显示名称"
 TYPE_DESC = "描述"
 TYPE_CAT = "分类"
@@ -643,6 +651,11 @@ CALL_RULES = {
     "showtoast": [(0, TYPE_UI)],
     "toast": [(0, TYPE_UI)],
     "alert": [(0, TYPE_UI)],
+    # ------- 模组自己的「动作表」(菜单项) 注册器
+    # NCPD First Response: Settings.RegisterAction(id, label, fn, desc, opts)
+    # 这类注册器的标签常常只有两三个词 ("Request backup" / "Police stations"),
+    # 兜底规则要四个词才收, 于是它们永远进不了表、界面上一直是英文。
+    "registeraction": [(1, TYPE_NAME), (3, TYPE_DESC)],
 }
 
 # 局部包装函数的参数名 -> 文本类型。
@@ -1003,6 +1016,35 @@ def _wrapper_rules(text):
     return out
 
 
+def _callee_aliases(text):
+    """local A = Settings.RegisterAction —— 别名按被指向的名字套同一套规则。
+
+    CET 模组几乎都这么写: 把注册器取个短名字, 然后整篇 A(id, label, fn, desc)。
+    不认别名的话, 这些菜单项就只剩「长句兜底」一条路 (要四个词), 两三词的
+    动作名永远进不了表 —— NCPD First Response 的菜单因此一半中文一半英文。
+
+    只认**注册器**(名字里带 register)。别名不一定是「显示文本的函数」:
+    MCM 的 local t = ctx.text 是查表函数, t("settings.section.general") 的实参
+    是查表键, 按显示文本收进来就会把键翻掉 (P13 那一类静默损坏)。
+    """
+    out = {}
+    pat = re.compile(
+        r"(?:^|[\r\n;])\s*local\s+([A-Za-z_]\w*)\s*=\s*"
+        r"([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*(?=[\r\n;]|$)"
+    )
+    for m in pat.finditer(text):
+        name, target = m.group(1), m.group(2)
+        last = target.split(".")[-1].lower()
+        if "register" not in last:
+            continue
+        rules = CALL_RULES.get(last)
+        if not rules or name.lower() in CALL_RULES:
+            continue
+        # 别名本身也可能就是同名局部函数, 交给 _wrapper_rules 决定
+        out.setdefault(name.lower(), rules)
+    return out
+
+
 # ---------------------------------------------------------------- 位置证据 (P21)
 #
 # 有些字面量的「位置」本身就在说：这是名字，不是文案。它们形态上是完全正常
@@ -1272,6 +1314,7 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
     # 名字位置（call 的方法名 / 插槽名 / CName）与查表键位置的字面量, 一律不进表
     name_starts = name_position_starts(toks, spans, by_start)
     wrappers = _wrapper_rules(text)
+    aliases = _callee_aliases(text)
     # 模组自带的「英文 → 中文」数据表: 左边是查表 key, 翻它会把表打坏
     table_keys = NOISE.bilingual_keys(text)
     # 同一个文件里按语言键塞了多套语言时 (["en-us"] = {...}, ["de-de"] = {...})，
@@ -1347,7 +1390,7 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
     # ---- 1) 已知 UI 函数调用 (Native Settings UI / ImGui)
     for name, oi, close in spans:
         last = name.split(".")[-1].lower()
-        rules = CALL_RULES.get(last)
+        rules = CALL_RULES.get(last) or aliases.get(last)
         if not rules:
             continue
         args = _split_args(toks, oi, close)
@@ -1497,6 +1540,17 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
             continue
         if _assigned_var(text, lit.start) in UI_TEXT_VARS and is_label_text(lit.inner):
             take(lit, TYPE_UI, _ctx(text, lit.start))
+
+    # ---- 3c) 菜单标题: return "标题", opts
+    # CET 的菜单铺法: 函数返回 (标题, 选项表) 两元组, 标题由模组自己画在窗口顶栏。
+    # 这类标题常常只有两三个词 ("Request backup" / "Police stations"), 兜底收不到,
+    # 结果菜单项已经是中文, 顶栏还是英文。
+    for m in re.finditer(
+            r"\breturn\s+([\"'])((?:(?!\1)[^\r\n]){1,120})\1\s*,\s*opts\b", text):
+        lit = by_start.get(m.start(1))
+        if lit is None or not is_label_text(lit.inner):
+            continue
+        take(lit, TYPE_NAME, "return …opts")
 
     # ---- 4) 宽松兜底: 长句字面量
     if loose:

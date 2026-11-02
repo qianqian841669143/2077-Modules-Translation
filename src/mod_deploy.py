@@ -18,9 +18,15 @@
         重跑会先命中 TM，把上次那份坏译文原样搬回来，看着像「改了没生效」。
     at / root
         部署时间与模组根目录，供清单与排错用。
+    done["ext"]
+        部署时的「提取引擎指纹」：`mod_text_engine.RULES_VERSION` 加上（开发态）
+        源文件的 sha1。升级换掉了提取规则、而模组又已经部署过、源文件没动时，
+        `up_to_date` 只看 sha1 会把整块跳过 —— 新规则提取出来的行永远进不了表。
+        记指纹就是为了让「引擎变了」也算「没做完」。
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -35,6 +41,38 @@ except Exception:                     # 命令行工具里单独 import 时不�
 VAULT_NAME = "deployed.json"
 TEXT_EXTS = (".reds", ".lua", ".json", ".txt", ".xl", ".csv", ".ini", ".toml")
 MAX_PAIRS = 8000                      # 单个模组最多记这么多译文对
+# 提取结果由这几个文件决定；任何一个变了，旧的「已是最新」都不再可信。
+STAMP_FILES = ("mod_text_engine.py", "locale_pack.py")
+_STAMP = []
+
+
+def extraction_stamp():
+    """提取引擎指纹。
+
+    开发态用源文件 sha1 —— 改一行提取代码就自动失效；
+    打包成 exe 之后源文件不在磁盘上（在 PYZ 里），退回
+    `mod_text_engine.RULES_VERSION` —— 那个常量改规则时手工 +1。
+    两者都没有才返回 ""，调用方按「没指纹 = 不能跳」处理。
+    """
+    if _STAMP:
+        return _STAMP[0]
+    h = hashlib.sha1()
+    try:
+        import mod_text_engine
+        version = str(getattr(mod_text_engine, "RULES_VERSION", ""))
+    except Exception:
+        version = ""
+    h.update(version.encode("utf-8"))
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        for name in STAMP_FILES:
+            with open(os.path.join(here, name), "rb") as f:
+                h.update(f.read())
+    except OSError:
+        pass
+    stamp = h.hexdigest()[:12] if version else ""
+    _STAMP.append(stamp)
+    return stamp
 
 
 # ------------------------------------------------------------------ 小工具
@@ -152,6 +190,7 @@ def record(mod_root, files=None, pairs_list=None, keep_pairs=True, done=None):
     if done:
         stat.update(done)
         stat["at"] = __import__("time").strftime("%Y-%m-%d %H:%M:%S")
+        stat["ext"] = extraction_stamp()
     mods[key] = {
         "root": os.path.abspath(str(mod_root or "")),
         "at": __import__("time").strftime("%Y-%m-%d %H:%M:%S"),
@@ -170,6 +209,8 @@ def up_to_date(mod_root):
     不重新解析模组：
 
       * 清单里记过 `done`，且上一轮 `untranslated` / `failed` 都是 0；
+      * 清单里的提取引擎指纹与当前一致 —— 换了提取规则就得重新过一遍，
+        否则新规则认出来的行永远进不了表；
       * 清单里每个文件的 sha1 与磁盘现状一致 —— 这一条同时证明了两件事：
         我们写进去的译文还在，而且用户没有解压还原过（还原会把原件换回来，
         hash 立刻变）。
@@ -181,6 +222,9 @@ def up_to_date(mod_root):
     if not done:
         return ""
     if int(done.get("untranslated") or 0) or int(done.get("failed") or 0):
+        return ""
+    stamp = extraction_stamp()
+    if not stamp or str(done.get("ext") or "") != stamp:
         return ""
     files = e.get("files") or {}
     if not files:

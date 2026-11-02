@@ -3976,6 +3976,14 @@ def check_skip_up_to_date():
                   done={"rows": 2, "applied": 1, "untranslated": 1, "failed": 0})
         assert not MD.up_to_date(mod), "有漏译还跳"
 
+        # 提取引擎换了一版（指纹对不上）：不能跳，否则新规则认出来的行永远进不了表
+        MD._STAMP[:] = ["deadbeef"]
+        assert not MD.up_to_date(mod), "提取引擎变了还跳"
+        MD._STAMP[:] = []
+        MD.record(mod, files={"zh-cn.json": {"sha1": MD.file_sha1(zh),
+                                             "added": True}}, done=good)
+        assert MD.up_to_date(mod), "指纹一致，该跳没跳"
+
         # 产物被删了：不能跳
         MD.record(mod, done=good)
         os.remove(zh)
@@ -4190,6 +4198,63 @@ def check_code_token_and_safecall():
         assert "fppCamera:ResetPitch" not in origs, sorted(origs)
         for want in ("Voice volume", "How loud the voice is."):
             assert want in origs, "正常包装函数的标签被一起挡掉了: %r" % (sorted(origs),)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_register_action_alias():
+    """`local A = Settings.RegisterAction` 的别名要找全；查表函数别名不许当文本。
+
+    NCPD First Response 的整个菜单都是 A(id, label, fn, desc)：不认别名就只能靠
+    「长句兜底」（四个词起），于是两三词的动作名一直是英文，而已经是中文的行因为
+    命中兜底的中文分支照常提取——界面上就是「一半中文一半英文」。
+    反例是 MCM 的 `local t = ctx.text`：t("settings.section.general") 的实参是
+    查表键，收进来就会把键翻掉（P13 那一类静默损坏），必须一条都不收。
+    """
+    tmp = tempfile.mkdtemp(prefix="mt-alias-")
+    try:
+        root = os.path.join(tmp, "mod")
+        os.makedirs(root)
+        lua = (
+            "local Settings = require('modules/settings')\n"
+            "local A = Settings.RegisterAction\n"
+            "A('cruiser', 'Spawn police car', function() end, 'Picks any cruiser.')\n"
+            "A('assist', 'Officer needs assistance (10-99)', function() end)\n"
+            "local function backupMenu()\n"
+            "  local opts = {}\n"
+            "  return 'Request backup', opts\n"
+            "end\n"
+        )
+        with io.open(os.path.join(root, "init.lua"), "w", encoding="utf-8") as f:
+            f.write(lua)
+        data, _meta = E.extract_root_ex(root, keep_target=True)
+        rows = [it for items in data.values() for it in items]
+        types = {o: t for (_l, t, _c, o) in rows}
+        for want, typ in (("Spawn police car", "显示名称"),
+                          ("Officer needs assistance (10-99)", "显示名称"),
+                          ("Picks any cruiser.", "描述"),
+                          ("Request backup", "显示名称")):
+            assert want in types, "别名注册器的 %r 没被提取: %r" % (
+                want, sorted(types))
+            assert types[want] == typ, "%r 分类错: %r" % (want, types[want])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    tmp = tempfile.mkdtemp(prefix="mt-alias-key-")
+    try:
+        root = os.path.join(tmp, "mod")
+        os.makedirs(root)
+        lua = (
+            "local ctx = { text = function(k) return k end }\n"
+            "local t = ctx.text\n"
+            "local menu = { label = t('settings.section.general') }\n"
+        )
+        with io.open(os.path.join(root, "init.lua"), "w", encoding="utf-8") as f:
+            f.write(lua)
+        data, _meta = E.extract_root_ex(root, keep_target=True)
+        origs = {o for items in data.values() for (_l, _t, _c, o) in items}
+        assert "settings.section.general" not in origs, (
+            "查表键被当成界面文本了: %r" % (sorted(origs),))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -4444,6 +4509,8 @@ def main():
     print("   OK: 成对文本表 Key = { 标签, 描述 } 也提取 / 数据表不误伤")
     check_code_token_and_safecall()
     print("   OK: 代码符号字面量不是文本 / safeCall 的 label 不进表")
+    check_register_action_alias()
+    print("   OK: 注册器别名 (A = Settings.RegisterAction) 找全 / 查表函数别名不进表")
     check_official_weak_words()
     print("   OK: 语言包单词条不采用官方弱匹配 (Body→尸体 这类)")
     check_i18n_coverage()

@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.47.0**
+当前版本：**v2.48.0**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -14,6 +14,37 @@
 > `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.48.0 更新：模组自己的菜单注册器认得了；升级后已部署的模组会重新过一遍
+
+起因是一张 NCPD First Response 的游戏内截图：菜单一半中文一半英文。
+
+**一、认「注册器别名」。** 这类模组把菜单项写成
+`A('cruiser', 'Spawn police car', fn, '选择任意警察、MaxTac 或战术载具……')`，
+其中 `A` 只是 `local A = Settings.RegisterAction` 的别名。工具以前不认别名，
+这些字符串只剩「长句兜底」（四个词起）一条路：
+
+- 两三词的动作名（`Request backup` / `Police stations` / `Siren`）永远进不了表；
+- 已经是中文的行因为命中兜底的中文分支照常提取。
+
+于是一个文件里 8 个中文、9 个英文，看起来像「翻了一半」。现在按别名套用注册器
+的参数位置（`(id, label, fn, desc)`），只认名字里带 `register` 的别名——
+`local t = ctx.text` 这种查表函数不认，它的实参是查表键，收进来就会把键翻掉。
+另外把菜单标题 `return "Request backup", opts` 也当「显示名称」收进来（模组自己
+画在窗口顶栏）。实测 NCPD First Response 从 3 行变 26 行；48 个模组的 A/B 对比里
+只有它变了，其余行数一条不差。
+
+**二、「已部署且源文件未变就整块跳过」加上提取引擎指纹。** 以前只看文件 sha1 和
+上一轮的未译/失败数：升级换了提取规则之后，跑过的模组会被整块跳过，新规则认出来
+的行永远进不了表（v2.46.0 加的成对表规则、这次加的别名规则都吃这个亏）。现在
+`deployed.json` 里记 `mod_text_engine.py` / `locale_pack.py` 的 sha1，对不上就
+重新过一遍——文件内容没变照样不会重写，只是多走一遍提取。
+
+**三、订正 5 条明显错的记忆。** `Siren→妖姬`、`Frisk→弗里斯克`、
+`Backup menu→备份菜单`、`Cuff→手铐`、`Stop / pull over→停车/靠边` 改为手改
+来源（优先级最高），以后机翻不会再顶掉它们。
+
+> 升级后请重跑一次批量：NCPD First Response 会补上 18 个菜单项与 1 个菜单标题。
 
 ## v2.47.0 更新：英文界面补全；新增完整功能说明
 
