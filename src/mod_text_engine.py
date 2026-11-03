@@ -584,8 +584,11 @@ SETTINGS_KEYS = {
     # 出现在名字里就说明这个字面量是给玩家看的。
     "msg": TYPE_UI, "message": TYPE_UI, "body": TYPE_UI, "notice": TYPE_UI,
     "notification": TYPE_UI, "summary": TYPE_DESC, "prompt": TYPE_NAME,
-    "fullname": TYPE_NAME, "shortname": TYPE_NAME,
-    "localizedname": TYPE_NAME, "displaytext": TYPE_UI,
+    "fullname": TYPE_NAME, "localizedname": TYPE_NAME, "displaytext": TYPE_UI,
+    # `shortname` 故意不收: 它是缩写徽标 (MCM 的 provider 写着 shortName = "CET" /
+    # "RCF" / "MS", 模组列表每行前面那个小标签就是它)。按定义就是几个大写字母,
+    # 模型只能猜它展开成什么 —— CET 被猜成 Central Intelligence Agency, 列表里
+    # 于是每行都顶着「中央情报局」。这类短代号宁可不翻。
 }
 
 LIST_KEYS = {"labels", "options", "items", "choices", "entries", "values", "list"}
@@ -905,8 +908,14 @@ def _assign_target(text, pos):
 
 
 # 名字里出现这些词，说明这个字符串多半是给玩家看的文本。
+#
+# 注意 `shortname` **不在**里面：它是缩写徽标（MCM 的 provider 写着
+# `shortName = "CET"` / `"RCF"` / `"MS"`，模组列表每一行前面那个小标签就是它），
+# 按定义就是几个大写字母，翻成中文只会变成「中央情报局」「快速破解」——
+# 缩写的语义模型全靠猜（CET = Cyber Engine Tweaks，被猜成 Central Intelligence
+# Agency）。这类短代号宁可不翻，让缩写原样显示。
 DISPLAY_SEGMENTS = {
-    "name", "displayname", "fullname", "shortname", "localizedname",
+    "name", "displayname", "fullname", "localizedname",
     "title", "subtitle", "header", "label", "caption", "text", "body",
     "textbody", "message", "msg", "notice", "notification", "prompt",
     "summary", "detail", "desc", "description", "tooltip", "hint", "help",
@@ -966,6 +975,10 @@ def _diag_fragment(t):
     return bool(re.search(r"(^|[\s:(\[])[A-Za-z_][\w.]*=", t))
 
 
+_BADGE_FIELDS = {"shortname", "shortnames", "abbr", "abbrev", "abbreviation",
+                 "acronym"}
+
+
 def text_evidence(text, pos, callee=""):
     """判断一个字面量「有证据是界面文本」的程度。
 
@@ -976,6 +989,11 @@ def text_evidence(text, pos, callee=""):
       plain    —— 没有位置证据, 只能靠「像不像句子」判断
     """
     var = _assign_target(text, pos)
+    # 缩写徽标 (shortName = "CET" / "RCF") 不是文案: 按定义就是几个大写字母,
+    # 模型只能猜它展开成什么 —— CET 是 Cyber Engine Tweaks, 它猜成了
+    # Central Intelligence Agency, 于是模组列表每行前面都挂上「中央情报局」。
+    if (var or "").lower() in _BADGE_FIELDS:
+        return "internal", var
     segs = _name_segments(var)
     for seg in segs:
         if seg in DISPLAY_SEGMENTS:

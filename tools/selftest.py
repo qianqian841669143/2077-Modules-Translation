@@ -4454,6 +4454,38 @@ def check_spec_order():
     assert lvl == "soft" and "占位符" in why, (lvl, why)
 
 
+def check_shortname_badge():
+    """缩写徽标 `shortName = "CET"` 不进表。
+
+    MCM 的 provider 文件里写着 shortName = "CET" / "RCF" / "MS"，模组列表每一行
+    前面那个小标签就是它。翻成中文只会变成「中央情报局」（CET 被猜成 Central
+    Intelligence Agency）——缩写没有上下文，模型只能猜。这类字段直接不提取。
+    """
+    import mod_text_engine as E
+
+    src = (
+        'local Provider = {\n'
+        '  id = "cet",\n'
+        '  name = "Native Settings UI",\n'
+        '  shortName = "CET",\n'
+        '}\n'
+        'local Other = {\n'
+        '  label = "Badge Label",\n'
+        '}\n'
+    )
+    tmp = tempfile.mkdtemp(prefix="mt-badge-")
+    try:
+        p = os.path.join(tmp, "provider.lua")
+        io.open(p, "w", encoding="utf-8", newline="").write(src)
+        items = E.extract_from_file(p)
+        texts = [x[3] for x in items]
+        assert "CET" not in texts, texts
+        assert "Native Settings UI" in texts, texts
+        assert "Badge Label" in texts, texts
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_i18n_coverage():
     """界面用到的每个中文 key 都必须有英文译文，占位符不能丢。
 
@@ -4714,6 +4746,8 @@ def main():
     print("   OK: 批量结果导出 (取消的不导出 / 状态与部署列对得上)")
     check_spec_order()
     print("   OK: 占位符顺序变了不写回 (MCM core.lua 那类 format 崩)")
+    check_shortname_badge()
+    print("   OK: 缩写徽标 shortName 不进表 (CET 翻成「中央情报局」那类)")
     check_official_weak_words()
     print("   OK: 语言包单词条不采用官方弱匹配 (Body→尸体 这类)")
     check_i18n_coverage()

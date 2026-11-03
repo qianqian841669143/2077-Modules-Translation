@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.51.0**
+当前版本：**v2.51.1**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -14,6 +14,29 @@
 > `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.51.1 更新：缩写徽标不再被翻译
+
+MCM 左侧模组列表每行前面有个小标签，是 provider 的 `shortName`：
+
+```lua
+id = "cet", name = "原生设置界面", shortName = "CET",   -- MCM 模组列表每行前面那个 CET
+```
+
+`CET` 是 **C**yber **E**ngine **T**weaks，被模型猜成 Central Intelligence Agency，
+翻成了「中央情报局」；`RCF`（Redscript Configuration Framework）被猜成「快速破解」。
+于是整列模组前面顶着「中央情报…」，看着像模组名的一部分。
+
+- `shortName` / `abbr` 这类**缩写徽标字段**不再提取（`FIELD_TYPES` 里去掉 &
+  `text_evidence()` 里加否决），缩写按定义就是几个大写字母，没有上下文可猜；
+- 已写坏的两处（`bridges\native_settings\provider.lua` 的 `CET`、
+  `bridges\rcf\provider.lua` 的 `RCF`）改回缩写 —— 游戏目录、Vortex staging、
+  批量输出副本三处一起改；翻译记忆里 `CET→中央情报局`、`RCF→快速破解` 两条删掉；
+- 自测新增 `check_shortname_badge()`：`shortName = "CET"` 不进表，而同一份文件里
+  `name = "…"` / `label = "…"` 照常能提取。
+
+**同样要重进游戏**才看得到（CET 模组进游戏时加载）。MCM 框架的提取条数从 276
+降到 273（少的 3 条就是三个 provider 的 shortName）。
 
 ## v2.51.0 更新：占位符顺序不再被翻译换掉
 
