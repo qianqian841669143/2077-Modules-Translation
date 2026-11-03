@@ -4322,6 +4322,7 @@ def check_cache_tools():
         put("batch/out/.mb-out-root", b"mark")
         put("batch/out/modA/init.lua", b"w" * 400)
         put("batch/run.jsonl", b"j" * 30)
+        put("batch/last-run.json", b"r" * 40)
         put("batch/deployed.json", b"keep-me-3")
         put("undo/u1/0001.bin", b"u" * 50)
         put("corpus/en/lang.json", b"c" * 70)
@@ -4335,14 +4336,14 @@ def check_cache_tools():
         by_key = {it["key"]: it for it in info["items"]}
         assert by_key["work"]["bytes"] == 500, by_key["work"]
         assert by_key["work"]["files"] == 2, by_key["work"]
-        assert by_key["batch"]["bytes"] == 430, by_key["batch"]
+        assert by_key["batch"]["bytes"] == 470, by_key["batch"]
         assert by_key["logs"]["bytes"] == 30, by_key["logs"]
         # 印章算进大小，但不该被当成「产物」删掉
         assert by_key["cache"]["files"] == 1, by_key["cache"]
 
         res = CT.clear(["work", "batch", "nope"], base)
         assert res["ok"], res
-        assert res["freed"] == 930, res
+        assert res["freed"] == 970, res
         assert not os.path.isdir(os.path.join(base, "work", "m1")), "work 没清干净"
         assert os.path.isdir(os.path.join(base, "batch", "out")), "输出目录本身不该删"
         assert os.path.isfile(os.path.join(base, "batch", "out", ".mb-out-root")), \
@@ -4351,6 +4352,9 @@ def check_cache_tools():
         # 输出没了，续跑记录留着会让下一轮整块跳过 -> 必须一起删；部署清单要留
         assert not os.path.exists(os.path.join(base, "batch", "run.jsonl")), \
             "清空输出时 run.jsonl 没删，下一轮会把完成的模组全跳过"
+        # 上一轮的导出报告跟着产物一起走，否则「导出结果」会导出一份已删掉产物的表
+        assert not os.path.exists(os.path.join(base, "batch", "last-run.json")), \
+            "清空输出时 last-run.json 没删"
         assert os.path.exists(os.path.join(base, "batch", "deployed.json")), \
             "部署清单不该被缓存清理删掉"
         # 没选中的、以及根本不是缓存的，一个都不能动
@@ -4369,6 +4373,47 @@ def check_cache_tools():
             raise AssertionError("_abs 没拦住 ../ 越界")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_batch_export_rows():
+    """批量结果导出：一行一个 mod，取消掉的不算跑完，列数与表头对齐。
+
+    导出的是「面板上那张表此刻的内容」，所以判据要钉住：
+      * 取消的模组不出现（半截结果没有参考价值），没轮到的压根不在 list 里；
+      * 状态文案与面板一致（完成 / 失败 / 已是最新 / 无译文可写）；
+      * 部署那几列如实区分「已部署 / 预演 / 失败」，备注带上该看一眼的原因。
+    """
+    import mod_batch as MB
+
+    ok = {"key": "k1", "name": "Mod A", "rows": 40, "todo": 12, "already": 28,
+          "tm": 5, "machine": 7, "applied": 7, "failed": 0, "untranslated": 0,
+          "copied": 33, "seconds": 12.5,
+          "deploy": {"ok": True, "dry": False, "overwritten": 2, "added": 1,
+                     "notes": [{"path": "a.reds", "why": "原件已含中文"}]}}
+    cancelled = {"key": "k2", "name": "Mod B", "error": "cancelled"}
+    failed = {"key": "k3", "name": "Mod C", "error": "复制后没有任何文件"}
+    skipped = {"key": "k4", "name": "Mod D", "rows": 10, "todo": 0,
+               "skippedDone": "已部署且源文件没动"}
+    empty = {"key": "k5", "name": "Mod E", "rows": 3, "todo": 3, "applied": 0}
+    dry = {"key": "k6", "name": "Mod F", "rows": 5, "todo": 5, "applied": 5,
+           "deploy": {"ok": True, "dry": True, "overwritten": 0, "added": 0}}
+
+    rows = MB.export_rows([ok, cancelled, failed, skipped, empty, dry])
+
+    assert MB.export_status(cancelled) == "已取消", MB.export_status(cancelled)
+    assert len(rows) == 5, rows
+    assert len(MB.EXPORT_COLUMNS) == 16, MB.EXPORT_COLUMNS
+    assert all(len(r) == len(MB.EXPORT_COLUMNS) for r in rows), rows
+    assert [r[0] for r in rows] == ["Mod A", "Mod C", "Mod D", "Mod E", "Mod F"], rows
+    assert [r[1] for r in rows] == ["完成", "失败", "已是最新", "无译文可写", "完成"], rows
+    assert rows[0][2:12] == [40, 12, 28, 5, 7, 7, 0, 0, 33, 12.5], rows[0]
+    assert rows[0][12] == "已部署" and rows[0][13] == 2 and rows[0][14] == 1, rows[0]
+    assert "a.reds" in rows[0][15] and "原件已含中文" in rows[0][15], rows[0][15]
+    assert rows[1][12] == "" and rows[1][13] == 0, rows[1]
+    assert rows[2][15].startswith("跳过："), rows[2][15]
+    assert rows[4][12] == "预演", rows[4]
+    assert MB.export_rows([]) == [] and MB.export_rows(None) == []
+    assert MB.export_rows([{"key": "k", "error": "cancelled"}]) == []
 
 
 def check_i18n_coverage():
@@ -4627,6 +4672,8 @@ def main():
     print("   OK: <Rich …> 的 \\\" 转义不会让补标记补两遍")
     check_cache_tools()
     print("   OK: 缓存清理只删选中的目录 / 印章与记忆文件不动")
+    check_batch_export_rows()
+    print("   OK: 批量结果导出 (取消的不导出 / 状态与部署列对得上)")
     check_official_weak_words()
     print("   OK: 语言包单词条不采用官方弱匹配 (Body→尸体 这类)")
     check_i18n_coverage()

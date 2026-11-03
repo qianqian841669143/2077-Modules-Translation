@@ -335,6 +335,7 @@ function bind() {
     if (!r.ok) toast(r.error || "error", "err");
   };
   $("q-out").oninput = () => syncQueueStart();
+  $("btn-q-export").onclick = () => exportQueueResults();
   $("btn-q-clear").onclick = () => clearQueueOut();
   $("btn-copy-apply-errors").onclick = () => {
     const text = state.applyErrors.map((x) => [
@@ -2161,6 +2162,9 @@ async function pickMbOutDir() {
 /* 输出目录为空 = 不允许跑。按钮状态跟着输入框走，避免点了才报错。 */
 function syncQueueStart() {
   const btn = $("btn-q-start");
+  // 跑的时候也别让人点「导出结果」：结果还在长，导出来是半截的
+  const exp = $("btn-q-export");
+  if (exp) exp.disabled = state.mbRunning;
   if (!btn) return;
   const hasOut = !!($("q-out").value || "").trim();
   if (state.mbRunning) { btn.disabled = true; return; }
@@ -2494,6 +2498,27 @@ async function startQueue() {
   state.mbRunning = true;
   state.mbCached = r.cached || 0;
   startMbPoll();
+}
+
+/* 导出本轮跑完的结果：一行一个 mod，内容就是面板上那张表现在显示的。
+ * 后端从 _mb_results 取数，所以取消掉的、还没轮到的不会出现。 */
+async function exportQueueResults() {
+  if (state.mbRunning) { toast(T("批量正在运行，跑完再导出"), "err"); return; }
+  let r;
+  try {
+    r = await pywebview.api.batch_export();
+  } catch (e) {
+    toast(String(e), "err");
+    return;
+  }
+  if (!r || !r.ok) {
+    if (!(r && r.cancelled)) toast((r && r.error) || T("导出失败"), "err");
+    return;
+  }
+  const msg = r.stale
+    ? T("已导出上次跑完的 %d 行: %s")
+    : T("已导出 %d 行: %s");
+  toast(msg.replace("%d", r.rows || 0).replace("%s", r.path), "ok");
 }
 
 async function clearQueueOut() {

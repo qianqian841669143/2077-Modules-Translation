@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.49.0**
+当前版本：**v2.50.0**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -14,6 +14,27 @@
 > `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.50.0 更新：批量结果能导出了
+
+批量面板底部新增「导出结果」：把**本轮跑完的**模组导成 CSV（一行一个，UTF-8 BOM，
+Excel 双击就开）。
+
+- 列：模组、状态（完成 / 失败 / 已是最新 / 无译文可写）、总行、待译、已有中文、
+  记忆命中、机翻、写入、失败、未译、复制文件、耗时、部署（已部署 / 预演 / 失败）、
+  覆盖、新增、备注；
+- 备注列收的是该看一眼的信号：整块跳过的原因、部署说明（「原件已含中文」这类）、
+  写回失败的首条原因、未译样例；
+- 只导本轮跑完的：取消掉的不算跑完（半截结果没有参考价值），还没轮到的不出现；
+- 结果跑完会落一份在 `userdata\batch\last-run.json`：重开程序后点「导出结果」导的
+  就是上一轮那一份（面板上会提示「上次跑完的」）；跑新的一轮会覆盖它，「清空输出」
+  把它一起删掉——产物没了，那份报告只剩误导；
+- 批量跑着的时候按钮是灰的：结果还在长，导出来是半截的。
+
+自测新增 `check_batch_export_rows()` 钉住「取消的不导出 / 状态与部署列对得上 /
+每行列数与表头一致」。
+
+![批量 · 导出结果](docs/ui-batch-export.png)
 
 ## v2.49.0 更新：设置里能清缓存了
 

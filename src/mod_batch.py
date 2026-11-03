@@ -516,3 +516,75 @@ def run(ctx, cands):
     ctx.on_event({"type": "mb-done", "total": total, "done": len(results),
                   "cancelled": ctx.stopped(), "results": results})
     return results
+
+
+# --------------------------------------------------------------- 结果导出
+# 一行一个 mod，列固定：导出的是面板上那张表此刻显示的内容（本轮跑完的
+# 那些），所以列名写死中文——这是给人看的 Excel，不是界面文案。
+EXPORT_COLUMNS = ("模组", "状态", "总行", "待译", "已有中文", "记忆命中",
+                  "机翻", "写入", "失败", "未译", "复制文件", "秒",
+                  "部署", "覆盖", "新增", "备注")
+
+
+def export_status(r):
+    """一个 mod 的结果 → 面板上「状态」那格的话。"""
+    if r.get("error") == "cancelled":
+        return "已取消"
+    if r.get("error"):
+        return "失败"
+    if r.get("skippedDone"):
+        return "已是最新"
+    if not r.get("applied"):
+        return "无译文可写"
+    return "完成"
+
+
+def export_rows(results):
+    """本轮跑完的 mod → CSV 数据行。
+
+    取消掉的 row 只跑到一半（复制或翻译被停掉），算「没跑完」，不导出；
+    还没轮到的压根不在 results 里。备注列收的是该看一眼的信号：整块跳过、
+    部署失败或带说明、写回失败的前几条、未译样例。
+    """
+    out = []
+    for r in results or []:
+        if not isinstance(r, dict) or r.get("error") == "cancelled":
+            continue
+        dep = r.get("deploy") if isinstance(r.get("deploy"), dict) else {}
+        notes = []
+        if r.get("skippedDone"):
+            notes.append("跳过：%s" % r["skippedDone"])
+        if dep.get("error"):
+            notes.append("部署失败：%s" % dep["error"])
+        for n in (dep.get("notes") or [])[:5]:
+            notes.append("%s: %s" % (n.get("path"), n.get("why")))
+        for e in (r.get("errors") or [])[:3]:
+            notes.append(str(e))
+        if r.get("untranslatedSample"):
+            notes.append("未译样例：%s" % " / ".join(
+                str(x) for x in r["untranslatedSample"][:3]))
+        if not dep:
+            how = ""
+        elif dep.get("error"):
+            how = "失败"
+        elif dep.get("dry"):
+            how = "预演"
+        else:
+            how = "已部署"
+        out.append([r.get("name") or r.get("key") or "",
+                    export_status(r),
+                    int(r.get("rows") or 0),
+                    int(r.get("todo") or 0),
+                    int(r.get("already") or 0),
+                    int(r.get("tm") or 0),
+                    int(r.get("machine") or 0),
+                    int(r.get("applied") or 0),
+                    int(r.get("failed") or 0),
+                    int(r.get("untranslated") or 0),
+                    int(r.get("copied") or 0),
+                    r.get("seconds") or 0,
+                    how,
+                    int(dep.get("overwritten") or 0),
+                    int(dep.get("added") or 0),
+                    " | ".join(notes)])
+    return out

@@ -1984,6 +1984,10 @@ class Api(object):
                         self._mb_push({"type": "mb-deploy-csv", "path": p})
                 except Exception:
                     pass
+                try:
+                    self._mb_save_last_run(self._mb_results)
+                except Exception:
+                    pass
                 self._mb_running = False
                 self._mb_worker = None
 
@@ -2063,6 +2067,78 @@ class Api(object):
             self._batch_log("deploy csv 失败: %r" % (ex,))
             return ""
         return p
+
+    def _mb_last_run_path(self):
+        d = os.path.join(config_dir(), "batch")
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            return ""
+        return os.path.join(d, "last-run.json")
+
+    def _mb_save_last_run(self, results):
+        """把这轮结果留一份在磁盘上，「导出结果」重开程序之后还能导。
+
+        结果原来只在内存里：跑完 49 个模组、升个版本或重启一次就没了，而重跑
+        会因续跑把这些模组整块跳过——用户再也导不出这一轮的结果。
+        """
+        p = self._mb_last_run_path()
+        if not p or not results:
+            return ""
+        try:
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                           "results": results}, f, ensure_ascii=False)
+            return p
+        except Exception as ex:
+            self._batch_log("last-run.json 写入失败: %r" % (ex,))
+            return ""
+
+    def batch_export(self):
+        """把本轮跑完的 mod 存成 CSV（一行一个，Excel 双击就开）。
+
+        导的是面板上那张表此刻的内容：数据来自 `_mb_results`，取消掉的、
+        还没轮到的不算跑完。重开程序之后这个属性是空的，退回读 `last-run.json`
+        ——那是上一轮跑完时落下的同一份结果。
+        """
+        if self._mb_running:
+            return {"ok": False, "error": self._tr("批量正在运行，跑完再导出")}
+        import mod_batch as MB
+        rows = MB.export_rows(self._mb_results)
+        stale = False
+        if not rows:
+            try:
+                with open(self._mb_last_run_path(), "r", encoding="utf-8") as f:
+                    rows = MB.export_rows(json.load(f).get("results") or [])
+                stale = bool(rows)
+            except Exception:
+                rows = []
+        if not rows:
+            return {"ok": False, "error": self._tr("本轮还没有跑完的 mod")}
+        default = "batch-results-%s.csv" % time.strftime("%Y%m%d-%H%M%S")
+        try:
+            path = self._window.create_file_dialog(
+                webview.SAVE_DIALOG, save_filename=default,
+                file_types=("CSV (*.csv)",))
+        except Exception as ex:
+            return {"ok": False, "error": str(ex)}
+        if isinstance(path, (list, tuple)):
+            path = path[0] if path else ""
+        if not path:
+            return {"ok": False, "cancelled": True}
+        try:
+            import csv
+            folder = os.path.dirname(path)
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+            with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(MB.EXPORT_COLUMNS)
+                w.writerows(rows)
+        except Exception as ex:
+            return {"ok": False, "error": str(ex)}
+        self._batch_log("results csv: %s (%d rows)" % (path, len(rows)))
+        return {"ok": True, "path": path, "rows": len(rows), "stale": stale}
 
     def batch_open_output(self):
         d, why = self._batch_out_check(create=False)
@@ -2191,6 +2267,13 @@ class Api(object):
             jp = self._mb_journal_path()
             if jp and os.path.isfile(jp):
                 os.remove(jp)
+        except Exception:
+            pass
+        # 上一轮的导出报告也一起删：产物没了，那份报告只剩误导。
+        try:
+            lp = self._mb_last_run_path()
+            if lp and os.path.isfile(lp):
+                os.remove(lp)
         except Exception:
             pass
         return {"ok": True, "removed": n}
