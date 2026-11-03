@@ -2,18 +2,53 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.51.6**
+当前版本：**v2.51.7**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
-> files, CET Lua settings UI, `@runtimeProperty` strings and `.archive` localization),
-> lets you fill in or machine-translate them, then writes them back per line with
-> undo. Batch mode copies each mod to an output folder, translates the copy and can
-> deploy it back into the Vortex staging folder. The UI ships in Chinese and English
-> (Settings → Interface language); extra languages can be dropped into
-> `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
+> files, CET Lua settings UI, `@runtimeProperty` strings, `r6/tweaks/**/*.yaml`
+> tweakdb records and `.archive` localization), lets you fill in or machine-translate
+> them, then writes them back per line with undo. Batch mode copies each mod to an
+> output folder, translates the copy and can deploy it back into the Vortex staging
+> folder. The UI ships in Chinese and English (Settings → Interface language); extra
+> languages can be dropped into `userdata/locales/*.json`. Full feature guide
+> (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.51.7 更新：tweakdb yaml 里的说明文字也能翻了
+
+`Murphy's Web` 的快速破解说明在游戏里一直是英文，可工具明明翻过这个模组——
+MCM 设置面板 89 行、归档层 5 条都是中文，标题「墨菲之网」也是中文。
+
+原因：正文写在不被扫描的地方——`r6\tweaks\MurphysWeb\MurphysWeb.yaml`。工具
+以前只认 `.reds` / `.lua` / `.xml`，yaml 连打开都不会。同一条记录里其实有两套
+写法：
+
+```yaml
+  displayName: murphys_web_name          # 查表键 → 译文在归档的 localization json 里
+  localizedDescription: murphys_web_desc # 同上
+  localizedDescription: 'Uploads a priming daemon that links the target to up to <Rich …
+```
+
+游戏优先用**内联**那条，所以归档翻了、正文还是英文。
+
+- 新增 tweakdb yaml 层：`r6/tweaks/**/*.yaml`（含 `.yml`）里的 `localizedDescription`
+  / `localizedName` / `localizedTitle` 内联文案进表，类型按字段名给（描述 / 显示名称），
+  上下文写记录名（`EquipmentGLP.MurphysWebLvl4PlusPlusProgram_inline0`）；
+- 只收 `localized*`：`displayName: murphys_web_name` 这类查表键照旧不动——
+  翻它等于把引用改断；
+- 回填按 **YAML 标量**规则，不是代码语言那套：单引号里 `'` 写成 `''`、真换行写成
+  `\n`（段落分隔 `\n\n` 原样保住），否则整份 yaml 的行结构会断；
+- 抽出来的原文/译文是「人看到的文字」（`Murphy''s` 还原成 `Murphy's`），
+  比对、记忆、撤销都不受转义符干扰；
+- `<Rich color="…" style="Semi-Bold">…</>` 这类标签沿用原有的「丢了补回来 / 补不回来
+  按软失败拦下」逻辑；
+- 实测 `Murphy's Web` 抽到 4 条（四个品阶各一条，838~841 字符），写回行数不变、
+  再抽再写不叠加；自测加了 `check_yaml_tweak_layer()`。
+
+**已经装过这个模组的**：升级后重新加载，这 4 条就会出现在表里，翻译并应用即可
+（写回的是明文 yaml，不需要 WolvenKit，也不需要游戏目录）。
 
 ## v2.51.6 更新：一个文件里多套语言包时不再写回失败
 

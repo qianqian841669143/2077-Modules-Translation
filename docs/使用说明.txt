@@ -13,6 +13,24 @@
                              注册的设置名称、描述、分类、选项、按钮标签
                              这是 v1.1 新增的重点功能
 
+【v2.51.7 更新: tweakdb yaml 里的说明文字也能翻了】
+  1. 现象: Murphy's Web 的快速破解说明在游戏里一直是英文, 可这个模组明明翻过
+     (MCM 设置面板 89 行、归档层 5 条都是中文, 标题「墨菲之网」也是中文)。
+  2. 原因: 正文写在不被扫描的地方 —— r6\tweaks\MurphysWeb\MurphysWeb.yaml。
+     工具以前只认 .reds / .lua / .xml, yaml 连打开都不会。同一条记录里有两套写法:
+       displayName: murphys_web_name            <- 查表键, 译文在归档里
+       localizedDescription: murphys_web_desc   <- 查表键, 同上
+       localizedDescription: 'Uploads a priming daemon that links ...'
+     游戏优先用内联那条, 所以归档翻了、正文还是英文。
+  3. 现在: r6/tweaks 下的 .yaml/.yml 里的 localizedDescription / localizedName /
+     localizedTitle 内联文案会进表(类型按字段名给 描述 / 显示名称, 上下文写记录名)。
+     只收 localized* —— displayName: murphys_web_name 这类查表键照旧不动。
+  4. 回填按 YAML 标量规则: 单引号里 ' 写成 '', 真换行写成 \n(段落分隔 \n\n 保住),
+     不是代码语言的 \\n。抽出来的原文/译文是「人看到的文字」。
+  5. 实测: Murphy's Web 抽到 4 条(四个品阶各一条, 838~841 字符), 写回后行数不变,
+     再抽再写不叠加。已经装过这个模组的, 升级后重新加载就能看到这 4 条。
+     写回的是明文 yaml, 不需要 WolvenKit, 也不需要游戏目录。
+
 【v2.51.6 更新: 一个文件里多套语言包时不再写回失败】
   1. 现象: Gang Retaliation 应用时报
      r6/scripts/GangRetaliation/ChineseSimplified.reds (语言包类抽取自检未通过

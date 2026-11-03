@@ -43,7 +43,7 @@ TYPE_LONG = "长句文本"          # 宽松兜底收进来的长句(可能含�
 SETTING_TYPES = {TYPE_NAME, TYPE_DESC, TYPE_CAT, TYPE_MOD, TYPE_OPT}
 UI_TYPES = {TYPE_UI, TYPE_LONG}
 
-SRC_EXTS = {".reds", ".xml", ".lua"}
+SRC_EXTS = {".reds", ".xml", ".lua", ".yaml", ".yml"}
 MAX_BYTES = 8 * 1024 * 1024        # 单个源文件上限, 超过则跳过(避免卡死)
 SKIP_DIRS = {"redmod_backup", ".git", "__pycache__", "node_modules",
              "_internal", "dist", "build"}
@@ -547,8 +547,73 @@ def _skip_interp(text, j):
     return -1
 
 
+# ---------------------------------------------------------------- YAML 扫描
+# tweakdb 的 yaml 只有一种「可回填」的写法: `key: '...'` 或 `key: "..."`,
+# 一行一个标量。块标量 (`key: |` / `key: >`) 跨行、偏移不可预测, 整段跳过;
+# 裸标量 (`key: murphys_web_name`) 是查表键或数字, 也不当文案。
+_YAML_KV_RE = re.compile(
+    r"^[ \t]*(?:-[ \t]+)?([A-Za-z_][\w.\-]*)[ \t]*:[ \t]*(.*)$")
+_YAML_RECORD_RE = re.compile(r"^([A-Za-z_][\w.\-]*)[ \t]*:[ \t]*$")
+
+
+def _yaml_scalar(val, quote):
+    """从 ``val``（以引号开头）里切出标量内容, 返回 (结束引号下标, 内容)。
+
+    内容按「人看到的」给: 单引号里的 ``''`` 还原成 ``'``，双引号里的 ``\\"``
+    还原成 ``"``。写回时再由 :func:`escape_for` 转回去 —— 这样界面上的原文/
+    译文和游戏里显示的文字一致, 比对、记忆、撤销都不会被转义符干扰。
+    """
+    buf = []
+    k, n = 1, len(val)
+    while k < n:
+        ch = val[k]
+        if quote == "'":
+            if ch == "'":
+                if k + 1 < n and val[k + 1] == "'":
+                    buf.append("'")
+                    k += 2
+                    continue
+                return k, "".join(buf)
+            buf.append(ch)
+            k += 1
+            continue
+        if ch == "\\" and k + 1 < n:
+            nxt = val[k + 1]
+            buf.append(nxt if nxt in "\"\\" else "\\" + nxt)
+            k += 2
+            continue
+        if ch == '"':
+            return k, "".join(buf)
+        buf.append(ch)
+        k += 1
+    return -1, ""
+
+
+def _scan_yaml(text):
+    """YAML: 每个行内引号标量算一个字面量, 记下它在文本里的绝对偏移。"""
+    lits = []
+    pos = 0
+    for line_no, raw in enumerate(text.splitlines(True), 1):
+        body = raw.rstrip("\r\n")
+        if body.lstrip()[:1] != "#":
+            m = _YAML_KV_RE.match(body)
+            if m is not None:
+                vstart = m.start(2)
+                quote = body[vstart:vstart + 1]
+                if quote in ("'", '"'):
+                    end, inner = _yaml_scalar(body[vstart:], quote)
+                    if end > 0:
+                        start = pos + vstart
+                        lits.append(Lit(start, start + end + 1, quote, inner,
+                                        line_no, "yaml"))
+        pos += len(raw)
+    return [], lits
+
+
 def scan_source(text, lang):
-    """返回 (tokens, literals)。lang: 'lua' | 'reds' | 'xml'"""
+    """返回 (tokens, literals)。lang: 'lua' | 'reds' | 'xml' | 'yaml'"""
+    if lang == "yaml":
+        return _scan_yaml(text)
     toks, lits = [], []
     i, n, line = 0, len(text), 1
     lua = (lang == "lua")
@@ -1939,15 +2004,76 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
     return out
 
 
+# ---------------------------------------------------------------- tweakdb YAML
+# `r6/tweaks/**/*.yaml` 是 tweakdb 的明文记录。玩家真正读到的物品/快速破解
+# 说明有两套写法:
+#   1. `displayName: murphys_web_name` / `localizedDescription: murphys_web_desc`
+#      —— 存的是 onscreens 的**查表键**, 译文在归档的 localization json 里;
+#   2. `localizedDescription: 'Uploads a priming daemon …'`
+#      —— 内联文案, 直接显示。游戏优先用这一条。
+# 第 2 种以前完全没进表: 工具只认 .reds/.lua/.xml, yaml 连打开都不会。于是
+# 「墨菲之网」的标题是中文（归档层那条翻了）、正文还是英文（内联这条没人管）。
+YAML_TEXT_KEYS = {
+    "localizedname": TYPE_NAME,
+    "localizedtitle": TYPE_NAME,
+    "localizeddescription": TYPE_DESC,
+}
+
+# 全小写 + 下划线/点 = 查表键 (`murphys_web_desc`)，不是文案。
+_YAML_KEYLIKE_RE = re.compile(r"^[a-z0-9_.\-]+$")
+
+
+def _yaml_is_key_like(value):
+    return bool(_YAML_KEYLIKE_RE.match(value)) and ("_" in value or "." in value)
+
+
+def _extract_yaml(text):
+    """只收 localized* 字段里的行内文案, 类型按字段名给。"""
+    out = []
+    record = ""
+    for line_no, raw in enumerate(text.splitlines(), 1):
+        body = raw.rstrip("\r\n")
+        if not body.strip() or body.lstrip().startswith("#"):
+            continue
+        m = _YAML_RECORD_RE.match(body)
+        if m is not None:
+            record = m.group(1)      # 顶格 `Name:` 才是记录名, 缩进的属于字段
+            continue
+        m = _YAML_KV_RE.match(body)
+        if m is None:
+            continue
+        typ = YAML_TEXT_KEYS.get(m.group(1).lower())
+        if not typ:
+            continue
+        val = m.group(2)
+        quote = val[:1]
+        if quote not in ("'", '"'):
+            continue                 # 查表键 / 空值 / 数字 / 块标量
+        end, inner = _yaml_scalar(val, quote)
+        if end <= 0:
+            continue
+        text_ = inner.strip()
+        if len(text_) < 3 or _yaml_is_key_like(text_):
+            continue
+        out.append((line_no, typ, record or _ctx(body, m.start(2)), inner))
+    return out
+
+
 # ---------------------------------------------------------------- 对外接口
 def lang_of(path):
-    """返回 scan_source 需要的语言名: lua / xml / reds。
+    """返回 scan_source 需要的语言名: lua / xml / reds / yaml。
 
     注意不能返回带点的扩展名, 否则 Lua 注释与长字符串不会被正确跳过,
     会导致 apply_many 在含注释/字符串的大文件里匹配不到部分译文。
     """
     ext = os.path.splitext(path)[1].lower()
-    return "lua" if ext == ".lua" else ("xml" if ext == ".xml" else "reds")
+    if ext == ".lua":
+        return "lua"
+    if ext == ".xml":
+        return "xml"
+    if ext in (".yaml", ".yml"):
+        return "yaml"
+    return "reds"
 
 
 def extract_from_file(path, target_locale="", loose=True, trace=False, errors=None):
@@ -1968,6 +2094,8 @@ def extract_from_file(path, target_locale="", loose=True, trace=False, errors=No
     try:
         if ext == ".lua":
             return _extract_lua(text, loose=loose, trace=trace)
+        if ext in (".yaml", ".yml"):
+            return _extract_yaml(text)
         return _extract_reds(text, ext, target_locale=target_locale,
                              loose=loose, trace=trace)
     except Exception as ex:
@@ -1987,7 +2115,7 @@ def iter_source_files(root, include_lua=True, include_locale_lua=False):
                 if not include_locale_lua and is_locale_file(fn):
                     continue
                 yield os.path.join(dirpath, fn)
-            elif ext in (".reds", ".xml"):
+            elif ext in (".reds", ".xml", ".yaml", ".yml"):
                 if not include_locale_lua and is_locale_file(fn):
                     continue
                 yield os.path.join(dirpath, fn)
@@ -2017,7 +2145,8 @@ def extract_root_ex(root, include_lua=True, loose=True, include_locale_lua=False
                    打开后它们以「已译」身份回到表格里。
     """
     data = {}
-    meta = {"files": 0, "lua_files": 0, "reds_files": 0, "types": {},
+    meta = {"files": 0, "lua_files": 0, "reds_files": 0, "yaml_files": 0,
+            "types": {},
             "locale_json": _count_locale_json(root),
             "locale_lua": _count_locale_lua(root), "skipped_target": 0,
             "locale_pairs": 0, "locale_pairs_used": 0, "noise": {},
@@ -2044,6 +2173,9 @@ def extract_root_ex(root, include_lua=True, loose=True, include_locale_lua=False
                 items = _extract_lua(text, loose=loose, trace=trace, noise=noise,
                                     target_locale=target_locale)
                 meta["lua_files"] += 1
+            elif ext in (".yaml", ".yml"):
+                items = _extract_yaml(text)
+                meta["yaml_files"] += 1
             else:
                 reds_stats = {}
                 items = _extract_reds(text, ext, target_locale=target_locale,
@@ -2107,8 +2239,23 @@ def extract_root(root, include_lua=True, loose=True, include_locale_lua=False,
 _ESCAPE_KEEP = set('ntr"\'\\abfv0')
 
 
-def escape_for(text, quote):
-    """把译文转义成目标语言字符串内容"""
+def escape_for(text, quote, yaml=False):
+    """把译文转义成目标语言字符串内容。
+
+    yaml=True 走 YAML 标量的规则, 和 .reds/.lua 完全不同:
+    单引号里**只有** ``'`` 需要写成 ``''``，反斜杠是字面量 —— 这些说明里的
+    ``\\n\\n`` 是排版用的段落分隔, 按代码语言转义成 ``\\\\n`` 会在游戏里
+    显示成可见的「\n\n」，整段说明挤成一行。
+    双引号里 ``"`` 写成 ``\\"``，其余原样。
+    """
+    if yaml:
+        # 真换行必须写成 `\n`: 单引号标量里塞一个真换行, 整份 yaml 的行结构就
+        # 断了(而且这些说明本来就是用 `\n\n` 分段的)。
+        flat = (text.replace("\r\n", "\\n").replace("\r", "\\n")
+                    .replace("\n", "\\n"))
+        if quote == "'":
+            return flat.replace("'", "''")
+        return flat.replace('"', '\\"')
     out = []
     i = 0
     while i < len(text):
@@ -2370,7 +2517,8 @@ def _render_replacements(text, repls):
     out = text
     for lit, orig, trans, _idx in sorted(repls, key=lambda x: -x[0].start):
         suffix = lit.inner[len(orig):] if lit.inner.startswith(orig) else ""
-        body = escape_for(_edge_spaces(text, lit, orig, trans) + suffix, lit.quote)
+        body = escape_for(_edge_spaces(text, lit, orig, trans) + suffix,
+                          lit.quote, yaml=(lit.prefix == "yaml"))
         out = out[:lit.start + 1] + body + out[lit.end - 1:]
     return out
 

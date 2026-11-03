@@ -3739,7 +3739,9 @@ class Api(object):
             "types": meta.get("types", {}),
             "files": meta.get("files", 0),
             "lua": meta.get("lua_files", 0),
-            "reds": meta.get("reds_files", 0),
+            # 「非 lua 源文件」这一格 .xml 本来就算在里面, tweakdb yaml 同理:
+            # 只在 yaml 里写着文案的模组, 报告里不该显示「源文件 0 个」。
+            "reds": meta.get("reds_files", 0) + meta.get("yaml_files", 0),
             "localeJson": meta.get("locale_json", 0),
             "localeLua": meta.get("locale_lua", 0),
             "localePairs": meta.get("locale_pairs", 0),

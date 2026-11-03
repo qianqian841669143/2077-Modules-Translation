@@ -16,7 +16,7 @@ v2.47.0（英文界面 100% + 功能说明）、v2.48.0（注册器别名 + 引�
 v2.48.1（`<Rich …>` 标记补两遍 / 不闭合）、v2.49.0（设置页缓存清理）、
 v2.50.0（批量结果导出）、v2.51.0（占位符顺序不再被换掉）、v2.51.1（缩写徽标不再被翻）、
 v2.51.2（代号按值判断，shortName 真文案照收）、v2.51.3（归档预筛认 .json）、
-v2.51.4（带空格的查表键不收）、v2.51.5（两段式查表键不收 + 跳过勾选持久化）、v2.51.6（多语言包文件写回不再被自检拒）
+v2.51.4（带空格的查表键不收）、v2.51.5（两段式查表键不收 + 跳过勾选持久化）、v2.51.6（多语言包文件写回不再被自检拒）、v2.51.7（tweakdb yaml 的内联说明进表）
 都已发布，见下「已修」。真实部署一轮已经在 v2.48.0 之前跑过（`deploy-20261102-090450.csv`）。
 
 ## 待办（v2.48.0 起）
@@ -41,6 +41,12 @@ v2.51.4（带空格的查表键不收）、v2.51.5（两段式查表键不收 + 
 **不做**：`copy_mod` 逐文件记 `mtime_ns` 指纹判「跑完后原件被改过」（原 B5）。
 还原就是被允许的动作，改了也照覆盖，记一份指纹只是给清单加一列备注，不值当。
 「原件已含中文」已经在部署清单里按文件标出来了。
+
+## 已修（v2.51.7）
+
+| 条目 | 做法 |
+|---|---|
+| `Murphy's Web` 的快速破解说明一直是英文，可这个模组明明翻过（MCM 面板 89 行、归档层 5 条、标题「墨菲之网」都是中文） | 正文写在 `r6\tweaks\MurphysWeb\MurphysWeb.yaml` 的 `localizedDescription` 内联字面量里（四个品阶各一条，838~841 字符，含 `<Rich …>` 与 `\n\n`）；`iter_source_files()` 只收 `.lua/.reds/.xml`，yaml 连打开都不会。新增 tweakdb yaml 层：`_scan_yaml()` / `_extract_yaml()` 收 `localizedDescription` / `localizedName` / `localizedTitle` 的行内引号标量（`displayName: murphys_web_name` 这类查表键不收），`lang_of()` 返回 `yaml`，回填走 `escape_for(..., yaml=True)`：单引号里 `'`→`''`、真换行→`\n`、反斜杠按字面量（代码式 `\\n` 会让游戏里显示可见的「\n」并把段落挤成一行）。抽出来的原文是「人看到的文字」（`Murphy''s`→`Murphy's`）。全盘 286 个 staging 目录实测：112 个有 `r6/tweaks`，命中 10 个模组、共 60 行（SOLO'S EDGE 21 / GHXST Companion 21 / CHRONOLOCK 5 / Murphy's Web 4 / repeatable_ncpd_gigs 3 / NCPD Bribe 2 / SYSTEM FRY·POLARITY·MELTDOWN·GHXSTLINE 各 1），全是真文案，没有查表键或记录名混进来。自测 `check_yaml_tweak_layer()` |
 
 ## 已修（v2.51.6）
 

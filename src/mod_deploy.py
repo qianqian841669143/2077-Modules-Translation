@@ -39,7 +39,8 @@ except Exception:                     # 命令行工具里单独 import 时不�
             os.path.dirname(__file__), "..", "dist", "userdata"))
 
 VAULT_NAME = "deployed.json"
-TEXT_EXTS = (".reds", ".lua", ".json", ".txt", ".xl", ".csv", ".ini", ".toml")
+TEXT_EXTS = (".reds", ".lua", ".json", ".txt", ".xl", ".csv", ".ini", ".toml",
+             ".yaml", ".yml")
 MAX_PAIRS = 8000                      # 单个模组最多记这么多译文对
 # 提取结果由这几个文件决定；任何一个变了，旧的「已是最新」都不再可信。
 STAMP_FILES = ("mod_text_engine.py", "locale_pack.py")

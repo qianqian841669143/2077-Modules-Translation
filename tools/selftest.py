@@ -4734,6 +4734,84 @@ def check_archive_prefilter():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_yaml_tweak_layer():
+    """`r6/tweaks/**/*.yaml` 的内联 localize 文案要进表、能回填、转义正确。
+
+    Murphy's Web 的快速破解说明只写在这个 yaml 里：
+
+        localizedDescription: 'Uploads a priming daemon that links the target …'
+
+    工具只认 .reds/.lua/.xml，于是「墨菲之网」的标题（归档层查表键那条）翻了、
+    正文（内联这条）永远是英文。这里同时钉住三件事：
+
+    * 只认 localized* 字段，`displayName: murphys_web_name` / `localizedDescription:
+      murphys_web_desc` 这种查表键不抽；
+    * 回填是 YAML 标量规则：单引号里 `'` 写成 `''`、真换行写成 `\\n`（不是代码
+      语言的 `\\\\n`），否则整份 yaml 的行结构会断；
+    * 抽出来的原文/译文是「人看到的文字」，`''` 已还原成 `'`。
+    """
+    import mod_text_engine as E
+
+    yaml_text = (
+        "# comment: localizedDescription: 'commented out, not text'\n"
+        "EquipmentGLP.MurphysWebLvl4PlusPlusProgram_inline0:\n"
+        "  $type: gamedataGameplayLogicPackageUIData_Record\n"
+        "  iconPath: ability_utility\n"
+        "  localizedName: ''\n"
+        "  localizedDescription: murphys_web_desc\n"
+        "  localizedName: 'Murphy''s Web'\n"
+        "  localizedDescription: 'Prime the target.\\n\\nWorks alongside vanilla "
+        "spreading without double-hitting.'\n"
+        "\n"
+        "Vendor.MurphysWeb_inline1:\n"
+        "  $type: gamedataGameplayLogicPackageUIData_Record\n"
+        "  displayName: murphys_web_name\n"
+        "  localizedDescription: 'Second record text that should be extracted.'\n"
+    )
+    tmp = tempfile.mkdtemp(prefix="mt-yaml-layer-")
+    try:
+        root = os.path.join(tmp, "mod")
+        rel = os.path.join("r6", "tweaks", "MurphysWeb", "MurphysWeb.yaml")
+        path = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(path))
+        io.open(path, "w", encoding="utf-8", newline="").write(yaml_text)
+
+        assert E.lang_of(path) == "yaml", E.lang_of(path)
+        assert path in list(E.iter_source_files(root)), "yaml 不在扫描范围内"
+
+        data, meta = E.extract_root_ex(root)
+        rows = data.get(rel.replace("\\", "/")) or []
+        got = [r[3] for r in rows]
+        assert got == ["Murphy's Web",
+                       "Prime the target.\\n\\nWorks alongside vanilla spreading "
+                       "without double-hitting.",
+                       "Second record text that should be extracted."], got
+        assert [r[1] for r in rows] == ["显示名称", "描述", "描述"], rows
+        # 上下文给记录名，界面上能看出这是哪条记录
+        assert rows[1][2] == "EquipmentGLP.MurphysWebLvl4PlusPlusProgram_inline0", rows[1]
+        assert meta["yaml_files"] == 1, meta
+
+        # 回填：真换行要变成 \n，肉眼可见的标签原样保留，行数不变
+        trans = ('<Rich color="TooltipText.cyberwareDescriptionHighlightColor" '
+                 'style="Semi-Bold">中文一</>\n\n中文二，O\'Brien 也在。')
+        n, fails = E.apply_many_ex(path, [(rows[1][0], rows[1][3], trans)])
+        assert n == 1 and not fails, (n, fails)
+        body = io.open(path, "r", encoding="utf-8", newline="").read()
+        assert len(body.splitlines()) == len(yaml_text.splitlines()), body
+        assert "\\\\n" not in body, body            # 不能写成 \\n 字面量
+        assert "\\n\\n中文二" in body, body          # 段落分隔是 \n 转义
+        assert "O''Brien" in body, body             # 单引号按 YAML 规则转义
+        assert body.count("<Rich") == 1, body.count("<Rich")
+        # 幂等：再抽一次还能对上同一行，再写一次不会叠加
+        again = E.extract_from_file(path)
+        assert again[1][3].startswith("<Rich"), again[1]
+        n2, fails2 = E.apply_many_ex(path, [(again[1][0], again[1][3], "中文三")])
+        assert n2 == 1 and not fails2, (n2, fails2)
+        assert io.open(path, "r", encoding="utf-8", newline="").read().count("中文三") == 1
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_i18n_coverage():
     """界面用到的每个中文 key 都必须有英文译文，占位符不能丢。
 
@@ -5004,6 +5082,8 @@ def main():
     print("   OK: 归档预筛认 .json, translations 目录下的本地化表不被挡掉")
     check_spaced_loc_key()
     print("   OK: 带空格的查表键不收, this.Text 的 value 照收")
+    check_yaml_tweak_layer()
+    print("   OK: tweakdb yaml 的 localizedDescription 进表并按 YAML 规则回填")
     check_official_weak_words()
     print("   OK: 语言包单词条不采用官方弱匹配 (Body→尸体 这类)")
     check_i18n_coverage()
