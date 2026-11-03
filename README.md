@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.51.5**
+当前版本：**v2.51.6**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -14,6 +14,28 @@
 > `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.51.6 更新：一个文件里多套语言包时不再写回失败
+
+`Gang Retaliation` 的语言包一行都写不进去，报：
+
+```
+r6/scripts/GangRetaliation/ChineseSimplified.reds
+(语言包类抽取自检未通过（类数/this.Text 条数/括号对不上）, 已拒绝)
+```
+
+原因：它的 `Localization.reds` 里同时有 `GREnglish` 和 `GRSpanish` 两套语言包（各
+298 条）。工具只把**第一套**类抽出来写成 `ChineseSimplified.reds`，但自检拿**整个
+文件**的 `this.Text(` 条数（596）去比抽取结果的 298 —— 永远对不上，于是整层拒绝。
+
+- 基线改成「抽出来那个类块自己的条数」（`locale_pack.py` 的 `n_text`）；
+- 修完实测：298 条全部写入，生成 `ChineseSimplified.reds`（298 条、类名
+  `ChineseSimplified`），Provider 自动补 `case n"zh-cn": return new ChineseSimplified();`；
+- 连做两次应用不重复写、也不会叠第二份 Provider 分支；
+- 自测在语言包那组用例里加了「一个文件两套语言包」的场景。
+
+**已经炸过的模组怎么救**：升级后重新加载、重新应用那 298 行即可——之前被拒的文件
+回滚得很干净（`Localization.reds` 一个字节没动，也没留下半成品）。
 
 ## v2.51.5 更新：两段式查表键不再收 + 「跳过」能记住了
 

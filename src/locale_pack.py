@@ -1459,7 +1459,11 @@ def ensure_target(root, entry_rel, target_rel_path):
             body = re.sub(r"\bclass\s+" + re.escape(old_cls) + r"\b",
                           "class " + new_cls, block, count=1)
             out = (head + "\n\n" if head else "") + body.strip() + "\n"
-            n_text = len(re.findall(r"this\.Text\(", text))
+            # 基线是**抽出来的那个类**里的 this.Text 条数，不是整个文件的。
+            # 一个 .reds 里常有好几套语言包 (Gang Retaliation 的 Localization.reds
+            # 同时有 GREnglish 与 GRSpanish, 各 298 条)：拿文件的 596 去比抽取结果
+            # 的 298，永远对不上，整个语言包层就被拒了。
+            n_text = len(re.findall(r"this\.Text\(", block))
             if (len(CODEWARE_PACKAGE_RE.findall(out)) != 1
                     or len(REDS_TYPE_RE.findall(out)) != 1
                     or len(re.findall(r"this\.Text\(", out)) != n_text

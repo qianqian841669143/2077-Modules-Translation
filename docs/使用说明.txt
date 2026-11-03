@@ -13,6 +13,18 @@
                              注册的设置名称、描述、分类、选项、按钮标签
                              这是 v1.1 新增的重点功能
 
+【v2.51.6 更新: 一个文件里多套语言包时不再写回失败】
+  1. 现象: Gang Retaliation 应用时报
+     r6/scripts/GangRetaliation/ChineseSimplified.reds (语言包类抽取自检未通过
+     （类数/this.Text 条数/括号对不上）, 已拒绝), 298 行一条都没写进去。
+  2. 原因: 这个 Localization.reds 里同时有 GREnglish 和 GRSpanish 两套语言包
+     (各 298 条)。工具只把第一套类抽出来写成 ChineseSimplified.reds, 但自检拿
+     整个文件的 this.Text 条数(596)去比抽取结果(298), 永远对不上。
+  3. 现在改成按抽出来那个类块自己的条数比。修完实测: 298 条全部写入, 自动生成
+     ChineseSimplified.reds 并在 Provider 里补 case n"zh-cn"，连做两次不重复。
+  4. 已经失败的模组: 升级后重新加载、重新应用那 298 行即可。之前回滚得很干净
+     (Localization.reds 没动, 也没留半成品)。
+
 【v2.51.5 更新: 两段式查表键不再收 + 「跳过」能记住了】
   1. Gang Retaliation 一个 mod 有 130 条查表键被当成正文收进了表:
      this.T("GR-MenuBoss") 和 text("GR-UiHomes", "中文兜底") 里的第 1 个参数。

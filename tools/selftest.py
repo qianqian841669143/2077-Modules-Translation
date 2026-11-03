@@ -3294,6 +3294,49 @@ def check_locale_pack_copy_guard():
         assert locale_pack.reds_is_pure_package(pure)
         locale_pack.ensure_target(root, "pure.reds", "pure_zh.reds")
         assert os.path.exists(os.path.join(root, "pure_zh.reds"))
+
+        # 一个文件里**好几套语言包**时（英文 + 西班牙语各 298 条），基线必须是
+        # 抽出来那个类的条数。以前拿整个文件去比，596 != 298，整个语言包层被拒，
+        # Gang Retaliation 的 298 行就是这么失败的。
+        multi = "\n".join([
+            "module GangRetaliation.Localization",
+            "",
+            "import Codeware.Localization.*",
+            "",
+            "public class GRLocalizationProvider extends ModLocalizationProvider {",
+            "  public func GetPackage(language: CName) -> ref<ModLocalizationPackage> {",
+            "    switch language {",
+            '      case n"en-us": return new GREnglish();',
+            '      case n"es-es": return new GRSpanish();',
+            "      default: return null;",
+            "    }",
+            "  }",
+            "}",
+            "",
+            "public class GREnglish extends ModLocalizationPackage {",
+            "  protected func DefineTexts() -> Void {",
+            '    this.Text("GR-ModName", "Gang Retaliation");',
+            '    this.Text("GR-CatGeneral", "General");',
+            "  }",
+            "}",
+            "",
+            "public class GRSpanish extends ModLocalizationPackage {",
+            "  protected func DefineTexts() -> Void {",
+            '    this.Text("GR-ModName", "Represalias de bandas");',
+            '    this.Text("GR-CatGeneral", "General");',
+            "  }",
+            "}",
+            "",
+        ])
+        _lp_write(root, "multi.reds", multi)
+        out2 = locale_pack.ensure_target(root, "multi.reds", "multi_zh.reds")
+        got2 = open(out2, encoding="utf-8-sig").read()
+        assert locale_pack.reds_is_pure_package(got2), got2
+        assert "GRSpanish" not in got2, "只该抽第一套语言包, 不能把西班牙语也带进来"
+        assert got2.count("this.Text(") == 2, got2
+        assert "class multi_zh extends ModLocalizationPackage" in got2 or \
+            "extends ModLocalizationPackage" in got2, got2
+        assert "GRLocalizationProvider" not in got2, "Provider 不能跟着复制"
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
