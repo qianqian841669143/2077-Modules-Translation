@@ -4454,14 +4454,25 @@ def check_spec_order():
     assert lvl == "soft" and "占位符" in why, (lvl, why)
 
 
-def check_shortname_badge():
-    """缩写徽标 `shortName = "CET"` 不进表。
+def check_acronym_guard():
+    """代号不翻, 但字段名不背锅。
 
-    MCM 的 provider 文件里写着 shortName = "CET" / "RCF" / "MS"，模组列表每一行
-    前面那个小标签就是它。翻成中文只会变成「中央情报局」（CET 被猜成 Central
-    Intelligence Agency）——缩写没有上下文，模型只能猜。这类字段直接不提取。
+    MCM 的 provider 写着 shortName = "CET" / "RCF" / "MS"，模组列表每行前面那个
+    小标签就是它：翻成中文只会变成「中央情报局」（CET 被猜成 Central Intelligence
+    Agency）——缩写没有上下文，模型只能猜。ENC 的页签同理会变成「神经连接」
+    （ENC = Enemies of NC 被猜成 Neural Connection）。
+
+    判据是**值**：2-5 个字符的全大写串就是代号，不送翻译；shortName 这个字段本身
+    照常收 —— 有些模组在里面写的是真文案（shortName = "Auto Drive"），按字段名
+    排除会把整句遮住。
     """
     import mod_text_engine as E
+
+    assert E.is_acronym("ENC") and E.is_acronym("CET") and E.is_acronym("RCF")
+    assert E.is_acronym("MCM") and E.is_acronym("VDB")
+    assert not E.is_acronym("IMPORT")        # 6 个字母: 普通词
+    assert not E.is_acronym("OFF")           # 全大写但就是英文单词
+    assert not E.is_acronym("ON") and not E.is_acronym("Auto Drive")
 
     src = (
         'local Provider = {\n'
@@ -4469,8 +4480,16 @@ def check_shortname_badge():
         '  name = "Native Settings UI",\n'
         '  shortName = "CET",\n'
         '}\n'
+        'local Tool = {\n'
+        '  shortName = "Auto Drive",\n'
+        '}\n'
+        'nativeSettings.addTab("/ENC", "ENC")\n'
+        'nativeSettings.addCategory("/ENC/Overall", "Overall")\n'
         'local Other = {\n'
         '  label = "Badge Label",\n'
+        '}\n'
+        'local Switch = {\n'
+        '  label = "OFF",\n'
         '}\n'
     )
     tmp = tempfile.mkdtemp(prefix="mt-badge-")
@@ -4479,9 +4498,13 @@ def check_shortname_badge():
         io.open(p, "w", encoding="utf-8", newline="").write(src)
         items = E.extract_from_file(p)
         texts = [x[3] for x in items]
-        assert "CET" not in texts, texts
+        assert "CET" not in texts, texts          # 代号: 不收
+        assert "ENC" not in texts, texts          # 页签标题也是代号
+        assert "Auto Drive" in texts, texts       # shortName 里的真文案: 照收
         assert "Native Settings UI" in texts, texts
         assert "Badge Label" in texts, texts
+        assert "Overall" in texts, texts
+        assert "OFF" in texts, texts              # 全大写英文单词: 照收
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -4746,8 +4769,8 @@ def main():
     print("   OK: 批量结果导出 (取消的不导出 / 状态与部署列对得上)")
     check_spec_order()
     print("   OK: 占位符顺序变了不写回 (MCM core.lua 那类 format 崩)")
-    check_shortname_badge()
-    print("   OK: 缩写徽标 shortName 不进表 (CET 翻成「中央情报局」那类)")
+    check_acronym_guard()
+    print("   OK: 代号不翻 (CET/ENC), 但 shortName 里的真文案照收")
     check_official_weak_words()
     print("   OK: 语言包单词条不采用官方弱匹配 (Body→尸体 这类)")
     check_i18n_coverage()

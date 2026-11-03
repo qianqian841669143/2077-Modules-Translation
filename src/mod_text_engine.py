@@ -188,6 +188,53 @@ def is_prop_loc_key(s):
     return len(segs) >= 3
 
 
+# 全大写写法, 但本身就是普通英文单词: 该翻成中文才看得懂。
+# 其余的 2-4 个字母全大写串当代号 (ENC / CET / RCF / MCM / HUD / VDB), 不送翻译 ——
+# 代号没有上下文, 模型只能猜它展开成什么:
+#   CET (Cyber Engine Tweaks) 被猜成 Central Intelligence Agency -> 模组列表每行
+#   前面挂上「中央情报局」; ENC (Enemies of NC) 被猜成 Neural Connection ->
+#   设置面板的页签变成「神经连接」。猜错比不翻难看得多。
+#
+# 只卡 4 个字母以内: RESET / CLEAR / QUICK / SLIDE / MELEE / ERROR 这些全大写词
+# 都是真文案, 长度 ≥5 的一律照翻。白名单里的词来自实测: 这些全大写词在模组里
+# 当按钮标签用过 (SELL 13 次 / NONE 13 次 / CLEAR 16 次 …), 漏掉一个就等于
+# 界面上留一个英文单词。
+_PLAIN_CAPS_WORDS = {
+    # 是/否、开关、范围
+    "OK", "ON", "OFF", "YES", "NO", "NONE", "ALL", "ANY", "MAX", "MIN",
+    "TOP", "LOW", "FULL", "HALF", "UP", "DOWN",
+    # 常用按钮
+    "ADD", "DEL", "SET", "GET", "PUT", "USE", "NEW", "OLD", "BUY", "SELL",
+    "OPEN", "LOAD", "SAVE", "EXIT", "QUIT", "EDIT", "VIEW", "MENU", "ITEM",
+    "SORT", "MAKE", "TAKE", "GIVE", "DROP", "MISC",
+    # 游戏内动作与状态
+    "RUN", "JUMP", "AIM", "FIRE", "HIT", "DIE", "PAY", "STOP", "WAIT",
+    "ROLL", "FACE", "SWAP", "LEAN", "YAW", "ARMS", "LEGS", "BODY", "GUN",
+    "DEAD", "GONE", "LOST", "WARN", "WEAK", "ZERO", "INFO", "DOCS", "LOGS",
+    "GIGS", "RED", "GOLD", "COLD", "HIGH", "WIKI",
+    # 杂项常见词
+    "BUG", "LOG", "KEY", "MAP", "BAR", "CAR", "GAS", "BAG", "WAR", "DAY",
+    "NOW", "END", "BIG", "RATE", "TIER", "RANK", "SEED", "PLOT", "DUMP",
+    # 实测在全盘模组里出现过的: 身体部位表、复数标签、连接词
+    "AND", "OR", "MODS", "TIME", "PASS", "TABS", "BASE", "MIND", "TEST",
+    "FAIL", "HEAD", "NECK", "BACK", "EARS", "FEET", "TOES", "TV",
+}
+
+
+def is_acronym(s):
+    """这个字符串是不是纯代号 (2-4 个字符的全大写字母, 无空格)。
+
+    ``ENC`` / ``CET`` / ``RCF`` / ``MCM`` 算代号; ``RESET`` / ``IMPORT`` 这种
+    5 个字母以上的全大写写法算普通词; ``OFF`` / ``SELL`` 在白名单里, 照常翻。
+    """
+    t = (s or "").strip()
+    if not (2 <= len(t) <= 4):
+        return False
+    if not t.isupper() or not t.isalpha():
+        return False
+    return t not in _PLAIN_CAPS_WORDS
+
+
 def is_translatable(s):
     """严格判定: 值得翻译的界面/设置文本"""
     if not s:
@@ -361,9 +408,9 @@ def is_label_text(s):
     # 首字母大写的英文单词, 例如 Apply / Save / Close / Health
     if re.match(r"^[A-Z][a-z]{2,}( [A-Za-z0-9'.,!?:;()\-]+)*$", t) and len(t) <= 60:
         return True
-    # 全大写缩写: HUD / MCM / OFF
+    # 全大写缩写: HUD / MCM / OFF。代号 (ENC / CET) 不收, 见 is_acronym。
     if t.isupper() and t.isalpha() and 2 <= len(t) <= 8:
-        return True
+        return not is_acronym(t)
     return False
 
 
@@ -585,10 +632,11 @@ SETTINGS_KEYS = {
     "msg": TYPE_UI, "message": TYPE_UI, "body": TYPE_UI, "notice": TYPE_UI,
     "notification": TYPE_UI, "summary": TYPE_DESC, "prompt": TYPE_NAME,
     "fullname": TYPE_NAME, "localizedname": TYPE_NAME, "displaytext": TYPE_UI,
-    # `shortname` 故意不收: 它是缩写徽标 (MCM 的 provider 写着 shortName = "CET" /
-    # "RCF" / "MS", 模组列表每行前面那个小标签就是它)。按定义就是几个大写字母,
-    # 模型只能猜它展开成什么 —— CET 被猜成 Central Intelligence Agency, 列表里
-    # 于是每行都顶着「中央情报局」。这类短代号宁可不翻。
+    # `shortname` 也照收: 它确实是缩写徽标 (MCM 的 provider 写着 shortName =
+    # "CET" / "RCF" / "MS"), 但「是不是代号」由值本身判断 (is_acronym), 不靠
+    # 字段名一刀切 —— 有些模组在里面写的是一句真文案, 按字段名排除就整句漏翻。
+    # v2.51.2 之前这里不收, 那正是「遮住真文本」的那一刀。
+    "shortname": TYPE_NAME,
 }
 
 LIST_KEYS = {"labels", "options", "items", "choices", "entries", "values", "list"}
@@ -909,11 +957,9 @@ def _assign_target(text, pos):
 
 # 名字里出现这些词，说明这个字符串多半是给玩家看的文本。
 #
-# 注意 `shortname` **不在**里面：它是缩写徽标（MCM 的 provider 写着
-# `shortName = "CET"` / `"RCF"` / `"MS"`，模组列表每一行前面那个小标签就是它），
-# 按定义就是几个大写字母，翻成中文只会变成「中央情报局」「快速破解」——
-# 缩写的语义模型全靠猜（CET = Cyber Engine Tweaks，被猜成 Central Intelligence
-# Agency）。这类短代号宁可不翻，让缩写原样显示。
+# `shortname` 不在里面，但 `shortName` 仍能命中 —— `_name_segments` 会把它拆成
+# short + name，`name` 本身在表里。判断「是不是代号」交给值 (is_acronym)，
+# 不做字段名层面的排除：那会把 `shortName = "Auto Drive"` 这类真文案一起遮住。
 DISPLAY_SEGMENTS = {
     "name", "displayname", "fullname", "localizedname",
     "title", "subtitle", "header", "label", "caption", "text", "body",
@@ -975,10 +1021,6 @@ def _diag_fragment(t):
     return bool(re.search(r"(^|[\s:(\[])[A-Za-z_][\w.]*=", t))
 
 
-_BADGE_FIELDS = {"shortname", "shortnames", "abbr", "abbrev", "abbreviation",
-                 "acronym"}
-
-
 def text_evidence(text, pos, callee=""):
     """判断一个字面量「有证据是界面文本」的程度。
 
@@ -989,11 +1031,6 @@ def text_evidence(text, pos, callee=""):
       plain    —— 没有位置证据, 只能靠「像不像句子」判断
     """
     var = _assign_target(text, pos)
-    # 缩写徽标 (shortName = "CET" / "RCF") 不是文案: 按定义就是几个大写字母,
-    # 模型只能猜它展开成什么 —— CET 是 Cyber Engine Tweaks, 它猜成了
-    # Central Intelligence Agency, 于是模组列表每行前面都挂上「中央情报局」。
-    if (var or "").lower() in _BADGE_FIELDS:
-        return "internal", var
     segs = _name_segments(var)
     for seg in segs:
         if seg in DISPLAY_SEGMENTS:

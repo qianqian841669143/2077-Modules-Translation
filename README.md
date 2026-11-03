@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.51.1**
+当前版本：**v2.51.2**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -14,6 +14,25 @@
 > `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.51.2 更新：代号按值判断，`shortName` 里的真文案照收
+
+v2.51.1 为了让 MCM 列表不再出现「中央情报局」，把 `shortName` **整个字段**排除了。
+代价是：哪个模组在 `shortName` 里写的是一句真文案（`shortName = "Auto Drive"`），
+那句话就永远不进表、也翻不了。这次把那一刀收窄成按值判断。
+
+- 判据换成值：**2-4 个字母的全大写串算代号**（`ENC` / `CET` / `RCF` / `MCM` /
+  `HUD` / `NCPD`），不送翻译；`shortName` 字段本身照常收；
+- 全大写但本身就是英文词的要照翻，白名单是实测出来的（`SELL` 13 次、`NONE` 13 次、
+  `CLEAR` 16 次、`QUICK` 18 次……）；`RESET` / `CLEAR` / `QUICK` / `MELEE` /
+  `ERROR` 这类 5 个字母以上的全大写词完全不受影响；
+- 现场那一处：`Enemies of NC` 的 Native Settings 页签原文是 `ENC`，被翻成
+  「神经连接」（模型把 ENC 猜成 Neural Connection），已改回 `ENC`；翻译记忆里
+  `ENC → 神经连接` 那一条删掉；
+- 自测 `check_acronym_guard()`：`shortName = "CET"` 不收、`shortName = "Auto Drive"`
+  照收、`addTab("/ENC", "ENC")` 不收、`label = "OFF"` 照收。MCM 仍是 273 条。
+- 代价说清楚：白名单之外的 2-4 个字母全大写词会保持英文（某个模组自造的四字母
+  标签就属于这种）。宁可留英文，也不让模型猜出一个不存在的词。
 
 ## v2.51.1 更新：缩写徽标不再被翻译
 

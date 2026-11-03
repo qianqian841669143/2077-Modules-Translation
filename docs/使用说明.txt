@@ -13,6 +13,21 @@
                              注册的设置名称、描述、分类、选项、按钮标签
                              这是 v1.1 新增的重点功能
 
+【v2.51.2 更新: 代号按值判断, shortName 里的真文案照收】
+  1. v2.51.1 为了让 MCM 列表不出现「中央情报局」, 把 shortName 整个字段排除了。
+     代价是: 万一哪个模组在 shortName 里写的是一句真文案
+     (shortName = "Auto Drive"), 那句话永远不进表、也翻不了。
+  2. 现在只看值: 2-4 个字母的全大写串算代号 (ENC / CET / RCF / MCM / HUD / NCPD),
+     不送翻译; shortName 这个字段本身照常收。
+  3. 全大写但本身就是英文词的照翻, 白名单是实测出来的 (SELL、NONE、RESET、CLEAR
+     这些都见过); RESET / CLEAR / QUICK / MELEE / ERROR 这类 5 个字母以上的
+     全大写词完全不受影响。
+  4. 现场那一处: Enemies of NC 的 Native Settings 页签原文是 ENC, 被翻成
+     「神经连接」(模型把 ENC 猜成 Neural Connection), 已改回 ENC; 翻译记忆里
+     ENC → 神经连接 那一条删掉。改完要重进游戏才看得到。
+  5. 代价: 白名单之外的 2-4 个字母全大写词会保持英文。宁可留英文, 也不让模型
+     猜出一个不存在的词。
+
 【v2.51.1 更新: 缩写徽标不再被翻译】
   1. MCM 模组列表每行前面那个小标签是 provider 的 shortName: 原文是
      shortName = "CET" / "RCF" / "MS"。CET 是 Cyber Engine Tweaks, 模型猜成了
