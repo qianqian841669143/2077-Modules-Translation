@@ -45,7 +45,7 @@ v2.50.0（批量结果导出）、v2.51.0（占位符顺序不再被换掉）
 | 条目 | 做法 |
 |---|---|
 | MCM 里点「应用」后整块面板报 `bad argument #3 to 'format' (number expected, got string)`（`ModConfigurationMenuAPI\modules\core.lua:1344`） | 不是 MCM 的 bug：`string.format` 按位置取参数，译文把顺序换了。原文 `"Applied %d change(s) for %s."` 传的是 (数字, 名字)，中文写成「已为 %s 应用 %d 项更改。」——占位符个数一个不少，旧校验（`repair_markup` 的 `_count`）只数个数，于是照样写回，运行时第 3 个参数要 `%d` 却拿到 mod 名。新增 `mod_text_engine.swapped_spec_order()`：占位符序列不一致（个数相同）即软失败「占位符顺序变了, string.format 按位置取参数会崩」，`guard_level()` 与 `web_app._do_apply_source()` 两处写回都挂上；机翻提示词补一条「顺序也不能变」。已写坏的 4 处（`core.lua` 1344/1345、`workflows\collections.lua` 1068/1182）改写成保持原顺序的中文句子（参数未动），翻译记忆里 4 条同步订正。自测 `check_spec_order()` |
-| 排查手段 | `.m0\scan_lua_format.py`：静态扫全盘 `string.format` 字面量，比对占位符个数与实参个数，并按 `#x` / `tostring(…)` / `.name` / 表构造 推断类型，报出「%d 拿到字符串」的必崩点；`.m0\locate_spec_swaps.py` 用记忆库反查「顺序被换」的译文落在哪个文件哪一行。全盘（CET 全部 `.lua`）跑完只剩 1 条与翻译无关的上游 bug：`MuchBetterContracts\gigTest.lua:1705` 用 `%d` 接 `GetFactStr()` 的返回值（模型作者的调试串） |
+| 排查手段 | `tools/scan_lua_format.py`（新入库）：静态扫全盘 `string.format` 字面量，比对占位符个数与实参个数，并按 `#x` / `tostring(…)` / `.name` / 表构造 推断类型，报出「%d 拿到字符串」的必崩点，报告落到 `userdata\reports\lua-format-<时间>.txt`。全盘（CET 全部 353 个 `.lua`）跑完只剩 1 条与翻译无关的上游 bug：`MuchBetterContracts\gigTest.lua:1705` 用 `%d` 接 `GetFactStr()` 的返回值（模型作者自己的调试串）。另有一次性脚本用记忆库反查「顺序被换」的译文落在哪个文件的哪一行，定位到上述 4 处 |
 
 ## 已修（v2.50.0）
 
