@@ -824,8 +824,13 @@ class Api(object):
         try:
             import user_skip
             marked = user_skip.marks(root)
+            try:
+                skipped_marks = user_skip.skip_marks(root)
+            except Exception:
+                skipped_marks = set()
         except Exception:
             marked = set()
+            skipped_marks = set()
         hidden_skip = 0
         if marked and src_rows:
             kept = []
@@ -837,6 +842,18 @@ class Api(object):
                     continue
                 kept.append(r)
             src_rows = kept
+        # ---- 上次勾过「跳过」的行：行还在，但默认就是勾上的状态
+        #
+        # 跳过和「标记为代码」不一样：那个是隐藏（判断是代码），这个是「我暂时不想翻」，
+        # 用户下次可能又想翻了，所以不能藏起来，只能把勾选状态带回来。
+        auto_skip = 0
+        if skipped_marks and src_rows:
+            for r in src_rows:
+                key = (str(r.get("file") or "").replace("\\", "/").lower(),
+                       user_skip.sha1_of(r.get("orig") or ""))
+                if key in skipped_marks:
+                    r["skip"] = 1
+                    auto_skip += 1
         # ---- 合并两层: 语言包行在前, 设置/源码文本在后
         for r in loc_rows:
             r["layer"] = "locale"
@@ -903,6 +920,7 @@ class Api(object):
         # 提前写进去会被覆盖掉。
         meta["resourceRows"] = len(res_rows)
         meta["userSkip"] = hidden_skip
+        meta["autoSkip"] = auto_skip
         if res_info:
             meta["resource"] = res_info
         if res_rows and (loc_rows or src_rows):
@@ -928,7 +946,8 @@ class Api(object):
                "parseErrors": int(meta.get("parse_errors", 0) or 0),
                "parseErrorSample": list(meta.get("parse_error_sample") or [])[:5],
                "localeRows": len(loc_rows), "sourceRows": len(src_rows),
-               "resourceRows": len(res_rows), "userSkip": hidden_skip}
+               "resourceRows": len(res_rows), "userSkip": hidden_skip,
+               "autoSkip": auto_skip}
         for k in ("source", "pairCount", "unpaired", "localeTotal", "sourceFiles"):
             if k in loc_info:
                 out[k] = loc_info[k]
@@ -2876,6 +2895,29 @@ class Api(object):
                 r["codeMarked"] = 1
                 hit += 1
         return {"ok": True, "marked": hit, "total": n}
+
+    def remember_skips(self, items):
+        """记住 / 忘掉「跳过」勾选，下次加载同一行默认就是勾上的。
+
+        items: [[相对路径, 原文, 是否跳过], …]。只对明文层（.reds/.lua）生效——
+        跳过状态是按 (相对路径, 原文 sha1) 记的，归档层的行没有磁盘路径。
+        """
+        import user_skip
+        root = self.root or ""
+        if not root:
+            return {"ok": False, "error": self._tr("还没有加载模组。")}
+        n = 0
+        for it in (items or []):
+            try:
+                rel, orig, value = it[0], it[1], bool(it[2])
+            except Exception:
+                continue
+            if not rel or not str(orig or "").strip():
+                continue
+            ok, _cnt = user_skip.set_skip(root, rel, orig, value)
+            if ok:
+                n += 1
+        return {"ok": True, "remembered": n}
 
     def _pending_in_same_files(self, items):
         """这次要写的文件里，还有多少条没译的行。

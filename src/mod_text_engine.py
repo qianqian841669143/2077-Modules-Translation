@@ -196,6 +196,34 @@ def is_spaced_loc_key(s):
     return bool(_SPACED_KEY_CHARS_RE.match(t))
 
 
+# 两段式查表键：`GR-UiHomes` / `MBC-Wire-CrimeRcr18` / `SS.panelX`。大写缩写前缀 +
+# 驼峰段、没有空格、长度短。`is_loc_key()` 要求三段以上，两段式的（模组自己造前缀，
+# 如 GR-）正好漏掉；`@runtimeProperty` 与 `getText` 那两条又只认调用位置，
+# 于是在 `this.T("GR-MenuBoss")` / `text("GR-UiHomes", "兜底")` 这种自造查表函数里
+# 就被当成正文收进表了（Gang Retaliation 一个 mod 57 条）。
+_SHORT_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]{1,6}(?:-[A-Za-z0-9]+)+$")
+# 自造查表函数的常见名字，配合「键形状」一起用，所以 `text("某句真文案")` 不受影响。
+_LOOKUP_EXTRA = {"t", "tr", "text", "translate", "loc", "locate", "l10n"}
+
+
+def is_short_loc_key(s):
+    """`GR-UiHomes` 这种两段式查表键（大写缩写前缀 + 驼峰段，无空格）。"""
+    t = (s or "").strip()
+    if not t or len(t) > 48 or " " in t or CJK_RE.search(t):
+        return False
+    if not _SHORT_KEY_RE.match(t):
+        return False
+    return any(seg[:1].isupper() for seg in t.split("-")[1:])
+
+
+def is_lookup_call(callee):
+    """这个被调名像不像「拿键去查文本」：`this.T(…)` / `text(键, 兜底)` / `getText(…)`。"""
+    last = re.split(r"[.:]", str(callee or ""))[-1].strip().lower()
+    if not last:
+        return False
+    return last in LOC_CALLS or last in _LOOKUP_EXTRA
+
+
 # @runtimeProperty("ModSettings.displayName", "NearbyLoot-Enabled") —— 第二个参数
 # 是 onscreens 的**查表键**，不是文案：Codeware 拿它去 GetLocalizedText，查不到
 # 才回退显示键本身。真文案在 mod 归档的 localization 里。
@@ -1473,6 +1501,12 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
                 ).split(".")[-1].lower() in LOC_CALLS:
             drop(NOISE.FAMILY_LOCKEY)
             return
+        # 自造查表函数 (`this.T("GR-MenuBoss")` / `text("GR-UiHomes", "兜底")`)：
+        # 实参是键形状时同样不翻。只对「键形状」生效，`text("某句真文案")` 不受影响。
+        if is_short_loc_key(lit.inner) and is_lookup_call(
+                lit_callee(cmap, toks, starts, lit.start)):
+            drop(NOISE.FAMILY_LOCKEY)
+            return
         if not kept_section(lit.start):
             drop(NOISE.FAMILY_LANG)
             return
@@ -1673,6 +1707,11 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
             callee = lit_callee(cmap, toks, starts, lit.start) or ""
             last = callee.split(".")[-1].lower()
             if last in DEAD_CALLS or callee.split(".")[0].lower() in DEAD_CALLS:
+                continue
+            # 两段式查表键 (`GR-HudMore`) 在没有查表调用、或调用本身是查表函数时不收。
+            # 这里要求「键形状」，所以 `this.Text("MBC-Key", "真文案")` 的 value 不受影响。
+            if is_short_loc_key(txt) and (not callee or is_lookup_call(callee)):
+                drop(NOISE.FAMILY_LOCKEY)
                 continue
             if last.startswith("log") or last.startswith("print"):
                 continue
@@ -1878,6 +1917,10 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
                 # 这种裸返回没有调用位置证据，只能落到这一档；它是 onscreens 的键，
                 # 翻掉以后游戏里显示原始 key（Immersive Cyberware 的眼镜槽位名）。
                 if is_spaced_loc_key(lit.inner):
+                    drop(NOISE.FAMILY_LOCKEY)
+                    continue
+                # 两段式查表键同理：`this.T("GR-MenuBoss")` 的实参、或裸返回的键。
+                if is_short_loc_key(lit.inner) and (not call or is_lookup_call(call)):
                     drop(NOISE.FAMILY_LOCKEY)
                     continue
                 if _diag_fragment(lit.inner):

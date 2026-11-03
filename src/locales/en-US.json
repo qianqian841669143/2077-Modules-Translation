@@ -489,6 +489,7 @@
     "必坏·不可写入": "Breaks - never write",
     "已标记为代码：以后不再作为候选出现。": "Marked as code: it will not show up as a candidate again.",
     "%d 条已按「标记为代码」隐藏": "%d hidden by \"Mark as code\"",
+    "%d 条按上次的「跳过」自动勾选": "%d row(s) auto-skipped from your last session",
     "这一条被判为「疑似代码片段」，写进去可能把语法改坏。\n\n原文：%s\n译文：%s\n\n确认要单条写入吗？": "This line was flagged as a possible code fragment; writing it may break the syntax.\n\nSource: %s\nTranslation: %s\n\nWrite this single row?",
     "没有要写入的条目。": "Nothing to write.",
     "还没有加载模组。": "No mod is loaded yet.",

@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.51.4**
+当前版本：**v2.51.5**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -14,6 +14,36 @@
 > `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.51.5 更新：两段式查表键不再收 + 「跳过」能记住了
+
+两件事一起做：
+
+**1. `Gang Retaliation` 那 130 条键不再当正文。** 这个 mod 自己封了两层查表函数：
+
+```lua
+ImGui.Text(text("GR-UiHomes", "安全的家园（附近无伏击）"))   -- 第 1 个参数是键
+this.m_more.SetText(StrReplace(this.T("GR-HudMore"), "%d", "0"))  -- 实参是键
+```
+
+`this.T(...)` / `text(键, 兜底)` 都不在 `LOC_CALLS` 里，而键又是两段式
+（`is_loc_key()` 要求三段以上），两处一起漏，一个 mod 收进 130 行键。翻掉的后果是
+HUD 和菜单里显示 `GR-MenuBoss` 这种原始键。现在加 `is_short_loc_key()`
+（大写缩写前缀 + 驼峰段、无空格）与 `is_lookup_call()`，只在「查表调用实参 /
+没有位置证据」时拦 —— `this.Text("键", "真文案")` 的 value 照收。
+
+- 全盘 282 个模组实测：拦下的 130 行**全在这一个 mod**（init.lua 70 / Menu.reds 57 /
+  Hud.reds 3），其余 281 个 mod 行数一条没变；
+- 该 mod 现在 389 行，`Localization.reds` 的 298 条语言包文本一条不少。
+
+**2. 表格里的「跳过」现在会记住**（原待办第 3 条）。以前只改内存，重载就复原。
+现在勾上会落到 `userdata\user_skips.json`，下次加载同一行**默认就是勾上的**，并在
+提示里说「N 条按上次的「跳过」自动勾选」；取消勾选就把记录删掉。
+
+- 和「标记为代码」分开存：那个是**隐藏**（判断这段是代码，以后不再当候选），
+  跳过只是「暂时不想翻」，所以行还在表里、还能取消；
+- 键和代码标记一样是（模组目录名 + 相对路径 + 原文 sha1），目录改名要重记一次；
+  归档层（resource）行没有磁盘路径，不参与这套。
 
 ## v2.51.4 更新：带空格的查表键不再收
 

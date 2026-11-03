@@ -27,6 +27,16 @@ def _path():
     return os.path.join(appconfig.config_dir(), "user_skip.json")
 
 
+def _skip_path():
+    """用户勾过「跳过」的行。
+
+    和上面那份「标记为代码」分开存：代码标记是**隐藏**（加载时直接过滤掉），
+    跳过只是**默认勾上**（行还在表里、可以取消）。两种判断混在一份文件里，
+    取消一次跳过就得猜它当初是哪一类，所以各存各的。
+    """
+    return os.path.join(appconfig.config_dir(), "user_skips.json")
+
+
 def sha1_of(text):
     return hashlib.sha1((text or "").encode("utf-8")).hexdigest()
 
@@ -37,9 +47,9 @@ def _mod_key(root):
     return name.strip().lower()
 
 
-def _load_all():
+def _load_at(path):
     try:
-        with open(_path(), "r", encoding="utf-8-sig") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         if isinstance(data, dict):
             return data
@@ -48,17 +58,32 @@ def _load_all():
     return {}
 
 
-def _save_all(data):
-    p = _path()
+def _save_at(path, data):
     try:
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        tmp = p + ".tmp"
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
-        os.replace(tmp, p)
+        os.replace(tmp, path)
         return True
     except Exception:
         return False
+
+
+def _load_all():
+    return _load_at(_path())
+
+
+def _save_all(data):
+    return _save_at(_path(), data)
+
+
+def _load_skips():
+    return _load_at(_skip_path())
+
+
+def _save_skips(data):
+    return _save_at(_skip_path(), data)
 
 
 def marks(root):
@@ -120,3 +145,49 @@ def remove(root, rel, orig):
 
 def count(root):
     return len(marks(root))
+
+
+# ---------------------------------------------------------------- 勾过「跳过」的行
+def skip_marks(root):
+    """返回该模组里用户勾过「跳过」的 ``{(相对路径小写, sha1)}`` 集合。"""
+    mod = _mod_key(root)
+    if not mod:
+        return set()
+    files = _load_skips().get(mod) or {}
+    out = set()
+    for rel, shas in files.items():
+        for s in (shas or ()):
+            out.add((str(rel).replace("\\", "/").lower(), str(s)))
+    return out
+
+
+def set_skip(root, rel, orig, value=True):
+    """勾上 / 取消一条「跳过」。返回 (是否写入成功, 该文件记下的条数)。
+
+    用 (相对路径, 原文 sha1) 记，行号漂移不影响；模组目录改名要重记一次
+    （和「标记为代码」同一套键，理由见文件头）。
+    """
+    mod = _mod_key(root)
+    if not mod:
+        return False, 0
+    rel_key = str(rel).replace("\\", "/").lower()
+    data = _load_skips()
+    files = data.get(mod) or {}
+    shas = files.get(rel_key) or []
+    digest = sha1_of(orig)
+    if value:
+        if digest not in shas:
+            shas.append(digest)
+    elif digest in shas:
+        shas.remove(digest)
+    if shas:
+        files[rel_key] = shas
+        data[mod] = files
+    else:
+        files.pop(rel_key, None)
+        if files:
+            data[mod] = files
+        else:
+            data.pop(mod, None)
+    ok = _save_skips(data)
+    return ok, len(shas)

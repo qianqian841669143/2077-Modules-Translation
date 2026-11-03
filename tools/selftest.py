@@ -3006,6 +3006,96 @@ def check_user_skip_mark():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_skip_persist():
+    """勾「跳过」要记住：下次加载同一行默认就是勾上的，取消就删。
+
+    跳过 ≠ 「标记为代码」：后者是隐藏（判断这段是代码，以后不再作为候选），
+    跳过只是「我暂时不想翻」，所以下次还要看得见、还能取消。两份记录分开存
+    （user_skip.json / user_skips.json），互不影响。
+    """
+    tmp = tempfile.mkdtemp(prefix="skiprows_")
+    old = os.environ.get("MT_DATA_DIR")
+    os.environ["MT_DATA_DIR"] = tmp
+    try:
+        import user_skip
+        root = os.path.join(tmp, "MyMod")
+        os.makedirs(root)
+        assert user_skip.skip_marks(root) == set()
+        ok, n = user_skip.set_skip(root, r"r6\scripts\a.reds", "GR-Foo", True)
+        assert ok and n == 1, (ok, n)
+        # 路径分隔符归一后再比
+        assert user_skip.skip_marks(root) == {
+            ("r6/scripts/a.reds", user_skip.sha1_of("GR-Foo"))}
+        # 和「标记为代码」互不影响：跳过不隐藏，代码标记也不会被跳过覆盖
+        assert user_skip.marks(root) == set()
+        assert not user_skip.is_marked(root, "r6/scripts/a.reds", "GR-Foo")
+        user_skip.add(root, "r6/scripts/a.reds", "GR-Foo")
+        assert user_skip.skip_marks(root) == {
+            ("r6/scripts/a.reds", user_skip.sha1_of("GR-Foo"))}
+        # 取消跳过：条目要删干净（文件为空就整段清掉，别留空架子）
+        ok, n = user_skip.set_skip(root, "r6/scripts/a.reds", "GR-Foo", False)
+        assert ok and n == 0, (ok, n)
+        assert user_skip.skip_marks(root) == set()
+        # 别的模组不串
+        other = os.path.join(tmp, "OtherMod")
+        os.makedirs(other)
+        user_skip.set_skip(other, "r6/scripts/a.reds", "GR-Foo", True)
+        assert len(user_skip.skip_marks(other)) == 1
+        assert user_skip.skip_marks(root) == set()
+    finally:
+        os.environ.pop("MT_DATA_DIR", None)
+        if old is not None:
+            os.environ["MT_DATA_DIR"] = old
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_short_loc_key():
+    """两段式查表键（`GR-UiHomes`）不当正文；`this.Text` 的 value 照收。
+
+    Gang Retaliation 自己封了 `this.T("GR-…")` / `text("GR-…", "中文兜底")`
+    两层查表函数，把键当成了界面文本（一个 mod 130 行）。键形状是「大写缩写
+    前缀 + 驼峰段、无空格」，只在「没有位置证据」或「查表调用实参」处拦。
+    """
+    import mod_text_engine as E
+
+    assert E.is_short_loc_key("GR-UiHomes")
+    assert E.is_short_loc_key("MBC-Wire-CrimeRcr18")
+    assert not E.is_short_loc_key("Auto-Drive")        # 前缀不是全大写缩写
+    assert not E.is_short_loc_key("GR Ui Homes")       # 有空格
+    assert not E.is_short_loc_key("Desperate Sons-of-Bitches")  # 有空格
+    assert E.is_lookup_call("this.T") and E.is_lookup_call("text")
+    assert E.is_lookup_call("GetLocalizedText") and not E.is_lookup_call("SetText")
+
+    lua = (
+        'local function ui()\n'
+        '  ImGui.Text(text("GR-UiHomes", "安全的家园（附近无伏击）"))\n'
+        '  ImGui.Text("Visible label")\n'
+        'end\n'
+    )
+    reds = (
+        'public class Foo extends IScriptable {\n'
+        '    private func Bar() -> Void {\n'
+        '        this.m_more.SetText(StrReplace(this.T("GR-HudMore"), "%d", "0"));\n'
+        '        this.Text("MBC-Wire-CrimeRcr18", "Desperate Sons-of-Bitches");\n'
+        '    }\n'
+        '}\n'
+    )
+    tmp = tempfile.mkdtemp(prefix="mt-shortkey-")
+    try:
+        p = os.path.join(tmp, "ui.lua")
+        io.open(p, "w", encoding="utf-8", newline="").write(lua)
+        texts = [x[3] for x in E.extract_from_file(p)]
+        assert "GR-UiHomes" not in texts, texts
+        assert "Visible label" in texts, texts
+        q = os.path.join(tmp, "hud.reds")
+        io.open(q, "w", encoding="utf-8", newline="").write(reds)
+        rtexts = [x[3] for x in E.extract_from_file(q)]
+        assert "GR-HudMore" not in rtexts, rtexts
+        assert "Desperate Sons-of-Bitches" in rtexts, rtexts
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_getter_literal_labels():
     """getLabel / getActionLabel 直接返回字面量时要能进表 (P11-3)。
 
@@ -4786,6 +4876,10 @@ def main():
     print("   OK: soft/hard 失败分级 / 单条覆盖 / 一条坏行不干掉整批")
     check_user_skip_mark()
     print("   OK: 「标记为代码」持久化 (按路径+原文 sha1, 分模组隔离)")
+    check_skip_persist()
+    print("   OK: 「跳过」勾选持久化 (下次加载默认勾上 / 取消即删 / 与代码标记分开)")
+    check_short_loc_key()
+    print("   OK: 两段式查表键 (GR-UiHomes) 不收, this.Text 的 value 照收")
     check_getter_literal_labels()
     print("   OK: getLabel/getActionLabel 直接返回字面量的显示名进表")
     check_identifier_guard()

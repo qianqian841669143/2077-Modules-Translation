@@ -677,6 +677,10 @@ function onLoaded(r) {
     // 用户自己标成「代码」的行：不再出现，但要让人知道它们还在排除表里
     msg += " · " + T("%d 条已按「标记为代码」隐藏").replace("%d", r.userSkip);
   }
+  if (r.autoSkip) {
+    // 上次勾过「跳过」的行：还在表里，但默认就是勾上的
+    msg += " · " + T("%d 条按上次的「跳过」自动勾选").replace("%d", r.autoSkip);
+  }
   if (r.localeRows || r.sourceRows) {
     msg += " · " + T("语言包 %d 行 / 设置与源码 %d 行")
       .replace("%d", r.localeRows || 0).replace("%d", r.sourceRows || 0);
@@ -921,6 +925,30 @@ function originalIndicesForRow(row) {
   return row && row._i != null ? [Number(row._i)] : [];
 }
 
+// 把「跳过」勾选记到后端：下次加载同一行默认就是勾上的。
+// 只对明文层的行有意义（归档行没有磁盘路径，后端会忽略）。
+function rememberSkips(rows, value) {
+  const items = [];
+  const seen = new Set();
+  const add = (r) => {
+    if (!r || !r.file) return;
+    const key = r.file + "\u0000" + (r.orig || "");
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push([r.file, r.orig || "", !!value]);
+  };
+  (rows || []).forEach((row) => {
+    if (!row) return;
+    add(row);
+    // 合并视图下一行代表同一句出现的好几处，各自的文件都要记
+    (row.dups || []).forEach(add);
+  });
+  if (!items.length) return;
+  try {
+    Promise.resolve(pywebview.api.remember_skips(items)).catch(() => {});
+  } catch (_) { /* 没有后端时静默 */ }
+}
+
 function setRowsSkip(rows, value) {
   const keys = new Set();
   (rows || []).forEach((row) => {
@@ -936,6 +964,7 @@ function setRowsSkip(rows, value) {
   state.raw.forEach((raw) => {
     if (keys.has(rowKey(raw))) raw.skip = !!value;
   });
+  rememberSkips(rows, value);
   state.dirty = true;
   render();
   setStatus(value
@@ -945,16 +974,19 @@ function setRowsSkip(rows, value) {
 
 function setFileSkip(file, value) {
   let n = 0;
+  const touched = [];
   state.raw.forEach((row) => {
     if (row.file !== file) return;
     if (!!row.skip !== !!value) n += 1;
     row.skip = !!value;
+    touched.push(row);
   });
   state.rows.forEach((row) => {
     if (row.file !== file) return;
     row.skip = !!value;
     (row.dups || []).forEach((d) => { d.skip = !!value; });
   });
+  rememberSkips(touched, value);
   state.dirty = true;
   render();
   setStatus(value
