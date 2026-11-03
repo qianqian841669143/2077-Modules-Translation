@@ -4512,6 +4512,65 @@ def check_acronym_guard():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_spaced_loc_key():
+    """带空格的查表键不是文案（`Gameplay-Items-Item Type-Prt_Fragment`）。
+
+    Immersive Cyberware 的 `slotSupport.reds` 用 `@wrapMethod` 顶掉
+    `UItemsHelper.GetSlotName`，直接 `return "Gameplay-Items-Item Type-Prt_Fragment"`。
+    这是 onscreens 的键，游戏拿它去查「碎片」这个词；翻成中文就把引用改断了。
+
+    这条只该拦「没有任何位置证据、靠像不像句子兜底」的字面量：`this.Text(key, value)`
+    的 value（`Desperate Sons-of-Bitches`）同样是连字符写法，但它在 value 位置上，
+    必须照收。
+    """
+    import mod_text_engine as E
+
+    assert E.is_spaced_loc_key("Gameplay-Items-Item Type-Prt_Fragment")
+    assert not E.is_spaced_loc_key("Part - Engine - Turbo")      # 人写的标签
+    assert not E.is_spaced_loc_key("HUD-Integrated Optics Module")  # 只有一处连字符
+    assert not E.is_spaced_loc_key("Displays your health bar.")
+
+    reds = (
+        '@wrapMethod(UIItemsHelper)\n'
+        'public final static func GetSlotName(slotID: TweakDBID) -> String {\n'
+        '    if (UIItemsHelper.IsEyeSlot(slotID)) {\n'
+        '        return "Gameplay-Items-Item Type-Prt_Fragment";\n'
+        '    }\n'
+        '    return wrappedMethod(slotID);\n'
+        '}\n'
+        'public class Foo {\n'
+        '    private func Bar() -> Void {\n'
+        '        this.Text("MBC-Wire-CrimeRcr18", "Desperate Sons-of-Bitches");\n'
+        '        let d: String = "In the grim darkness of the near future, there are only ads.";\n'
+        '    }\n'
+        '}\n'
+    )
+    lua = (
+        'local function slotName(slot)\n'
+        '  if slot then\n'
+        '    return "Gameplay-Items-Item Type-Prt_Fragment"\n'
+        '  end\n'
+        '  return wrapped(slot)\n'
+        'end\n'
+    )
+    tmp = tempfile.mkdtemp(prefix="mt-spaced-key-")
+    try:
+        p = os.path.join(tmp, "slotSupport.reds")
+        io.open(p, "w", encoding="utf-8", newline="").write(reds)
+        texts = [x[3] for x in E.extract_from_file(p)]
+        assert "Gameplay-Items-Item Type-Prt_Fragment" not in texts, texts
+        assert "Desperate Sons-of-Bitches" in texts, texts          # this.Text 的 value
+        assert ("In the grim darkness of the near future, there are only ads."
+                in texts), texts
+
+        q = os.path.join(tmp, "slot.lua")
+        io.open(q, "w", encoding="utf-8", newline="").write(lua)
+        lua_texts = [x[3] for x in E.extract_from_file(q)]
+        assert "Gameplay-Items-Item Type-Prt_Fragment" not in lua_texts, lua_texts
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_archive_prefilter():
     """归档预筛不能把「路径里没有 localization」的本地化表挡掉。
 
@@ -4806,6 +4865,8 @@ def main():
     print("   OK: 代号不翻 (CET/ENC), 但 shortName 里的真文案照收")
     check_archive_prefilter()
     print("   OK: 归档预筛认 .json, translations 目录下的本地化表不被挡掉")
+    check_spaced_loc_key()
+    print("   OK: 带空格的查表键不收, this.Text 的 value 照收")
     check_official_weak_words()
     print("   OK: 语言包单词条不采用官方弱匹配 (Body→尸体 这类)")
     check_i18n_coverage()

@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.51.3**
+当前版本：**v2.51.4**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -14,6 +14,22 @@
 > `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.51.4 更新：带空格的查表键不再收
+
+`Immersive Cyberware` 的 `slotSupport.reds` 用 `@wrapMethod` 顶掉
+`UItemsHelper.GetSlotName`，里面直接 `return "Gameplay-Items-Item Type-Prt_Fragment"`
+—— 这是 onscreens 的键，游戏拿它去查「碎片」这个词。工具把它当长句文本收进了表，
+翻掉就等于把引用改断，界面上的槽位名会显示原始 key。
+
+- `is_loc_key()` 要求整串无空格，`getText` / `@runtimeProperty` 的排除只看调用位置，
+  两条都管不到「裸 `return` 的带空格键」；新增 `is_spaced_loc_key()` 补这一档：
+  带空格 + 至少两处**紧贴**的连字符（`A-B`，不是 `A - B`）+ 无句子标点 + ≤8 词；
+- 只拦「没有位置证据」的字面量。`this.Text("MBC-Wire-CrimeRcr18", "Desperate Sons-of-Bitches")`
+  的 value 同样是连字符写法，但它在 value 位置上，照收；
+- 全盘 282 个模组实测：只拦下 **1 条**（就是上面那个键），提取总行数 18,409；
+- 自测 `check_spaced_loc_key()` 钉住「键不收 / `this.Text` 的 value 照收 / 人写的
+  `Part - Engine - Turbo` 不算键」。
 
 ## v2.51.3 更新：归档预筛不再按目录名判断
 

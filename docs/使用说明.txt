@@ -13,6 +13,18 @@
                              注册的设置名称、描述、分类、选项、按钮标签
                              这是 v1.1 新增的重点功能
 
+【v2.51.4 更新: 带空格的查表键不再收】
+  1. 现象: Immersive Cyberware 的 slotSupport.reds 里有一句
+     return "Gameplay-Items-Item Type-Prt_Fragment"; 被当成「长句文本」收进了表。
+     那是 onscreens 的查表键, 游戏拿它查「碎片」这个词; 翻掉以后界面上槽位名
+     会显示原始 key 或者空白。
+  2. 原因: is_loc_key 要求整串没有空格, getText / @runtimeProperty 那两条排除
+     只看调用位置, 都管不到「函数里裸 return 的带空格键」。
+  3. 现在: 带空格 + 至少两处紧贴的连字符(A-B, 不是 A - B)+ 没有句子标点 +
+     不超过 8 个词, 判成查表键, 不收。只看「没有任何位置证据」的字面量 ——
+     this.Text("键", "值") 里的那个值是正文, 照收。
+  4. 影响面: 全盘 282 个模组只拦下 1 条(就是上面那个), 提取总数 18,409 行。
+
 【v2.51.3 更新: 归档预筛不再按目录名判断】
   1. 现象: Immersive Cyberware 的物品名和描述(截图里的 Holo Display: Ads 那句)
      一直抽不出来, 明文层只有 29 条 .reds 设置项。

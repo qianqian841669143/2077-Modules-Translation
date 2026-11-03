@@ -160,6 +160,42 @@ def is_loc_key(s):
     return caps >= 2
 
 
+# 「带空格的查表键」: `Gameplay-Items-Item Type-Prt_Fragment`。
+# 游戏的 onscreens 键经常在中间夹一个空格（物品类型名、槽位名这类），
+# `is_loc_key()` 要求整串无空格，于是漏判；`getText` / `@runtimeProperty` 那条
+# 排除又只认调用位置，管不到裸 `return "…"`。
+# 描准「紧贴的连字符」（A-B，不是 A - B 那种人写的标签）+ 至少两处 + 无句子标点。
+_SPACED_TIGHT_DASH_RE = re.compile(r"[A-Za-z0-9]-[A-Za-z0-9]")
+_SPACED_LOOSE_DASH_RE = re.compile(r"\s-\s")
+_SPACED_KEY_CHARS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _'\-]*$")
+_SPACED_KEY_PUNCT_RE = re.compile(r"[.!?;:,]")
+
+
+def is_spaced_loc_key(s):
+    """带空格的本地化查表键（`Gameplay-Items-Item Type-Prt_Fragment`）。
+
+    只在「没有任何位置证据、靠像不像句子兜底」的那一档用。判据：
+    有空格、至少两处紧贴的连字符、没有 `A - B` 这种散开的连字符（那是人写的
+    标签）、没有句子标点、词数不多、纯 ASCII。
+    """
+    t = (s or "").strip()
+    if not t or len(t) < 10 or len(t) > 120:
+        return False
+    if " " not in t or CJK_RE.search(t):
+        return False
+    if t.count("-") < 2:
+        return False
+    if not _SPACED_TIGHT_DASH_RE.search(t):
+        return False
+    if _SPACED_LOOSE_DASH_RE.search(t):     # "Part - Engine - Turbo": 人写的标签
+        return False
+    if _SPACED_KEY_PUNCT_RE.search(t):
+        return False
+    if len(t.split()) > 8:
+        return False
+    return bool(_SPACED_KEY_CHARS_RE.match(t))
+
+
 # @runtimeProperty("ModSettings.displayName", "NearbyLoot-Enabled") —— 第二个参数
 # 是 onscreens 的**查表键**，不是文案：Codeware 拿它去 GetLocalizedText，查不到
 # 才回退显示键本身。真文案在 mod 归档的 localization 里。
@@ -1617,6 +1653,13 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
                 continue
             if not is_translatable(txt):
                 continue
+            # 带空格的查表键 (`Gameplay-Items-Item Type-Prt_Fragment`) 不是文案：
+            # 它没有位置证据，只能靠「像不像句子」走到这里，而 key 里的连字符让它
+            # 看着像一句短语。翻掉它 = 把 onscreens 的引用改成中文，游戏里显示
+            # 原始 key 或空白（Immersive Cyberware 的眼镜槽位名就是这个）。
+            if is_spaced_loc_key(txt):
+                drop(NOISE.FAMILY_LOCKEY)
+                continue
             words = re.findall(r"[A-Za-z]{2,}", txt)
             if not (len(words) >= 4 or (CJK_RE.search(txt) and len(txt) >= 6)):
                 continue
@@ -1830,6 +1873,12 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
                 typ = TYPE_LONG
             else:
                 if not loose:
+                    continue
+                # 带空格的查表键不是文案：`return "Gameplay-Items-Item Type-Prt_Fragment"`
+                # 这种裸返回没有调用位置证据，只能落到这一档；它是 onscreens 的键，
+                # 翻掉以后游戏里显示原始 key（Immersive Cyberware 的眼镜槽位名）。
+                if is_spaced_loc_key(lit.inner):
+                    drop(NOISE.FAMILY_LOCKEY)
                     continue
                 if _diag_fragment(lit.inner):
                     continue
