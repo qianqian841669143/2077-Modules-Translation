@@ -2347,6 +2347,28 @@ def _plain_escapes(s):
     return s.replace('\\"', '"').replace("\\'", "'")
 
 
+def _trim_excess_closes(text):
+    """末尾多出来的关闭标记删掉。
+
+    模型常把原文结尾的 ``</>`` 照抄过来、却把对应的开标签当 HTML 吞了：
+    一句说明末尾就挂出 ``</></></></>`` 这么一串，游戏里原样显示成一排尖括号。
+    关闭标记比开标签多时，从末尾逐个删到配平为止。
+    """
+    for _ in range(40):
+        tags = _MARKUP_TAG_RE.findall(text)
+        opens = sum(1 for t in tags if not t.startswith("</"))
+        if len(tags) - opens <= opens:
+            break
+        last = None
+        for m in _MARKUP_TAG_RE.finditer(text):
+            if m.group(0).startswith("</"):
+                last = m
+        if last is None or text[last.end():].strip():
+            break
+        text = text[:last.start()] + text[last.end():]
+    return text
+
+
 def repair_markup(orig, trans):
     """把译文丢掉的包裹标记补回来，返回 ``(译文, 补不回来的占位符列表)``。
 
@@ -2395,11 +2417,18 @@ def repair_markup(orig, trans):
     # 关闭标记数量对不上：少一个就等于整段标记没闭合，游戏会把 `<Rich …>` 当普通
     # 文字原样显示出来（SenSen 四个模组的说明文字整段变成 `<Rich color=…>3% …`）。
     # 多个缺口的真实位置分不清，统一补在末尾：结果是高亮范围偏大一点，文案照样能读。
+    #
+    # 但只能补到「开标签都有主」为止：模型把整段 `<Rich …>…</>` 成对删掉时，译文里
+    # 开标签只剩 2 个，照着原文的 12 个关闭标记补，末尾就挂出 10 个 `</>`（Pax Grips
+    # 的说明行，12 个关闭标记对 2 个开标签），游戏里显示成一排尖括号。宁可少一段高亮。
     closes = [t for t in _MARKUP_TAG_RE.findall(orig) if t.startswith("</")]
-    closes_have = [t for t in _MARKUP_TAG_RE.findall(fixed) if t.startswith("</")]
-    need = len(closes) - len(closes_have)
-    if need > 0 and closes:
-        fixed = fixed + closes[0] * need
+    tags_have = _MARKUP_TAG_RE.findall(fixed)
+    opens_have = sum(1 for t in tags_have if not t.startswith("</"))
+    closes_have = len(tags_have) - opens_have
+    need = len(closes) - closes_have
+    if need > 0 and closes and opens_have > closes_have:
+        fixed = fixed + closes[0] * min(need, opens_have - closes_have)
+    fixed = _trim_excess_closes(fixed)
 
     lost = list(lost_ph)
     for name, n in want_pct.items():
@@ -2566,17 +2595,30 @@ def apply_many_ex(path, pairs, allow_soft=False):
     lang = lang_of(path)
     guard = _shape_guard_applies(path)
     try:
-        _, lits = scan_source(text, lang)
+        toks, lits = scan_source(text, lang)
     except Exception:
         return 0, [(i, p[0], p[1], p[2], "文件解析失败", "hard")
                    for i, p in enumerate(pairs)]
-    by_key, by_text, by_line = {}, {}, {}
+    # Codeware 语言包 `this.Text("key", "译文")` 的第一个参数是查表键。
+    # 兜底匹配（尤其「按行号」那一层）以前会挑中它：目标文件这一行只剩
+    # 「键 + 已经翻好的译文」时，英文原文一个都匹配不上，兜底就把译文写进了
+    # key —— 文件语法照旧、行数照旧，界面上却什么都查不到（Pax Grips 的
+    # 4 条说明有 3 条 key 变成中文，游戏里这几条直接消失）。
+    try:
+        _texts, key_starts = codeware_text_calls(toks, lits)
+    except Exception:       # noqa: BLE001
+        key_starts = set()
+    by_key, by_text, by_line, key_lines = {}, {}, {}, set()
     for lit in lits:
-        if lit.quote in ("\"", "'"):
-            vis = visible_text(lit.inner)
-            by_key.setdefault((lit.line, vis), []).append(lit)
-            by_text.setdefault(vis, []).append(lit)
-            by_line.setdefault(lit.line, []).append(lit)
+        if lit.quote not in ("\"", "'"):
+            continue
+        if lit.start in key_starts:
+            key_lines.add(lit.line)
+            continue
+        vis = visible_text(lit.inner)
+        by_key.setdefault((lit.line, vis), []).append(lit)
+        by_text.setdefault(vis, []).append(lit)
+        by_line.setdefault(lit.line, []).append(lit)
     repls, failures, used = [], [], set()
 
     def pick(cands):
@@ -2610,7 +2652,13 @@ def apply_many_ex(path, pairs, allow_soft=False):
             # 退回 2: 按行号匹配(按顺序找该行尚未使用的字符串)
             lit = pick(by_line.get(line_no, []))
         if lit is None:
-            failures.append((idx, line, orig, trans, "未找到对应原文", "hard"))
+            # 这一行只剩查表键：说明目标文件里这条已经翻过（或本就不是文案），
+            # 再怎么兜底也只能改坏引用。宁可报失败，让用户看见。
+            if line_no in key_lines:
+                failures.append((idx, line, orig, trans,
+                                 "这一行只剩查表键, 写进去会打断本地化引用", "hard"))
+            else:
+                failures.append((idx, line, orig, trans, "未找到对应原文", "hard"))
             continue
         repls.append((lit, orig, trans, idx))
     if not repls:

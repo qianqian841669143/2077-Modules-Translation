@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.51.7**
+当前版本：**v2.51.8**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -15,6 +15,45 @@
 > (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.51.8 更新：语言包的 key 不会再被译文物顶掉
+
+`SenSen Pax Grips` 翻完之后，`ChineseSimplified-paxgrips.reds` 长这样：
+
+```redscript
+this.Text("SenSen 帕克斯抓握器", "SenSen 帕克斯抓握器");
+this.Text("所有武器伤害均为非致命伤害…</></></></>…", "所有武器伤害均为非致命伤害…");
+```
+
+第一行那个位置本该是查表键 `GP_Util_PaxGrips-Name`；`r6\tweaks\zz_ghostprotocol\*.yaml`
+里的 `LocKey#GP_Util_PaxGrips-Name` 于是查不到任何文字——文件语法、行数、括号全对，
+游戏里这几条文案直接消失。同一行末尾还挂着一串 `</>`。
+
+两个原因：
+
+- 写回时先按「行号 + 原文」找目标字面量。目标文件里这条**已经是中文**了（上一轮
+  翻过），英文原文一个都匹配不上，于是退到「按行号兜底」——挑这一行第一个还没用过
+  的字符串。语言包一行有两个字面量：`this.Text("键", "译文")`，第一个就是键。
+  兜底把译文写进了键里；
+- 补 `<Rich …>` 标记时按「原文有几个 `</>`」硬补。原文 12 对、模型把其中 10 对连同
+  文字一起删了，于是末尾补了 10 个 `</>`（12 个关闭标记对 2 个开标签），游戏里
+  显示成一排尖括号。
+
+修法：
+
+- 写回索引里直接排除 Codeware 语言包的 key（`codeware_text_calls()` 认出来的那些），
+  兜底再也不会挑中它；一行只剩键时按失败报出来（`这一行只剩查表键, 写进去会打断
+  本地化引用`），不再硬写；
+- 补关闭标记只补到「开标签都有主」为止；译文自己多带的 `</>` 从末尾删到配平；
+- 语言包「按条目名写回」时，表格里的上下文 `this.Text("GP-Signed")` 会还原成裸的
+  `GP-Signed` 再定位（以前拿整串去查永远查不到，这些条目会被当成「目标里没有」
+  追加到文件末尾，追加出来是 `this.Text("this.Text("GP-Signed")", "…")` —— 嵌套
+  引号直接把 REDscript 写坏）；
+- Provider 里 `if Equals(language, n"zh-cn")` 这种分支写法，重复点「生成中文语言包」
+  不再插重复段（`SenSen Herald` 实测被插了 8 条）。
+
+已经翻过的模组不用重来：写坏的三个文件（`Pax Grips` / `Herald` / `Virtue`）里，
+键和多余标签已经就地修好，值一个没动。
 
 ## v2.51.7 更新：tweakdb yaml 里的说明文字也能翻了
 

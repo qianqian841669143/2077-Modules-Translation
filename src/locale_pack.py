@@ -257,10 +257,27 @@ _LINE_KEY = "\x00line%d"
 # RegisterForEvent 这类驼峰或小写标识符不会被当成文案。
 _LABEL_WORD_RE = re.compile(r"^[A-Z][a-z]{2,}$")
 
+# 表格「上下文」列的 Codeware 写法: `this.Text("GP-Signed")`。
+_CTX_KEY_RE = re.compile(r'^this\.Text\(\s*"([^"\n]*)"\s*\)$')
+
 
 def _is_label_word(s):
     """语言包里 `Close` 这种单个英文单词的 UI 文本。"""
     return bool(_LABEL_WORD_RE.match((s or "").strip()))
+
+
+def _entry_name(key):
+    """把表格里的「位置」上下文还原成条目名。
+
+    `this.Text("GP-Signed")` 是界面上给人看的位置信息，写回索引里的条目名是裸的
+    `GP-Signed`。以前拿整串去查，永远查不到 —— 这些条目于是全被当成「目标语言包
+    里没有」，追加到文件末尾，追加出来还是
+    ``this.Text("this.Text("GP-Signed")", "…")``：嵌套引号把 REDscript 写坏
+    （Pax Grips 的 4 条说明实测能追加出 4 行这种垃圾，语法直接不过）。
+    """
+    k = str(key or "").strip()
+    m = _CTX_KEY_RE.match(k)
+    return m.group(1) if m else k
 
 
 def _assign_key(text, start):
@@ -523,6 +540,11 @@ def _append_reds_texts(text, rows):
             rest.append((k, o, t))
             continue
         seen.add(k)
+        # 条目名里带引号/换行 = 这是界面上显示的上下文串，不是真的 key。
+        # 拼进 `this.Text("…")` 会直接变成嵌套引号，整行语法崩掉；宁可不追加。
+        if not k or any(ch in str(k) for ch in ('"', "'", "\n", "\r")):
+            rest.append((k, o, t))
+            continue
         uniq.append((k, t))
     if not uniq:
         return 0, rows
@@ -611,7 +633,7 @@ def apply_text_target(path, rows):
     edits, fails, written, missing = [], [], 0, []
     done_keys = set()
     for key, orig, trans in rows:
-        k = str(key or "")
+        k = _entry_name(key)
         targets = index.get(k) if k else None
         if not targets:
             if k:
@@ -1130,6 +1152,18 @@ def _add_provider_case(text, locale, class_name):
     # duplicate case just because its whitespace differs from our pattern.
     if re.search(r'\bcase\s+n"' + re.escape(tag) + r'"\s*:', text):
         return text, False
+    # switch 之外的写法: `if Equals(language, n"zh-cn") { return new X(); }`
+    # (SenSen 那几个模组)。以前只认 `case n"zh-cn":`, 第二次点「生成中文语言包」
+    # 会再插一段一模一样的 if —— Provider 里同一个语言分支出现两次 (Pax Grips
+    # 实测有两条 zh-cn), 语义上无害但看着就像工具写重了。
+    eq_pat = re.compile(
+        r'(Equals\s*\(\s*language\s*,\s*n"' + re.escape(tag) + r'"\s*\)\s*'
+        r'\{[^{}]{0,200}?return\s+new\s+)([A-Za-z_]\w*)', re.I | re.S)
+    me = eq_pat.search(text)
+    if me:
+        if me.group(2) == class_name:
+            return text, False
+        return text[:me.start(2)] + class_name + text[me.end(2):], True
     lines = text.splitlines(keepends=True)
     default_idx = None
     default_indent = ""

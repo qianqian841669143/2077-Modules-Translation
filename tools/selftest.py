@@ -2208,6 +2208,25 @@ def check_locale_pair_by_key():
             zh_path, [("No_Such_Key", "Nope", "不存在")])
         assert n2 == 0, n2
         assert bad2 and "没有这个条目" in bad2[0][2], bad2
+
+        # ---- Codeware 语言包: 表格「上下文」列写成 `this.Text("KEY")`, 那是给人
+        # 看的位置信息, 写回索引里的条目名是裸的 KEY。以前拿整串去查永远查不到,
+        # 这些条目全被当成「目标语言包里没有」追加到文件末尾, 追加出来还是
+        # `this.Text("this.Text("KEY")", "…")` —— 嵌套引号把 REDscript 写坏。
+        pkg_path = os.path.join(tmp, "ChineseSimplified.reds")
+        with open(pkg_path, "w", encoding="utf-8") as f:
+            f.write("module Demo.Localization\n\nimport Codeware.Localization.*\n\n"
+                    "public class ChineseSimplified extends ModLocalizationPackage {\n"
+                    "  protected func DefineTexts() -> Void {\n"
+                    '    this.Text("GP-Demo-Name", "Old name");\n'
+                    "  }\n}\n")
+        before_n = open(pkg_path, encoding="utf-8").read().count("this.Text(")
+        n3, bad3 = locale_pack.apply_text_target(
+            pkg_path, [('this.Text("GP-Demo-Name")', "Old name", "演示名")])
+        assert n3 == 1 and not bad3, (n3, bad3)
+        after3 = open(pkg_path, encoding="utf-8").read()
+        assert after3.count("this.Text(") == before_n, after3
+        assert 'this.Text("GP-Demo-Name", "演示名");' in after3, after3
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -3223,6 +3242,29 @@ def check_locale_pack_names():
                        encoding="utf-8").read()
         assert b_after == b_before, "动了别的语言包的 Provider"
         assert "B_ChineseSimplified" in b_after
+
+        # 4) Provider 用 `if Equals(language, n"en-us")` 逐条判断（SenSen 那几个
+        #    模组这么写）：重复生成中文包时不许再插一段一模一样的 if。Pax Grips
+        #    实测被写成了两条 zh-cn 分支。
+        mod4 = "SenSen.Demo"
+        eq_prov = ("module %s\n\nimport Codeware.Localization.*\n\n"
+                   "public class Demo_LocalizationProvider extends ModLocalizationProvider {\n"
+                   "  public func GetPackage(language: CName) -> ref<ModLocalizationPackage> {\n"
+                   '    if Equals(language, n"en-us") {\n'
+                   "      return new Demo_English();\n    }\n"
+                   "    return null;\n  }\n}\n" % mod4)
+        _lp_write(root, "Sen/English.reds", pkg(mod4, "Demo_English", "English"))
+        _lp_write(root, "Sen/ChineseSimplified.reds", pkg(mod4, "Demo_English", "中文"))
+        _lp_write(root, "Sen/Provider.reds", eq_prov)
+        for _round in (1, 2):
+            rep4 = locale_pack.prepare_codeware_package(
+                root, "Sen/English.reds", "Sen/ChineseSimplified.reds",
+                target_locale="zh-CN")
+            assert not rep4["error"], rep4
+        prov4 = open(os.path.join(root, "Sen/Provider.reds"),
+                     encoding="utf-8").read()
+        assert prov4.count('n"zh-cn"') == 1, prov4
+        assert "new ChineseSimplified()" in prov4, prov4
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -4429,6 +4471,78 @@ def check_repair_markup_escaped():
     assert fixed3.count("<Rich") == 2, fixed3
 
 
+def check_apply_key_guard():
+    """`this.Text(key, 译文)` 写回时 key 一个字节都不许动。
+
+    回归 (2026-11-03, SenSen Pax Grips): 目标语言包里 4 条说明已经有 3 条翻好,
+    再拿英文源文件的原文去写回时, 「按行号兜底」挑中的是这一行**第一个**字面量
+    —— 也就是查表键。文件语法、行数、括号全都没变, 但 `LocKey#GP-Signed` 这类
+    引用全断, 游戏里那几条文案直接消失, 表面上只像「格式不对」。
+    """
+    tmp = tempfile.mkdtemp(prefix="mt-keyguard-")
+    try:
+        p = os.path.join(tmp, "ChineseSimplified-demo.reds")
+        with io.open(p, "w", encoding="utf-8", newline="") as f:
+            f.write("\n".join([
+                "module Demo.Localization",
+                "",
+                "import Codeware.Localization.*",
+                "",
+                "public class ChineseSimplified extends ModLocalizationPackage {",
+                "  protected func DefineTexts() -> Void {",
+                '    this.Text("GP-Demo-Name", "演示名");',
+                "  }",
+                "}",
+                "",
+            ]))
+        # 值已经是中文, 英文原文一个都匹配不上: 只许写值, 不许碰 key
+        n, fails = E.apply_many_ex(p, [(7, "Demo Name", "演示名称")])
+        got = io.open(p, encoding="utf-8-sig").read()
+        assert n == 1 and not fails, (n, fails)
+        assert 'this.Text("GP-Demo-Name", "演示名称");' in got, got
+
+        # 同一行的值已经被前一条用掉: 只剩查表键可挑, 必须报失败而不是改写
+        n2, fails2 = E.apply_many_ex(p, [
+            (7, "演示名称", "演示名称二号"),
+            (7, "Another row", "另一条"),
+        ])
+        got2 = io.open(p, encoding="utf-8-sig").read()
+        assert 'this.Text("GP-Demo-Name"' in got2, got2
+        assert any("查表键" in f[4] for f in fails2), fails2
+        assert n2 == 1, (n2, fails2)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_markup_closer_balance():
+    """补关闭标记只补到配平为止, 不许在末尾挂一串 `</>`。
+
+    回归 (2026-11-03, SenSen Pax Grips): 原文一句里有 12 对 `<Rich …>…</>`,
+    模型把其中 10 对连同文字一起删了, 补标记按「原文有几个关闭标记」硬补,
+    末尾挂了 10 个 `</>` —— 12 个关闭标记对 2 个开标签, 游戏里显示成一排尖括号。
+    """
+    orig = ('cost <Rich color="A">+{int_0}%</> and <Rich color="B">-{int_1}%</> '
+            'and <Rich color="C">More</> and <Rich color="D">Footer</>')
+
+    # 译文自己带了一串多余的关闭标记: 删到配平
+    fixed, _lost = E.repair_markup(
+        orig, 'cost <Rich color="A">甲</></></></>')
+    assert fixed == 'cost <Rich color="A">甲</>', fixed
+
+    # 译文一个标签都没带: 不许补关闭标记（以前会按原文的 4 个补 4 个）
+    fixed2, _lost2 = E.repair_markup(orig, "纯中文一句")
+    assert "</>" not in fixed2, fixed2
+
+    # 缺的关闭标记照旧补一个, 不多补
+    fixed3, _lost3 = E.repair_markup(orig, 'cost <Rich color="A">甲')
+    assert fixed3.count("</>") == fixed3.count("<Rich"), fixed3
+    assert fixed3.endswith("</>"), fixed3
+
+    # 已经配平的不动
+    ok = 'cost <Rich color="A">甲</> 和 <Rich color="B">乙</>'
+    assert E.repair_markup(orig, ok)[0] == ok
+
+
 def check_cache_tools():
     """设置页「缓存清理」：统计准、只删选中的、印章和真数据不碰。
 
@@ -5070,6 +5184,10 @@ def main():
     print("   OK: 注册器别名 (A = Settings.RegisterAction) 找全 / 查表函数别名不进表")
     check_repair_markup_escaped()
     print("   OK: <Rich …> 的 \\\" 转义不会让补标记补两遍")
+    check_apply_key_guard()
+    print("   OK: 语言包 this.Text 的 key 不被译文物覆盖 (按行号兜底也不许)")
+    check_markup_closer_balance()
+    print("   OK: 关闭标记只补到配平, 末尾不挂一串 </>")
     check_cache_tools()
     print("   OK: 缓存清理只删选中的目录 / 印章与记忆文件不动")
     check_batch_export_rows()
