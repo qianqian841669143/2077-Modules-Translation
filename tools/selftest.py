@@ -4416,6 +4416,44 @@ def check_batch_export_rows():
     assert MB.export_rows([{"key": "k", "error": "cancelled"}]) == []
 
 
+def check_spec_order():
+    """占位符顺序：个数对、顺序错也要拦下来。
+
+    MCM core.lua:1344 的真实事故：原文 "Applied %d change(s) for %s." 被译成
+    "已为 %s 应用 %d 项更改。"，占位符一个不少，旧的校验只数个数，于是写回；
+    游戏里 string.format 第 3 个参数要 %d 却拿到 mod 名，整块设置面板报
+    "MCM action failed: ... bad argument #3 to 'format' (number expected, got string)"。
+    """
+    import mod_text_engine as M
+
+    lvl, why = M.swapped_spec_order("Applied %d change(s) for %s.",
+                                    "已为 %s 应用 %d 项更改。")
+    assert lvl == "soft" and "占位符顺序变了" in why, (lvl, why)
+
+    # 保住顺序的同一句、以及三个占位符里换了一个：前者放行, 后者照拦
+    assert M.swapped_spec_order("Applied %d change(s) for %s.",
+                                "已应用 %d 项更改：%s。") == ("", "")
+    lvl, _ = M.swapped_spec_order("Applied %d change(s) for %s through %s",
+                                  "已为 %s 通过 %s 应用 %d 项更改")
+    assert lvl == "soft", lvl
+    assert M.swapped_spec_order("Removed %d unavailable mod(s) from %s.",
+                                "%d 个不可用的模组已从 %s 移除。") == ("", "")
+
+    # 顺序本来就一样 / 只有一个占位符 / 没有占位符：都不报
+    assert M.swapped_spec_order("%s: %d", "%s：%d") == ("", "")
+    assert M.swapped_spec_order("Removed %s", "移除了 %s") == ("", "")
+    assert M.swapped_spec_order("100% done", "完成 100%") == ("", "")
+    # 个数都对不上是「丢失」那条检查的事, 这里不重复报
+    assert M.swapped_spec_order("%d of %s", "共 %d 项") == ("", "")
+    # 同类占位符互换看不出来, 不误报
+    assert M.swapped_spec_order("%s gave %s", "%s 给了 %s") == ("", "")
+
+    # 写回路径 (单文件) 也要拦住, 并且留在「可以单条覆盖」的软失败里
+    lvl, why = M.guard_level("a.lua", "Applied %d change(s) for %s.",
+                             "已为 %s 应用 %d 项更改。")
+    assert lvl == "soft" and "占位符" in why, (lvl, why)
+
+
 def check_i18n_coverage():
     """界面用到的每个中文 key 都必须有英文译文，占位符不能丢。
 
@@ -4674,6 +4712,8 @@ def main():
     print("   OK: 缓存清理只删选中的目录 / 印章与记忆文件不动")
     check_batch_export_rows()
     print("   OK: 批量结果导出 (取消的不导出 / 状态与部署列对得上)")
+    check_spec_order()
+    print("   OK: 占位符顺序变了不写回 (MCM core.lua 那类 format 崩)")
     check_official_weak_words()
     print("   OK: 语言包单词条不采用官方弱匹配 (Body→尸体 这类)")
     check_i18n_coverage()

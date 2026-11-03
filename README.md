@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.50.0**
+当前版本：**v2.51.0**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -14,6 +14,29 @@
 > `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.51.0 更新：占位符顺序不再被翻译换掉
+
+MCM 里点「应用」之后报 `MCM action failed: …core.lua:1344: bad argument #3 to
+'format' (number expected, got string)`，那一整块设置面板的操作全失败。原因不是
+MCM 坏了，是**译文把占位符的顺序换了**：
+
+- `string.format` 按**位置**取参数。原文 `"Applied %d change(s) for %s."` 传进去的
+  是 `(数字, 名字)`；中文习惯把名字放前面，模型就写成「已为 %s 应用 %d 项更改。」——
+  占位符一个不少，旧的校验只数个数，于是照样写回。运行时第 3 个参数要 `%d`，
+  拿到的却是 mod 名，当场抛异常。
+- 写回前多一道顺序检查（`mod_text_engine.swapped_spec_order()`）：个数对、顺序错
+  一律不写回，记软失败，原因是「占位符顺序变了, string.format 按位置取参数会崩」
+  （软失败 = 默认拒绝，确有必要可以单条覆盖）。单文件写回与批量写回都走这条。
+- 机翻提示词补了一条：占位符顺序也不能变，中文语序别扭就换个说法，别让 `%s`
+  和 `%d` 换位。
+- 已经写坏的 4 处（MCM `modules\core.lua` 1344 / 1345、`modules\workflows\
+  collections.lua` 1068 / 1182）把中文句子改写成保持原顺序的说法，**参数一个没动**；
+  翻译记忆里同样的 4 条一起订正，免得下一轮批量再写回来。
+- 自测新增 `check_spec_order()`，钉住「换位的拦下 / 保住顺序的放行 / 个数不对的
+  交给「丢失」那条检查 / 同类占位符互换不误报」。
+
+**改完要重进游戏**（CET 模组是进游戏时加载的），存档不用动。
 
 ## v2.50.0 更新：批量结果能导出了
 

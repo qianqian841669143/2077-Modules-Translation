@@ -2117,6 +2117,36 @@ def repair_markup(orig, trans):
     return fixed, lost
 
 
+def _pct_specs(s):
+    return [m.group(0) for m in _PCT_SPEC_RE.finditer(s or "")
+            if m.group(0) != "%%"]
+
+
+def swapped_spec_order(orig, trans):
+    """译文里的 %s/%d 顺序和原文不一样时, 返回 ``(级别, 原因)``; 一致返回 ``("", "")``。
+
+    ``string.format`` 是**按位置**取参数的: 原文 ``"Applied %d change(s) for %s."``
+    传进去的是 (数字, 名字)。中文习惯把名字放前面, 模型就顺手写成
+    ``"已为 %s 应用 %d 项更改。"`` —— 占位符一个不少, 原来的校验只数个数, 于是
+    照样写回; 运行时第 3 个参数要 ``%d`` 却拿到字符串, 直接
+    ``bad argument #3 to 'format' (number expected, got string)``, 整个 MCM
+    面板的操作都报「MCM action failed」(实测 MCM core.lua:1344 崩在这里)。
+
+    中文语序想调只能改句子, 不能让占位符换位。个数对不上的情况交给原有的
+    「丢失」检查, 这里只管「个数对、顺序错」。级别给 soft: 万一原文那个位置
+    本来就传的是数字 (``"%s items", #list``), 用户还能单条覆盖放行。
+    """
+    a = _pct_specs(orig)
+    b = _pct_specs(trans)
+    if len(a) < 2 or len(a) != len(b) or a == b:
+        return "", ""
+    if _count(a) != _count(b):
+        return "", ""
+    # 原因写成固定一句: 失败列表里本来就带原文和译文两列, 动态拼串反而没法进
+    # locales（界面语言切英文时这句会裸露成中文）。
+    return "soft", "占位符顺序变了, string.format 按位置取参数会崩"
+
+
 def _code_shape(toks):
     return [(t.kind, "" if t.kind == "str" else t.val) for t in toks]
 
@@ -2155,6 +2185,9 @@ def guard_level(path, orig, trans):
     """
     if _shape_guard_applies(path) and looks_like_code_fragment(orig):
         return "soft", "疑似代码片段, 拒绝写回"
+    level, why = swapped_spec_order(orig, trans)
+    if level:
+        return level, why
     if NOISE.is_protocol_list(orig) and not NOISE.is_protocol_list(trans or ""):
         return "hard", "这是能力/协议清单, 翻掉后别处解析不出任何一项"
     if NOISE.is_data_row(orig):

@@ -3132,6 +3132,10 @@ class Api(object):
         # 译文得把原文的包装标记/占位符带回来。模型把 `<Rich ...>` 整段当 HTML
         # 吞掉是常态，把 `{value}` 换成 `%s` 更坏（游戏里原样显示）。位置固定的
         # 直接补回去；补不回来的这一条不写，记软失败，宁可留英文也别写坏。
+        #
+        # 顺序也管：`string.format` 按位置取参数，中文语序一调、占位符跟着换位，
+        # 个数一个不少但运行时 `bad argument #3 to 'format'`（MCM 面板整块操作
+        # 报错就是这么来的）。这类不写回，留给用户单条补翻。
         rejected = {}
         for it in items:
             orig = str(it.get("orig") or "")
@@ -3142,13 +3146,17 @@ class Api(object):
             if fixed != trans:
                 it["trans"] = fixed
             if lost:
-                rejected[id(it)] = "标记/占位符丢失: " + " ".join(lost[:3])
+                rejected[id(it)] = ("标记/占位符丢失: " + " ".join(lost[:3]), "soft")
+                continue
+            lvl, why = E.swapped_spec_order(orig, it["trans"])
+            if lvl:
+                rejected[id(it)] = (why, lvl)
         if rejected:
             fail += len(rejected)
             for it in items:
-                why = rejected.get(id(it))
-                if why:
-                    add_fail(it, why, "soft")
+                got = rejected.get(id(it))
+                if got:
+                    add_fail(it, got[0], got[1])
             items = [it for it in items if id(it) not in rejected]
         for it in items:
             if it.get("kind") == "json":
