@@ -3191,6 +3191,12 @@ class Api(object):
                 rejected[id(it)] = ("标记/占位符丢失: " + " ".join(lost[:3]), "soft")
                 continue
             lvl, why = E.swapped_spec_order(orig, it["trans"])
+            if not lvl:
+                # 模型跑飞：同一段连写几十遍 / 占位符凭空多出一大截。语言包那一层
+                # （apply_text_target）不走 guard_level，所以这里统一先拦一道。
+                lvl, why = E.repeat_run_guard(orig, it["trans"])
+            if not lvl:
+                lvl, why = E.placeholder_explosion(orig, it["trans"])
             if lvl:
                 rejected[id(it)] = (why, lvl)
         if rejected:

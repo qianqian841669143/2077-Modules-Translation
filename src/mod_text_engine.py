@@ -2470,6 +2470,66 @@ def swapped_spec_order(orig, trans):
     return "soft", "占位符顺序变了, string.format 按位置取参数会崩"
 
 
+# 模型偶尔会「跑飞」：同一段话连写几十遍。翻译记忆里实测两条 ——
+#   GR-MsgPromoted       → "你已晋升为 %s 级 %d 级 %q 级 %s 级 …"（42 遍、127 个占位符）
+#   g:ghxst_boss_warn_02 → "%q，%s，%d 个快速破解，… %d 个感动，%d 个震撼"（33 遍、86 个）
+# 写回模组后游戏里是一长串重复的数字，`string.format` 还会因为参数不够直接抛错。
+# 原文本来就重复的说法（"No, no, no" / "先生们，先生们"）不算，放行。
+_ADJ_DUP_RE = re.compile(r"(.{4,}?)\1", re.S)
+_PH_ANY_RE = re.compile(r"\{[A-Za-z_][^{}\n]{0,40}\}|%(?:\d+\$)?[-+0-9.]*[sdifqxX]")
+
+
+def _adjacent_run(text):
+    """本段文字里「紧邻重复」的那一段重复了几遍，返回 (单元, 遍数)。"""
+    t = text or ""
+    m = _ADJ_DUP_RE.search(t)
+    if not m:
+        return "", 0
+    unit = m.group(1)
+    run, i = 0, m.start()
+    while t.startswith(unit, i):
+        run += 1
+        i += len(unit)
+    return unit, run
+
+
+def repeat_run_guard(orig, trans):
+    """译文里同一段连写 3 遍以上 → ``("soft", 原因)``；否则 ``("", "")``。
+
+    级别给 soft：真需要重复的说法（副标题里的 "No, no, no"）用户能单条覆盖，
+    批量永远不写。
+
+    原因写成固定一句，不拼遍数：这句要能进 `locales/en-US.json`，动态拼串
+    在英文界面下会裸露成中文。
+    """
+    _unit, run = _adjacent_run(trans)
+    if run < 3:
+        return "", ""
+    _unit2, run2 = _adjacent_run(orig)
+    if run2 >= 3:
+        return "", ""       # 原文自己也这么重复，是照着翻的
+    return "soft", "译文里同一段连写了多遍（模型跑飞），先确认再写"
+
+
+def placeholder_explosion(orig, trans):
+    """译文的占位符比原文多出一大截 → ``("soft", 原因)``。
+
+    ``{int_0}`` / ``%s`` 这类占位符是运行时按位置填的：原文 1 个、译文 24 个，
+    游戏里除了多出一串空白还会 `format` 崩。
+
+    只在**原文自己带占位符**时比较。Ghost Protocol 那类模组的原文是一串 id
+    （``g:ghxst_heat_02``），真正的模板在别处，译文带占位符是正常的 —— 拿
+    「原文 0 个」去比会把 14 条正常译法一起误伤。
+    """
+    want = len(_PH_ANY_RE.findall(orig or ""))
+    have = len(_PH_ANY_RE.findall(trans or ""))
+    if want < 1:
+        return "", ""
+    if have >= want + 3 and have >= 2 * want:
+        return "soft", "译文里的占位符比原文多出好几个, 写回去 format 会崩"
+    return "", ""
+
+
 def _code_shape(toks):
     return [(t.kind, "" if t.kind == "str" else t.val) for t in toks]
 
@@ -2509,6 +2569,14 @@ def guard_level(path, orig, trans):
     if _shape_guard_applies(path) and looks_like_code_fragment(orig):
         return "soft", "疑似代码片段, 拒绝写回"
     level, why = swapped_spec_order(orig, trans)
+    if level:
+        return level, why
+    # 模型跑飞：同一段连写几十遍 / 占位符凭空多出一大截。两条都只坏这一条，
+    # 但批量里没人会逐条看，必须拦下。
+    level, why = repeat_run_guard(orig, trans)
+    if level:
+        return level, why
+    level, why = placeholder_explosion(orig, trans)
     if level:
         return level, why
     if NOISE.is_protocol_list(orig) and not NOISE.is_protocol_list(trans or ""):

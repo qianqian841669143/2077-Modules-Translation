@@ -4543,6 +4543,59 @@ def check_markup_closer_balance():
     assert E.repair_markup(orig, ok)[0] == ok
 
 
+def check_repeat_run_guard():
+    """模型跑飞（同一段连写几十遍）的译文不许写回，记忆里也不许再拿出来。
+
+    实测的两条记忆条目：
+      `GR-MsgPromoted`      → 「你已晋升为 %s 级 %d 级 %q 级 …」连 42 遍（127 个占位符）
+      `g:ghxst_boss_warn_02` → 「…%d 个感动，%d 个震撼」连 33 遍（86 个）
+    写回模组后游戏里是一长串重复数字，`format` 还会因为参数不够直接抛错。
+    """
+    gr = "你已晋升为 " + " %s 级 %d 级 %q 级" * 42
+    assert E.repeat_run_guard("GR-MsgPromoted", gr)[0] == "soft"
+    gh = "%q，%s，%d 个快速破解，" + "，%d 个感动，%d 个震撼" * 33
+    assert E.repeat_run_guard("g:ghxst_boss_warn_02", gh)[0] == "soft"
+    # 走 guard_level 也要拦得住（批量写回就走这条路）
+    assert E.guard_level("x.reds", "GR-MsgPromoted", gr)[0] == "soft"
+
+    # 原文本来就重复的说法照常放行
+    for orig, trans in [
+        ("Gentlemen, gentlemen. Chill, please.", "嘿，先生们，先生们。请冷静点儿。"),
+        ("No, no, no.", "不，不，不。"),
+        ("Pardon us, our Father, for we have sinned against thee.",
+         "我们的父啊，宽恕我们，宽恕我们对你的罪。"),
+        ("Cost: -{int_9}% maximum health.", "成本：-{int_9}% 最大生命值。"),
+    ]:
+        assert E.repeat_run_guard(orig, trans)[0] == "", (orig, trans)
+        assert E.placeholder_explosion(orig, trans)[0] == "", (orig, trans)
+
+    # 占位符爆炸：原文自己有占位符才比（Ghost Protocol 那种 id 当原文的不误伤）
+    assert E.placeholder_explosion("{int_0}% 经验值", "{int_0}% 经验值 %s %s %s %s")[0] == "soft"
+    assert E.placeholder_explosion("g:ghxst_heat_02", "过热警告：%s 的 %d 核心温度已达到 %q 度。")[0] == ""
+
+    # 记忆排毒：坏条目取不到、并且被删掉
+    import tm
+    tmp = tempfile.mkdtemp(prefix="mt-tmdup-")
+    try:
+        path = os.path.join(tmp, "memory.json")
+        good = tm.Memory._key("Hello there", "简体中文")
+        bad = tm.Memory._key("GR-MsgPromoted", "简体中文")
+        with io.open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"version": 1, "entries": {
+                bad: {"s": "GR-MsgPromoted", "t": gr, "g": "简体中文",
+                      "o": "machine", "n": 4},
+                good: {"s": "Hello there", "t": "你好", "g": "简体中文",
+                       "o": "machine", "n": 1},
+            }}, ensure_ascii=False))
+        mem = tm.Memory(path)
+        assert mem.get("GR-MsgPromoted") is None
+        assert mem.get_entry("GR-MsgPromoted") is None
+        assert mem.get("Hello there") == "你好"
+        assert mem.count() == 1, mem.count()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_cache_tools():
     """设置页「缓存清理」：统计准、只删选中的、印章和真数据不碰。
 
@@ -5188,6 +5241,8 @@ def main():
     print("   OK: 语言包 this.Text 的 key 不被译文物覆盖 (按行号兜底也不许)")
     check_markup_closer_balance()
     print("   OK: 关闭标记只补到配平, 末尾不挂一串 </>")
+    check_repeat_run_guard()
+    print("   OK: 模型跑飞的译文 (同一段连写几十遍/占位符爆炸) 不写回, 记忆里也清掉")
     check_cache_tools()
     print("   OK: 缓存清理只删选中的目录 / 印章与记忆文件不动")
     check_batch_export_rows()

@@ -32,6 +32,26 @@ def _rank(origin):
     return _ORIGIN_RANK.get(origin or "", 0)
 
 
+def _poisoned(src, text):
+    """记忆里这条译文是不是「模型跑飞」的产物：同一段连写几十遍 / 占位符爆炸。
+
+    实测两条：`GR-MsgPromoted` 存成「你已晋升为 %s 级 %d 级 %q 级 …」×42、
+    `g:ghxst_boss_warn_02` 存成「…%d 个感动，%d 个震撼」×33。这类译文一旦被
+    记忆反复喂回表格，每次应用都写一串重复数字进模组，还会 `format` 崩。
+    取出来之前先认一下，命中就当没有这条（并顺手从记忆里删掉）。
+    """
+    try:
+        import mod_text_engine as E
+    except Exception:       # noqa: BLE001  导入失败就别拦
+        return False
+    try:
+        if E.repeat_run_guard(src, text)[0]:
+            return True
+        return bool(E.placeholder_explosion(src, text)[0])
+    except Exception:       # noqa: BLE001
+        return False
+
+
 class Memory(object):
     def __init__(self, path=None, limit=200000):
         self.path = path or os.path.join(_app_dir(), "memory.json")
@@ -87,8 +107,14 @@ class Memory(object):
     def get(self, src, tgt="简体中文"):
         if not src:
             return None
-        e = self.entries.get(self._key(src, tgt))
+        k = self._key(src, tgt)
+        e = self.entries.get(k)
         if e and e.get("t"):
+            if _poisoned(src, e["t"]):
+                # 坏条目留在记忆里只会反复喂回表格：直接扔掉（下次机翻重来）。
+                self.entries.pop(k, None)
+                self._dirty = True
+                return None
             e["n"] = int(e.get("n", 0)) + 1
             e["ts"] = int(time.time())
             self._dirty = True
@@ -103,8 +129,13 @@ class Memory(object):
         """
         if not src:
             return None
-        e = self.entries.get(self._key(src, tgt))
+        k = self._key(src, tgt)
+        e = self.entries.get(k)
         if not e or not e.get("t"):
+            return None
+        if _poisoned(src, e["t"]):
+            self.entries.pop(k, None)
+            self._dirty = True
             return None
         return {"text": e["t"], "origin": e.get("o") or ""}
 
