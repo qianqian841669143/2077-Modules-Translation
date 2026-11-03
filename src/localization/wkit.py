@@ -261,27 +261,31 @@ def list_archive(cli, archive, timeout=180, log=None):
 def localization_files(files):
     """从 `list_archive()` 的输出里挑出「可能是本地化表」的 json。
 
-    只按路径段判断，不看文件名前缀：实测命名毫无规律（`en-us.json`、
-    `kiki_buttercup_dress_localization.json`、`translation_strings.json`）。
+    判据是「有没有 .json」，不是路径里有没有 localization：目录名实测毫无规律
+    （`base\\yv\\axl\\02_s15_local.json`、`kiki_buttercup_dress\\paperwork\\
+    kiki_buttercup_dress_localization.json`、`phoenicia\\immersivecyberware\\
+    translations\\translation_strings.json`），而这几个名字里只有第三个是
+    「一眼能看出来」的。`archive.candidate_json()` 真正的判据也是「.json 且
+    CR2W 头」——游戏里以 .json 结尾的 CR2W 资源基本只有本地化。
+
+    v2.51.3 之前这里只认路径段里的 localization / l10n / onscreens，于是
+    Immersive Cyberware 的本地化表（在 `...\\translations\\` 下）在解包前就被
+    判成「没有本地化」，43 条物品名/描述根本进不了表（截图里那句
+    `Holo Display: Ads` 就是其中一条）。省一次解包不值这个代价：归档里没有
+    json 的大多是一堆 xbm/inkatlas/mesh，这条判据照样把它们挡在外面。
     """
-    out = []
-    for f in files or []:
-        low = str(f).lower()
-        if not low.endswith(".json"):
-            continue
-        parts = low.split("\\")
-        if ("localization" in parts or "l10n" in parts or "onscreens" in parts
-                or "localization" in parts[-1]):
-            out.append(f)
-    return out
+    return [f for f in (files or []) if str(f).lower().endswith(".json")]
 
 
 _TOC_MEM = {}
 _TOC_LOCK = threading.Lock()
+# 判据改过就换个版本号：TOC 缓存存的是布尔结论，不换版本号老归档会一直
+# 命中「没有本地化」那条旧结论（v2.51.3 放宽 localization_files 时踩过）。
+_TOC_KEY_VERSION = "v2"
 
 
 def _toc_key(archive):
-    """缓存键：文件名 + 大小 + 开头 64 KB 的 sha1。
+    """缓存键：版本 + 文件名 + 大小 + 开头 64 KB 的 sha1。
 
     不能带绝对路径也不能带 mtime：批量每次都把模组复制到输出目录，副本的路径
     和修改时间全变了 —— 那样等于永远不命中（实测第二轮还是 51 秒）。用「名字 +
@@ -294,7 +298,8 @@ def _toc_key(archive):
     except OSError:
         return ""
     h = hashlib.sha1(head).hexdigest()[:16]
-    return "%s|%d|%s" % (Path(archive).name.lower(), st.st_size, h)
+    return "%s|%s|%d|%s" % (_TOC_KEY_VERSION, Path(archive).name.lower(),
+                            st.st_size, h)
 
 
 def _toc_cache_path():

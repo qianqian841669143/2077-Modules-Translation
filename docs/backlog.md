@@ -15,7 +15,7 @@ v2.45.3（覆盖回原模组的勾选真的生效）、v2.46.0（成对文本表
 v2.47.0（英文界面 100% + 功能说明）、v2.48.0（注册器别名 + 引擎指纹 + 记忆订正）、
 v2.48.1（`<Rich …>` 标记补两遍 / 不闭合）、v2.49.0（设置页缓存清理）、
 v2.50.0（批量结果导出）、v2.51.0（占位符顺序不再被换掉）、v2.51.1（缩写徽标不再被翻）、
-v2.51.2（代号按值判断，shortName 真文案照收）
+v2.51.2（代号按值判断，shortName 真文案照收）、v2.51.3（归档预筛认 .json）
 都已发布，见下「已修」。真实部署一轮已经在 v2.48.0 之前跑过（`deploy-20261102-090450.csv`）。
 
 ## 待办（v2.48.0 起）
@@ -40,6 +40,12 @@ v2.51.2（代号按值判断，shortName 真文案照收）
 **不做**：`copy_mod` 逐文件记 `mtime_ns` 指纹判「跑完后原件被改过」（原 B5）。
 还原就是被允许的动作，改了也照覆盖，记一份指纹只是给清单加一列备注，不值当。
 「原件已含中文」已经在部署清单里按文件标出来了。
+
+## 已修（v2.51.3）
+
+| 条目 | 做法 |
+|---|---|
+| `Immersive Cyberware` 的物品名/描述（`Holo Display: Ads` 那句）抽不出来，单模组「加载/提取」只出 29 条 `.reds` 设置项 | 文本在归档里 `phoenicia\immersivecyberware\translations\translation_strings.json`；`wkit.localization_files()` 这个解包**前**的预筛只认路径段 `localization`/`l10n`/`onscreens`，三个都不占 → `has_localization()` 返回 False，`web_app.py:996` 直接跳过整包。改成「归档里有没有 `.json`」（真正的分类本来就是解包后看 CR2W 头，`archive.candidate_json()` 一直这么做）；纯资源归档没有 json 照样不解包。`_toc_key()` 加版本号 `v2` 作废旧缓存（缓存存的是布尔结论，不换号改了代码也不生效）。实测该 mod 现在 43 条、组包产物 `ImmersiveCyberware_zh-cn.archive` + `.xl` 正常。自测新增 `check_archive_prefilter()`，并订正 `check_own_product_and_prefilter()` 里「名字不像的 json 不放行」这条旧断言 |
 
 ## 已修（v2.51.2）
 

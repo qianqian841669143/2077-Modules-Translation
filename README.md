@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.51.2**
+当前版本：**v2.51.3**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -14,6 +14,25 @@
 > `userdata/locales/*.json`. Full feature guide (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.51.3 更新：归档预筛不再按目录名判断
+
+`Immersive Cyberware` 的物品名与描述（截图里那句 `Holo Display: Ads`）一直抽不出来。
+原因不是归档里没文本，而是**解包前**就把它判成了「没有本地化」：预筛只认路径段里的
+`localization` / `l10n` / `onscreens`，而这个 mod 的本地化表在
+`phoenicia\immersivecyberware\translations\translation_strings.json` —— 三个都不占，
+归档连解都没解。实测手工解包，里面有 **43 条**文本。
+
+- 判据改成「归档里有没有 `.json`」：真正的分类本来就是解包后看 CR2W 头
+  （`archive.candidate_json()` 一直是这么做的），按目录名猜只会误杀；
+- 纯资源归档（一堆 `xbm` / `inkatlas` / `mesh`）没有 json，照样不解包，该省的时间还省；
+- TOC 缓存键加了版本号（`v2`）：不换号的话，老归档会一直命中旧判据缓存下来的
+  「没有本地化」，改了代码也不生效；
+- 实测：该 mod 现在能抽出 43 条，打包产物 `ImmersiveCyberware_zh-cn.archive` +
+  `.xl`（`extend: ImmersiveCyberware.archive.xl`，`onscreens: zh-cn`）正常生成；
+- 自测新增 `check_archive_prefilter()`，并订正旧断言「名字不像的 json 不放行」。
+
+批量里要勾上「包含归档层（慢）」才会复制 `.archive`——这一条没变。
 
 ## v2.51.2 更新：代号按值判断，`shortName` 里的真文案照收
 

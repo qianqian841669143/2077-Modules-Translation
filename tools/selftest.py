@@ -3448,11 +3448,14 @@ def check_own_product_and_prefilter():
     assert not Larch.is_own_product("D:\\x\\SomeMod.archive")
     assert Larch.is_own_product("D:\\x\\SomeMod_zh-cn.archive")
 
+    # 归档预筛只问「有没有 .json」，不问名字像不像本地化表：目录名实测毫无规律
+    # （`translations\translation_strings.json`、`02_s15_local.json` 都见过），
+    # 真正的类型交给解包后的 CR2W 头判断。名字不像的也要放行。
     files = ["localization\\en-us.json", "readme.txt",
              "mod\\data\\localization\\zh-cn.json", "x\\whatever.json"]
     got = Lwkit.localization_files(files)
     assert "localization\\en-us.json" in got, got
-    assert "x\\whatever.json" not in got, got
+    assert "x\\whatever.json" in got, got
     assert "readme.txt" not in got, got
 
 
@@ -4509,6 +4512,36 @@ def check_acronym_guard():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_archive_prefilter():
+    """归档预筛不能把「路径里没有 localization」的本地化表挡掉。
+
+    Immersive Cyberware 的本地化表在
+    `phoenicia\\immersivecyberware\\translations\\translation_strings.json`，
+    旧判据只认 localization / l10n / onscreens 三个路径段，于是这个归档在解包前
+    就被判成「没有本地化」，43 条物品名与描述（`Holo Display: Ads` 那句）永远
+    进不了表。现在判据是「归档里有没有 .json」。
+    """
+    from localization import wkit as W
+
+    toc = ["phoenicia\\immersivecyberware\\icons\\preview_icons.xbm",
+           "phoenicia\\immersivecyberware\\translations\\translation_strings.json",
+           "phoenicia\\immersivecyberware\\icons\\preview_icons.inkatlas"]
+    assert W.localization_files(toc) == [toc[1]], W.localization_files(toc)
+    # 纯资源归档: 一个 json 都没有, 预筛照样挡住, 不白解包
+    assert W.localization_files(["a\\b.xbm", "a\\c.inkatlas", "a\\d.mesh"]) == []
+    assert W.localization_files([]) == []
+
+    # 判据改过要作废旧缓存: 键里必须带版本号, 否则老归档一直命中旧的 False
+    tmp = tempfile.mkdtemp(prefix="mt-toc-")
+    try:
+        p = os.path.join(tmp, "x.archive")
+        io.open(p, "wb").write(b"RDAR" + b"\x00" * 128)
+        key = W._toc_key(p)
+        assert key.startswith(W._TOC_KEY_VERSION + "|"), key
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_i18n_coverage():
     """界面用到的每个中文 key 都必须有英文译文，占位符不能丢。
 
@@ -4771,6 +4804,8 @@ def main():
     print("   OK: 占位符顺序变了不写回 (MCM core.lua 那类 format 崩)")
     check_acronym_guard()
     print("   OK: 代号不翻 (CET/ENC), 但 shortName 里的真文案照收")
+    check_archive_prefilter()
+    print("   OK: 归档预筛认 .json, translations 目录下的本地化表不被挡掉")
     check_official_weak_words()
     print("   OK: 语言包单词条不采用官方弱匹配 (Body→尸体 这类)")
     check_i18n_coverage()

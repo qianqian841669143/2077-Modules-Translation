@@ -13,6 +13,20 @@
                              注册的设置名称、描述、分类、选项、按钮标签
                              这是 v1.1 新增的重点功能
 
+【v2.51.3 更新: 归档预筛不再按目录名判断】
+  1. 现象: Immersive Cyberware 的物品名和描述(截图里的 Holo Display: Ads 那句)
+     一直抽不出来, 明文层只有 29 条 .reds 设置项。
+  2. 原因: 文案在归档里的
+     phoenicia\immersivecyberware\translations\translation_strings.json,
+     而程序在解包前只按路径名判断 "有没有本地化", 只认 localization / l10n /
+     onscreens 三段 —— 这个路径一个都不占, 于是整包被当成 "没有本地化", 连解都
+     没解。实测手工解包, 里面有 43 条。
+  3. 现在: 归档里只要有 .json 就解包, 是本地化表还是别的由解包后的 CR2W 头判断。
+     纯资源归档(一堆 xbm / inkatlas / mesh)没有 json, 照样不解包。
+  4. 归档目录缓存加了版本号, 老归档不会一直沿用旧结论(改了代码也生效)。
+  5. 注意: 批量里要勾上「包含归档层（慢）」才会复制 .archive; 产物是归档旁边新增
+     的 _zh-cn.archive + .xl, 原归档不动, 还要部署一次。
+
 【v2.51.2 更新: 代号按值判断, shortName 里的真文案照收】
   1. v2.51.1 为了让 MCM 列表不出现「中央情报局」, 把 shortName 整个字段排除了。
      代价是: 万一哪个模组在 shortName 里写的是一句真文案
