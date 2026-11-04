@@ -21,7 +21,7 @@ try:
 except Exception:                      # 老版本 Python 没有这些名字, 忽略即可
     pass
 
-VERSION = "v2.51.9"
+VERSION = "v2.52.0"
 APP_DIR_NAME = "2077ModTranslator"
 
 TARGET_LANGS = ["简体中文", "繁體中文", "English", "日本語", "한국어",
@@ -57,6 +57,10 @@ DEFAULT_SETTINGS = {
     "res_skip_target": True,                   # 目标语言已存在则跳过
     "use_official_tm": True,                   # 套用官方双语语料（基线 TM）
     "official_weak": True,                     # 单词条的官方命中也算（标「待核」）
+    "local_model_enabled": True,               # 启用本地模型（停用时立刻卸显存）
+    # 关窗时问一句「要停掉本地模型吗」：Ollama 默认 keep_alive，关掉翻译器它
+    # 也不会自己退出（9B 常占 6~8 GB、27B 常驻 21 GB）。嫌烦可以关掉这个勾。
+    "ask_unload_model": True,
 }
 
 # 显示用的路径前缀裁剪 (Excel 里仍保存完整相对路径)

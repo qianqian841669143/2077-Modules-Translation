@@ -3113,6 +3113,7 @@ function openSettings() {
   $("set-official-tm").checked = state.settings.use_official_tm !== false;
   $("set-official-weak").checked = state.settings.official_weak !== false;
   $("set-local").checked = state.settings.local_model_enabled !== false;
+  $("set-ask-unload").checked = state.settings.ask_unload_model !== false;
   refreshLocalModel();
   $("l10n-check-result").textContent = "";
   refreshOfficialInfo();
@@ -3142,7 +3143,8 @@ async function saveSettings(opts) {
     res_skip_target: $("set-skip-target").checked,
     use_official_tm: $("set-official-tm").checked,
     official_weak: $("set-official-weak").checked,
-    local_model_enabled: $("set-local").checked
+    local_model_enabled: $("set-local").checked,
+    ask_unload_model: $("set-ask-unload").checked
   };
   const r = await pywebview.api.save_settings(cfg);
   if (!r.ok) { toast(r.error, "err"); return false; }

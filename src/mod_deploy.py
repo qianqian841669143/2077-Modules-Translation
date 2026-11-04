@@ -52,7 +52,12 @@ def extraction_stamp():
 
     开发态用源文件 sha1 —— 改一行提取代码就自动失效；
     打包成 exe 之后源文件不在磁盘上（在 PYZ 里），退回
-    `mod_text_engine.RULES_VERSION` —— 那个常量改规则时手工 +1。
+    `mod_text_engine.RULES_VERSION` + `appconfig.VERSION`。
+
+    v2.52.0 之前只混了 `RULES_VERSION`（自 v2.48.0 起一直是 3）：exe 里
+    「已部署且源文件未变」的记录**跨版本永远有效**，于是换了提取规则（比如
+    v2.51.7 的 tweakdb yaml 层）也不会重跑，新规则能抽到的行永远进不了表。
+    现在每发一版都会换指纹：升级后第一轮全量重跑一次，之后照旧按记录跳过。
     两者都没有才返回 ""，调用方按「没指纹 = 不能跳」处理。
     """
     if _STAMP:
@@ -64,6 +69,12 @@ def extraction_stamp():
     except Exception:
         version = ""
     h.update(version.encode("utf-8"))
+    # 版本号进指纹：改规则忘了 +1 RULES_VERSION 时，至少发版还会让记录失效。
+    try:
+        import appconfig
+        h.update(str(getattr(appconfig, "VERSION", "")).encode("utf-8"))
+    except Exception:
+        pass
     here = os.path.dirname(os.path.abspath(__file__))
     try:
         for name in STAMP_FILES:

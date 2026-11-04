@@ -4596,6 +4596,89 @@ def check_repeat_run_guard():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_archive_reuse():
+    """归档产物复用（v2.52.0）：三条判据全中才复用，错一条就老实重打包。
+
+    背景：批量里 21 个带 `.archive` 的模组吃掉整轮 87% 的时间，而绝大多数
+    模组一条译文都没变 —— 每轮都重新解包/重打包一次。复用判据写错的代价是
+    「玩家看到旧译文」，所以这里把每条判据都钉住。
+    """
+    from localization import reuse as R
+
+    tmp = tempfile.mkdtemp(prefix="mt-reuse-")
+    try:
+        arch = os.path.join(tmp, "mod", "archive", "pc", "mod", "X.archive")
+        os.makedirs(os.path.dirname(arch))
+        with io.open(arch, "wb") as f:
+            f.write(b"source-archive")
+        out = os.path.join(tmp, "out", "X_zh-cn.archive")
+        os.makedirs(os.path.dirname(out))
+        with io.open(out, "wb") as f:
+            f.write(b"built-archive")
+        with io.open(out + ".xl", "wb") as f:
+            f.write(b"xl")
+
+        rows = [
+            {"kind": "resource", "file": "a.json", "entryId": "1", "trans": "甲"},
+            {"kind": "resource", "file": "a.json", "entryId": "2", "trans": "乙"},
+            {"kind": "source", "file": "a.reds", "orig": "x", "trans": "丙"},
+        ]
+        key = R.mod_key(os.path.join(tmp, "root"), [arch])
+        src = R.src_hash([arch])
+        pairs = R.pairs_hash(rows)
+        files = R.files_hash([out, out + ".xl"])
+        store = os.path.join(tmp, "reuse.json")
+
+        # 没有记录：不复用
+        assert not R.reusable(R.load(store).get(key), src, pairs, files)
+        assert R.remember(key, src, pairs, files, path=store)
+        rec = R.load(store).get(key)
+        assert R.reusable(rec, src, pairs, files), rec
+
+        # 行顺序变了不算改动（排序后算指纹）；明文层的行不参与
+        assert R.pairs_hash(list(reversed(rows))) == pairs
+        assert R.pairs_hash(rows[:2]) == pairs
+        # 改一条译文：指纹变，必须重打包
+        changed = [dict(r) for r in rows]
+        changed[0]["trans"] = "甲甲"
+        assert R.pairs_hash(changed) != pairs
+        # 源归档变了：不复用
+        assert R.src_hash([arch]) != R.src_hash([arch, arch])
+        # 产物被删 / 被改：不复用
+        os.remove(out)
+        assert not R.reusable(rec, src, pairs, R.files_hash([out, out + ".xl"]))
+        # 记录能落盘再读回来
+        assert R.load(store).get(key) == rec
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_stamp_versioned():
+    """引擎指纹要跟着版本走。
+
+    打包成 exe 之后源文件在 PYZ 里读不到，指纹只剩 `RULES_VERSION`（自
+    v2.48.0 起一直是 3）：结果是**跨版本都算「已部署且源未变」**，换了提取
+    规则也不会重跑。v2.52.0 起把 `appconfig.VERSION` 也混进指纹。
+    """
+    import appconfig
+    import mod_deploy as MD
+
+    old = appconfig.VERSION
+    try:
+        MD._STAMP[:] = []
+        a = MD.extraction_stamp()
+        MD._STAMP[:] = []
+        appconfig.VERSION = old + "-selftest"
+        b = MD.extraction_stamp()
+    finally:
+        appconfig.VERSION = old
+        MD._STAMP[:] = []
+    assert a and b, (a, b)
+    assert a != b, "版本号没进指纹: %s" % a
+    # 复原之后又回到原来的指纹（缓存不能留脏值）
+    assert MD.extraction_stamp() == a
+
+
 def check_cache_tools():
     """设置页「缓存清理」：统计准、只删选中的、印章和真数据不碰。
 
@@ -5243,6 +5326,10 @@ def main():
     print("   OK: 关闭标记只补到配平, 末尾不挂一串 </>")
     check_repeat_run_guard()
     print("   OK: 模型跑飞的译文 (同一段连写几十遍/占位符爆炸) 不写回, 记忆里也清掉")
+    check_archive_reuse()
+    print("   OK: 归档产物复用 (源归档/译文对/产物指纹三条都对得上才跳过重打包)")
+    check_stamp_versioned()
+    print("   OK: 引擎指纹跟版本走 (升级后老模组会重新抽一遍)")
     check_cache_tools()
     print("   OK: 缓存清理只删选中的目录 / 印章与记忆文件不动")
     check_batch_export_rows()

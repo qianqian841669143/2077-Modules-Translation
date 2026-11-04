@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+from urllib.parse import urlsplit
 
 import webview
 
@@ -316,6 +317,8 @@ class Api(object):
                 new[k] = cfg[k]
         for k in ("dark_mode", "use_tm", "res_skip_target", "verify_active",
                   "official_weak", "use_official_tm", "local_model_enabled",
+                  # 关窗时问一句「要停掉本地模型吗」：默认开，嫌烦的可以关掉。
+                  "ask_unload_model",
                   # 这三个是批量面板上的勾选：以前漏在这张白名单外，前端存了也
                   # 被丢掉，于是「跑完覆盖回原模组」永远读到默认的 False ——
                   # 勾上等于没勾，批量只产出到副本，一个字节也不会回写。
@@ -447,11 +450,79 @@ class Api(object):
         return self._maxed
 
     def win_close(self):
+        if not self._confirm_exit():
+            return                      # 用户点了「取消」：窗口留着
         try:
             self._window.destroy()
         except Exception:
             pass
         threading.Timer(0.25, lambda: os._exit(0)).start()
+
+    def _local_model_target(self):
+        """本地模型还值不值得问一句：返回 (api_base, model)，不是本地就返回 ("", "")。
+
+        只对**本机**的 Ollama 问：远端接口没有「卸掉本地模型」这回事，
+        而且关窗时多发一次网络请求只会拖慢退出。
+        """
+        base = normalize_api_base(self.settings.get("api_base", ""))
+        model = (self.settings.get("model") or "").strip()
+        if not base or not model:
+            return "", ""
+        try:
+            host = urlsplit(base).hostname or ""
+        except Exception:
+            host = ""
+        if host.lower() not in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
+            return "", ""
+        try:
+            import mt_client
+            if not mt_client._is_ollama(base):
+                return "", ""
+        except Exception:
+            return "", ""
+        return base, model
+
+    def _confirm_exit(self):
+        """关窗前的「要不要停掉本地模型」三选一；返回 False 表示取消退出。
+
+        Ollama 的模型默认常驻（keep_alive），关掉翻译器它也不会自己走：
+        9B 级常占 6~8 GB、27B 常驻 21 GB，玩家接着开游戏就得跟它抢显存。
+        用系统 MessageBox 而不是页面内弹窗：这一步在窗口销毁之前，
+        页面里再弹什么都可能被一起关掉。
+        """
+        if not self.settings.get("ask_unload_model", True):
+            return True
+        base, model = self._local_model_target()
+        if not base:
+            return True
+
+        MB_YESNOCANCEL = 0x03
+        MB_ICONQUESTION = 0x20
+        MB_SETFOREGROUND = 0x10000
+        IDCANCEL, IDYES = 2, 6
+        # 分句翻译再拼：整段带换行的中文没法进 locales（键里有 \n 就匹配不上）。
+        text = "\n\n".join([
+            self._tr("要停止本地模型吗？"),
+            self._tr("模型 %s 还常驻在显存里，关掉翻译器它也不会自己退出。") % model,
+            self._tr("停止后下次翻译要重新加载一次（几秒到几十秒，看模型大小）。"),
+            self._tr("是：停止模型并退出      否：直接退出      取消：不退出"),
+        ])
+        try:
+            import ctypes
+            rc = ctypes.windll.user32.MessageBoxW(
+                None, text, "2077 Mod Translator",
+                MB_YESNOCANCEL | MB_ICONQUESTION | MB_SETFOREGROUND)
+        except Exception:               # noqa: BLE001  弹不出来就别拦着用户
+            return True
+        if rc == IDCANCEL:
+            return False
+        if rc == IDYES:
+            try:
+                import mt_client
+                mt_client.unload(base, model, timeout=15)
+            except Exception:           # noqa: BLE001
+                pass
+        return True
 
     def win_resize(self, w, h):
         try:
@@ -1315,6 +1386,74 @@ class Api(object):
             return from_src, skipped
         return keep, skipped
 
+    # ------------------------------------------------------------ 归档复用
+
+    def _archive_sources(self, sess):
+        """这次组包用到的源归档路径；有归档缺路径就返回空表（= 不复用）。"""
+        out = []
+        for one in getattr(sess, "sessions", [sess]):
+            arch = str(getattr(getattr(one, "target", None),
+                               "archive_path", "") or "")
+            if not arch:
+                return []
+            out.append(arch)
+        return out
+
+    def _archive_outputs(self, sess, outdir):
+        """算这次会产出的 (归档路径列表, .xl 路径列表)，与组包用的名字一致。"""
+        from localization import builder as Lbuild
+        outs, xls = [], []
+        for one in getattr(sess, "sessions", [sess]):
+            target = getattr(one, "target", None)
+            name = Lbuild.default_output_name(
+                getattr(target, "name", ""),
+                getattr(one, "lang", "zh-cn") or "zh-cn")
+            outs.append(os.path.join(outdir, name + ".archive"))
+            xls.append(os.path.join(outdir, name + ".archive.xl"))
+        return outs, xls
+
+    def _reuse_archive(self, sess, items, outdir):
+        """上次的产物还能不能直接用；能就返回 {"archive", "xl"}，否则 None。
+
+        判据见 ``localization/reuse.py``：源归档 sha1、译文对指纹、产物 sha1
+        三者都对得上才复用。任何一项不同（换了译文、模组更新、产物被删）
+        都会退回原来的重打包路径。
+        """
+        try:
+            from localization import reuse as Lreuse
+            srcs = self._archive_sources(sess)
+            if not srcs:
+                return None
+            outs, xls = self._archive_outputs(sess, outdir)
+            rec = Lreuse.load().get(Lreuse.mod_key(self.root or "", srcs))
+            if not rec:
+                return None
+            files = Lreuse.files_hash(list(outs) + list(xls))
+            if not Lreuse.reusable(rec, Lreuse.src_hash(srcs),
+                                   Lreuse.pairs_hash(items), files):
+                return None
+            return {"archive": outs[0] if os.path.exists(outs[0]) else "",
+                    "xl": xls[0] if os.path.exists(xls[0]) else ""}
+        except Exception:       # noqa: BLE001
+            return None
+
+    def _remember_archive(self, sess, items, outdir):
+        """打包并校验通过之后记下指纹，下一轮同一条路就能直接复用。"""
+        try:
+            from localization import reuse as Lreuse
+            srcs = self._archive_sources(sess)
+            if not srcs:
+                return
+            outs, xls = self._archive_outputs(sess, outdir)
+            files = Lreuse.files_hash(list(outs) + list(xls))
+            if not any(files.values()):
+                return
+            Lreuse.remember(Lreuse.mod_key(self.root or "", srcs),
+                            Lreuse.src_hash(srcs), Lreuse.pairs_hash(items),
+                            files)
+        except Exception:       # noqa: BLE001
+            pass
+
     def _apply_resource(self, items, tx=None):
         """资源模式的「应用」= 组包，产物写进 mod 目录里归档的旁边。"""
         from localization import verifier as Lverify
@@ -1379,6 +1518,21 @@ class Api(object):
                     "errors": [], "archive": prev_archive if os.path.exists(
                         prev_archive) else "",
                     "xl": prev_xl if os.path.exists(prev_xl) else "",
+                    "outdir": str(outdir), "resources": [],
+                    "undoId": "", "undoAvailable": False,
+                    "canInstall": False, "memorySaved": 0}
+
+        # 归档产物复用（v2.52.0）：源归档与译文对都没变、上次打的包还在，
+        # 就不再调 WolvenKit 重打一遍。这是批量里最大的一笔开销 —— 实测 21 个
+        # 带归档的模组吃掉整轮 87% 的时间，而其中绝大多数模组一条译文都没变。
+        reuse = self._reuse_archive(sess, items, outdir)
+        if reuse:
+            if own_tx and tx is not None:
+                tx.discard()
+            return {"ok": n, "fail": 0, "mode": "resource", "unchanged": True,
+                    "reused": True, "errors": [],
+                    "archive": reuse.get("archive", ""),
+                    "xl": reuse.get("xl", ""),
                     "outdir": str(outdir), "resources": [],
                     "undoId": "", "undoAvailable": False,
                     "canInstall": False, "memorySaved": 0}
@@ -1460,6 +1614,9 @@ class Api(object):
         # 组包并校验通过才写记忆。以前资源模式一条都不写，同一个 mod 再打开
         # 一次还得重新机翻一遍，官方基线也跟着白跑。
         saved = self._remember_applied(items, applied) if report.ok else 0
+        # 打包 + 校验都过了才记复用指纹：校验没过的包下一轮必须重打。
+        if report.ok:
+            self._remember_archive(sess, items, outdir)
         return {
             "ok": n, "fail": len(items) - n, "mode": "resource",
             "errors": problems[:10],

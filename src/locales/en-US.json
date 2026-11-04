@@ -685,6 +685,11 @@
     "占位符顺序变了, string.format 按位置取参数会崩": "Placeholders were reordered; string.format binds arguments by position, so this would crash at runtime",
     "这一行只剩查表键, 写进去会打断本地化引用": "Only the lookup key is left on this line; writing to it would break the localization reference",
     "译文里同一段连写了多遍（模型跑飞），先确认再写": "The same passage is repeated many times in the translation (the model ran away); check it before writing",
-    "译文里的占位符比原文多出好几个, 写回去 format 会崩": "The translation has far more placeholders than the source; writing it would break format at runtime"
+    "译文里的占位符比原文多出好几个, 写回去 format 会崩": "The translation has far more placeholders than the source; writing it would break format at runtime",
+    "关闭时询问是否停止本地模型": "Ask whether to stop the local model when closing",
+    "要停止本地模型吗？": "Stop the local model?",
+    "模型 %s 还常驻在显存里，关掉翻译器它也不会自己退出。": "Model %s is still resident in VRAM; closing this app will not unload it.",
+    "停止后下次翻译要重新加载一次（几秒到几十秒，看模型大小）。": "If you stop it, the next translation reloads it (seconds to tens of seconds, depending on size).",
+    "是：停止模型并退出      否：直接退出      取消：不退出": "Yes: stop the model and exit      No: exit without stopping      Cancel: stay open"
   }
 }
