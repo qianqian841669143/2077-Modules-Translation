@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.52.5**
+当前版本：**v2.52.6**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -15,6 +15,31 @@
 > (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.52.6 更新：批量报告里那两类「未匹配」不再出现
+
+上一版批量部署有两行永远报失败。它们都不会写坏文件，所以一直挂在报告里：
+
+```
+bin/x64/.../UltraPlus/render.lua (6 条未匹配)
+r6/input/ImmersiveDriving.xml (2 条未匹配)
+```
+
+两个根子都是扫描器把**不是文本的东西**当成了文本：
+
+1. **`ui.text(文字, 颜色)` 被当成 Codeware 的 `this.Text(key, value)`**。Lua 的
+   提取路径从不认查表键，写回路径却认，于是 `ui.text('Probe', color)` 里的显示
+   文字在写回时被判成「这一行只剩查表键」，整行跳过——这 6 行从第一次部署起就
+   没写进去过。现在 Lua 里命名空间是 `ui` / `ImGui` 的 text 调用不再按查表处理；
+   裸的 `text("GR-RankBoss", "Boss")`（Gang Retaliation 有 72 处）仍然算查表键，
+   key 一个字节都不会动。
+2. **XML 注释正文被当成文本节点**。XML 扫描遇到 `<` 就跳到下一个 `>`，注释里的
+   `Mod Settings > Immersive Driving > Key Bindings` 让 `find(">")` 落进注释中间，
+   后半段整块被抽成待译行；写回时那一段根本不是字符串字面量，只能报「未找到
+   对应原文」。现在 `<!-- … -->` 整块跳过。
+
+同一份文件实测：6 条全部写入、代码骨架一致、行数 2399 → 2399；那份 xml 的待译
+行 2 条 → 0 条。
 
 ## v2.52.5 更新：`lat|mex bra` 这类配置行不再被翻译（它会崩游戏）
 

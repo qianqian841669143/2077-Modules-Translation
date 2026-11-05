@@ -4513,6 +4513,72 @@ def check_apply_key_guard():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_text_call_namespace():
+    """CET 的 `ui.text(文字, 颜色)` 不是 Codeware 查表；XML 注释不是待译文本。
+
+    这两种都只表现为「每轮批量都报失败」，文件不会被写坏，所以特别容易长期挂
+    在那里：
+      * Lua 提取走 `_extract_lua`（不认查表键），写回走 `apply_many_ex`（认），
+        两边不对称。`ui.text('Probe', color)` 的显示文字在写回侧被当成 key，
+        整行只能报「这一行只剩查表键」——实测 UltraPlus/render.lua 永远有 6 行
+        写不回去。
+      * XML 扫描「遇到 < 就跳到下一个 >」，注释正文里的 >（«Mod Settings >
+        Immersive Driving > Key Bindings»）让 find(">") 落进注释中间，后半段被
+        抽成待译行。实测 ImmersiveDriving.xml 2 条，写回时「未找到对应原文」。
+    """
+    tmp = tempfile.mkdtemp(prefix="mt-textns-")
+    try:
+        # 1) ui.text / ImGui.Text 的显示文字必须能写回
+        p = os.path.join(tmp, "render.lua")
+        with io.open(p, "w", encoding="utf-8", newline="") as f:
+            f.write("\n".join([
+                "local a = ui.text('Probe', theme.color.text)",
+                "local b = ImGui.Text('Current', true)",
+                "return b",
+                "",
+            ]))
+        n, fails = E.apply_many_ex(p, [(1, "Probe", "探针"),
+                                       (2, "Current", "当前")])
+        got = io.open(p, encoding="utf-8").read()
+        assert n == 2 and not fails, (n, fails, got)
+        assert "ui.text('探针'" in got and "ImGui.Text('当前', true)" in got, got
+        # 函数级: ui.text / ImGui.Text 一个 key 都不该认
+        _t, _l = E.scan_source("\n".join([
+            "local a = ui.text('Probe', theme.color.text)",
+            "local b = ImGui.Text('Current', true)",
+        ]) + "\n", "lua")
+        _v, keys = E.codeware_text_calls(_t, _l, "lua")
+        assert keys == set(), [x.inner for x in _l if x.start in keys]
+
+        # 2) 裸的 text("key", "默认值") 仍是查表键, key 一个字节都不许动
+        p2 = os.path.join(tmp, "init.lua")
+        with io.open(p2, "w", encoding="utf-8", newline="") as f:
+            f.write('return text("GR-RankBoss", "Boss")\n')
+        _t2, _l2 = E.scan_source('return text("GR-RankBoss", "Boss")\n', "lua")
+        _v2, keys2 = E.codeware_text_calls(_t2, _l2, "lua")
+        assert [x.inner for x in _l2 if x.start in keys2] == ["GR-RankBoss"], keys2
+        _n2, _f2 = E.apply_many_ex(p2, [(1, "GR-RankBoss", "老大")])
+        got2 = io.open(p2, encoding="utf-8").read()
+        assert 'text("GR-RankBoss",' in got2, got2
+
+        # 3) XML 注释里的英文不进表（否则写回永远匹配不上）
+        p3 = os.path.join(tmp, "input.xml")
+        with io.open(p3, "w", encoding="utf-8", newline="") as f:
+            f.write("\n".join([
+                '<?xml version="1.0"?>',
+                "<!--",
+                "  Mod Settings > Immersive Driving > Key Bindings.",
+                "-->",
+                "<bindings/>",
+                "",
+            ]))
+        rows = E.extract_from_file(p3)
+        assert rows == [], rows
+        return True
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_markup_closer_balance():
     """补关闭标记只补到配平为止, 不许在末尾挂一串 `</>`。
 
@@ -5681,6 +5747,8 @@ def main():
     print("   OK: <Rich …> 的 \\\" 转义不会让补标记补两遍")
     check_apply_key_guard()
     print("   OK: 语言包 this.Text 的 key 不被译文物覆盖 (按行号兜底也不许)")
+    check_text_call_namespace()
+    print("   OK: CET 的 ui.text(文字) 不当查表键 / 裸 text(key) 仍是键 / XML 注释不进表")
     check_markup_closer_balance()
     print("   OK: 关闭标记只补到配平, 末尾不挂一串 </>")
     check_repeat_run_guard()

@@ -698,6 +698,19 @@ def scan_source(text, lang):
             i = j + 1
             continue
         if xml:
+            if text.startswith("<!--", i):
+                # 注释整块跳过。以前只靠「遇到 < 就跳到下一个 >」, 而注释正文里
+                # 常有 >（«Mod Settings > Key Bindings»、«(Key Bindings > what
+                # each key does)»）, 于是 find(">") 落进注释中间, 后半段被当成
+                # 文本节点抽成待译行。写回时那一行根本不是字符串字面量, 只能报
+                # 「未找到对应原文」——机翻白花钱, 每轮批量还要失败一次
+                # (实测 ImmersiveDriving.xml 2 条)。
+                j = text.find("-->", i + 4)
+                if j < 0:
+                    break
+                line += text.count("\n", i, j)
+                i = j + 3
+                continue
             if c == "<":
                 # 标签整体跳过, 只保留属性里的字符串(由上面的分支处理)
                 j = text.find(">", i)
@@ -980,17 +993,35 @@ def call_spans(toks):
     return spans
 
 
-def codeware_text_calls(toks, lits):
+def codeware_text_calls(toks, lits, lang=""):
     """识别 Codeware 的 this.Text("key", "value")。
 
     返回 (values, key_starts):
       values     : {value_lit.start: key} —— 只有第二个参数才是译文
       key_starts : 所有作为第一个参数出现的 key 字面量, 提取时应跳过
+
+    lang="lua" 时放宽一件事: 命名空间是 ui / ImGui 的 text 调用不算查表。
+    CET 的 `ui.text(文字, 颜色)`、`ImGui.Text(文字)` 里第一个参数是**要显示的
+    文字**, 不是 key; 而 Lua 的提取路径 (`_extract_lua`) 从来不用这个函数,
+    于是提取认得、写回却把这行判成「只剩查表键」, 两边不对称 —— UltraPlus 的
+    6 行就是这么永远写不回去的。裸的 `text("key", "默认值")`
+    (Gang Retaliation 的 init.lua 有 72 处) 仍然按查表键处理, 不受影响。
     """
     by_start = {l.start: l for l in lits}
     values, key_starts = {}, set()
+    # `call_spans` 对 `ui.text(...)` 会产出两个 span（从 ui 开始的 "ui.text"，
+    # 以及从 text 开始的 "text"）。同一个左括号只认最长的那个名字，否则下面
+    # 「命名空间是 ui/ImGui 就放行」永远轮不到 —— 短的 "text" 把结论覆盖回去了。
+    spans = {}
     for name, oi, close in call_spans(toks):
-        if name.split(".")[-1].lower() != "text":
+        cur = spans.get(oi)
+        if cur is None or len(name) > len(cur[0]):
+            spans[oi] = (name, close)
+    for name, oi, close in ((n, o, c) for o, (n, c) in spans.items()):
+        parts = str(name or "").split(".")
+        if parts[-1].lower() != "text":
+            continue
+        if lang == "lua" and len(parts) > 1 and parts[-2].lower() in ("ui", "imgui"):
             continue
         args = _split_args(toks, oi, close)
         if len(args) < 2:
@@ -2678,7 +2709,7 @@ def apply_many_ex(path, pairs, allow_soft=False):
     # key —— 文件语法照旧、行数照旧，界面上却什么都查不到（Pax Grips 的
     # 4 条说明有 3 条 key 变成中文，游戏里这几条直接消失）。
     try:
-        _texts, key_starts = codeware_text_calls(toks, lits)
+        _texts, key_starts = codeware_text_calls(toks, lits, lang)
     except Exception:       # noqa: BLE001
         key_starts = set()
     by_key, by_text, by_line, key_lines = {}, {}, {}, set()
