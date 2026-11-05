@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.52.6**
+当前版本：**v2.52.7**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -15,6 +15,26 @@
 > (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.52.7 更新：模组路径串不再被翻译（`/mods/模组名/`）
+
+Cyberpunk Render Tweaks 靠这一行判断「这个设置项是不是我的」：
+
+```redscript
+StrBeginsWith(NameToString(item.GetGroupPath()), "/mods/Cyberpunk Render Tweaks/")
+```
+
+`/mods/Cyberpunk Render Tweaks/` 被当成普通英文句子翻了，路径变成
+`/mods/赛博朋克渲染调整/`，判断永远 false，模组自己的设置分组整块消失——游戏里
+只表现为「点了没反应」，界面上一点报错都没有。
+
+现在的判定要求「以分隔符开头、以分隔符结尾、至少两段」，段之间允许空格（模组名
+本来就带空格）；`/s stamina` 这种单位串、`FNCB // SECURE TERMINAL` 这种装饰
+分隔符、`A / D CHANGE CATEGORY` 这类界面文本都不会被误杀。写回侧加了同一条硬
+围栏：旧记忆或手填的路径条目一律拒绝，原因写「这是路径串, 翻了模组就找不到它」。
+
+同时把产出目录里那份已经翻坏的副本改回英文，翻译记忆里那条也删了，所以
+`/mods/赛博朋克渲染调整/` 不会再被复用。
 
 ## v2.52.6 更新：批量报告里那两类「未匹配」不再出现
 

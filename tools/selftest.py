@@ -4579,6 +4579,28 @@ def check_text_call_namespace():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_path_string_guard():
+    """模组路径串不进表，写回也被硬挡。
+
+    回归 (2026-11-05, Cyberpunk Render Tweaks)：
+      StrBeginsWith(NameToString(item.GetGroupPath()), "/mods/Cyberpunk Render Tweaks/")
+    被翻成 "/mods/赛博朋克渲染调整/"，这条判断永远 false，模组自己的设置分组
+    整块消失，而界面上没有任何报错。和 `池名|配置` 一样，它根本不是文案。
+    """
+    bad = "/mods/Cyberpunk Render Tweaks/"
+    assert not E.is_translatable(bad), bad
+    assert not E.is_translatable("C:\\Game\\r6\\"), "盘符路径也要挡"
+    lvl, why = E.guard_level("x.reds", bad, "/mods/赛博朋克渲染调整/")
+    assert lvl == "hard" and why, (lvl, why)
+    # 不能误伤：单位串、带 // 的装饰分隔符、普通界面文本
+    assert E.is_translatable("FNCB // SECURE TERMINAL")
+    assert E.is_translatable("A / D  CHANGE CATEGORY")
+    assert E.is_translatable("Select Game Menus to Snapshot/Restore:")
+    assert E.guard_level("x.reds", "/s stamina", "/s 耐力") == ("", ""), "单位串不该被拦"
+    assert E.guard_level("x.reds", "Enable", "启用") == ("", "")
+    return True
+
+
 def check_markup_closer_balance():
     """补关闭标记只补到配平为止, 不许在末尾挂一串 `</>`。
 
@@ -5749,6 +5771,8 @@ def main():
     print("   OK: 语言包 this.Text 的 key 不被译文物覆盖 (按行号兜底也不许)")
     check_text_call_namespace()
     print("   OK: CET 的 ui.text(文字) 不当查表键 / 裸 text(key) 仍是键 / XML 注释不进表")
+    check_path_string_guard()
+    print("   OK: /mods/模组名/ 这类路径串不进表, 写回硬挡 (单位串与界面文本不误伤)")
     check_markup_closer_balance()
     print("   OK: 关闭标记只补到配平, 末尾不挂一串 </>")
     check_repeat_run_guard()

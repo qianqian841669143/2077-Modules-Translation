@@ -122,6 +122,14 @@ def _looks_like_path(t):
         # 下面那条「无空格才算路径」会把整句中文判成路径, 直接丢掉。
         if CJK_RE.search(t):
             return False
+        # "/mods/Cyberpunk Render Tweaks/" —— CET 的 GetGroupPath() 返回的绝对
+        # 路径（Cyberpunk Render Tweaks 就是这么判断"这个设置项是不是我的"）。
+        # 段之间允许空格（模组名带空格），所以下面「无空格才算路径」漏掉它；翻成
+        # 中文后 StrBeginsWith 永远 false，模组设置分组整块失效，界面上却看不出
+        # 任何异常。要求「以分隔符开头且以分隔符结尾、至少两段」，"/s stamina"
+        # 这种单位串和 "FNCB // SECURE TERMINAL" 这种装饰分隔符都不会被误杀。
+        if re.match(r"^(?:[A-Za-z]:)?[\\/](?:[^\\/\n]+[\\/])+$", t):
+            return True
         # 带空格的一般是句子("He said \\ ok"), 无空格才当作路径
         if not re.search(r"\s", t):
             return True
@@ -2620,6 +2628,12 @@ def guard_level(path, orig, trans):
     # 初始化期直接 AV。这条永远不给覆盖开关 —— 它不是文案。
     if NOISE.is_config_dsl(orig):
         return "hard", "这是「池名|配置」行, 翻掉后模组按竖线切分会越界"
+    # 模组/归档内的路径（"/mods/Cyberpunk Render Tweaks/"）。提取层本来就不收
+    # 它，这里再挡一次：旧表 / 记忆里残留的条目、前端手填的行，写回去会让
+    # StrBeginsWith、ResRef、归档内路径查找全部落空，而游戏里只是"这个功能没
+    # 反应"，根本查不到是翻译干的。
+    if _looks_like_path(orig):
+        return "hard", "这是路径串, 翻了模组就找不到它"
     return "", ""
 
 
