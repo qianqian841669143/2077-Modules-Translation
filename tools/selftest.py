@@ -4806,6 +4806,76 @@ def check_memory_atomic():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_webview_gpu_switch():
+    """设置页「界面不使用 GPU 渲染」（v2.52.3）：给 WebView2 传 --disable-gpu。
+
+    2026-11-05 查到这台机器的 `nvlddmkm.sys` 被 Windows 判成两次 0xD1 蓝屏的
+    相关驱动（系统日志 1019），同一天还有两百多条 GPU 看门狗 live dump。界面是
+    WebView2 + GPU 合成，驱动一卡宿主进程跟着消失——所以留了这个开关做对照。
+    要钉住的四件事：
+      1. 默认关（不能把别人的界面默认削成软件渲染）；
+      2. 只是勾选不会丢：`webview_disable_gpu` 必须在 save_settings 的白名单里；
+      3. 参数必须在 `webview.create_window()` **之前**写进环境变量（WebView2
+         的环境只创建一次，之后再改就无效）；
+      4. 不覆盖用户/别的组件已经设好的 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`。
+    """
+    import appconfig
+    import web_app as W
+
+    assert appconfig.DEFAULT_SETTINGS.get("webview_disable_gpu") is False, \
+        "界面禁用 GPU 不该默认打开"
+
+    root = os.path.dirname(HERE)
+    with io.open(os.path.join(root, "src", "web_app.py"), encoding="utf-8") as f:
+        src = f.read()
+    # 白名单（静态断言：这里不能真的调 save_settings，会写用户真实配置）
+    allow = src[src.index("def save_settings(self, cfg)"):]
+    allow = allow[:allow.index("# 目录变了")]
+    assert '"webview_disable_gpu"' in allow, "设置项没进 save_settings 白名单"
+
+    # 参数顺序：先设环境变量，再建窗口
+    i_args = src.index("_apply_webview_args(api.settings)")
+    i_win = src.index("window = webview.create_window(")
+    assert i_args < i_win, "WebView2 参数设在 create_window 之后等于没设"
+
+    key = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
+    old = os.environ.pop(key, None)
+    try:
+        assert W._apply_webview_args({}) == "", "没勾选却设了参数"
+        assert key not in os.environ, "没勾选却动了环境变量"
+        args = W._apply_webview_args({"webview_disable_gpu": True})
+        assert "--disable-gpu" in args, args
+        assert os.environ.get(key) == args, os.environ.get(key)
+        # 已有参数保留，只在后面追加
+        os.environ[key] = "--foo=1"
+        args2 = W._apply_webview_args({"webview_disable_gpu": True})
+        assert args2.startswith("--foo=1 "), args2
+        assert "--disable-gpu" in args2, args2
+        # 环境变量兜底：不改设置也能试
+        os.environ.pop(key, None)
+        os.environ["MT_WEBVIEW_NO_GPU"] = "1"
+        try:
+            assert "--disable-gpu" in W._apply_webview_args({}), "环境变量兜底没生效"
+        finally:
+            os.environ.pop("MT_WEBVIEW_NO_GPU", None)
+    finally:
+        os.environ.pop(key, None)
+        if old is not None:
+            os.environ[key] = old
+
+    # 前端：控件、读、写三处都得在
+    with io.open(os.path.join(root, "src", "web", "index.html"),
+                 encoding="utf-8-sig") as f:
+        html = f.read()
+    assert 'id="set-no-gpu"' in html, "设置页没有这个勾选"
+    with io.open(os.path.join(root, "src", "web", "app.js"),
+                 encoding="utf-8-sig") as f:
+        js = f.read()
+    assert '$("set-no-gpu").checked = !!state.settings.webview_disable_gpu' in js, \
+        "设置页没回显"
+    assert 'webview_disable_gpu: $("set-no-gpu").checked' in js, "保存没带上这个键"
+
+
 def check_cache_tools():
     """设置页「缓存清理」：统计准、只删选中的、印章和真数据不碰。
 
@@ -5461,6 +5531,8 @@ def main():
     print("   OK: 批量事件通道复用连接 (200 ms 一次轮询不新开线程)")
     check_memory_atomic()
     print("   OK: 记忆落盘要么完整覆盖要么不动 / 坏档改名留证 / 锁按路径共享")
+    check_webview_gpu_switch()
+    print("   OK: 界面可切到纯 CPU 渲染 (WebView2 参数在建窗口前设好, 不覆盖已有值)")
     check_cache_tools()
     print("   OK: 缓存清理只删选中的目录 / 印章与记忆文件不动")
     check_batch_export_rows()

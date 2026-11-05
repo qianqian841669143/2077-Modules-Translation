@@ -50,6 +50,7 @@
     "退出": "Exit",
     "本地模型 API 地址...": "Local model API...",
     "深色模式": "Dark mode",
+    "界面不使用 GPU 渲染（显卡驱动有问题时用，下次启动生效）": "Render the UI without the GPU (use when the graphics driver is unstable; takes effect next launch)",
     "打开配置文件所在目录": "Open config folder",
     "使用说明": "User guide",
     "关于": "About",

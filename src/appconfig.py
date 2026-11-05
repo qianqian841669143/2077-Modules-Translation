@@ -21,7 +21,7 @@ try:
 except Exception:                      # 老版本 Python 没有这些名字, 忽略即可
     pass
 
-VERSION = "v2.52.2"
+VERSION = "v2.52.3"
 APP_DIR_NAME = "2077ModTranslator"
 
 TARGET_LANGS = ["简体中文", "繁體中文", "English", "日本語", "한국어",
@@ -61,6 +61,14 @@ DEFAULT_SETTINGS = {
     # 关窗时问一句「要停掉本地模型吗」：Ollama 默认 keep_alive，关掉翻译器它
     # 也不会自己退出（9B 常占 6~8 GB、27B 常驻 21 GB）。嫌烦可以关掉这个勾。
     "ask_unload_model": True,
+    # 界面不用 GPU 渲染（WebView2 加 --disable-gpu）。
+    # 2026-11-05 的证据：这台机器的 NVIDIA 内核驱动 nvlddmkm.sys 被 Windows 判成
+    # 两次 0xD1 蓝屏的相关驱动，同一天还有两百多条 GPU 看门狗 live dump
+    # （C:\WINDOWS\LiveKernelReports\WATCHDOG4400），而界面是 WebView2 + GPU 合成。
+    # 显卡驱动一卡，宿主进程会跟着一起消失——留一个「纯 CPU 渲染」的开关，用来
+    # 把「驱动问题」和「程序问题」分开。下次启动生效（WebView2 的参数只在创建
+    # 环境时读一次）。
+    "webview_disable_gpu": False,
 }
 
 # 显示用的路径前缀裁剪 (Excel 里仍保存完整相对路径)

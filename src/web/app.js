@@ -3101,6 +3101,7 @@ function openSettings() {
   $("set-target").value = state.settings.target_lang || "简体中文";
   $("set-tm").checked = !!state.settings.use_tm;
   $("set-dark").checked = !!state.settings.dark_mode;
+  $("set-no-gpu").checked = !!state.settings.webview_disable_gpu;
   $("set-game").value = state.settings.game_dir || "";
   $("set-wkit").value = state.settings.wkit_path || "";
   $("set-staging").value = state.settings.staging_dir || "";
@@ -3133,6 +3134,7 @@ async function saveSettings(opts) {
     target_lang: $("set-target").value,
     use_tm: $("set-tm").checked,
     dark_mode: $("set-dark").checked,
+    webview_disable_gpu: $("set-no-gpu").checked,
     game_dir: $("set-game").value.trim(),
     wkit_path: $("set-wkit").value.trim(),
     staging_dir: $("set-staging").value.trim(),

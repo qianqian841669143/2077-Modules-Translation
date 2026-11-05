@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.52.2**
+当前版本：**v2.52.3**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -15,6 +15,45 @@
 > (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.52.3 更新：可以关掉界面的 GPU 渲染（显卡驱动不稳时用来对照排查）
+
+11-05 15:00 左右那次崩溃，异常码 `0xC0000005`（访问违例）、模块 `python314.dll`，
+访问地址 `0xFFFFFFFFFFFFFFFF`，崩在 **S4 预取线程**里一句普通的 `toks.append(...)`。
+同一时刻别的线程在加载官方语料、在事件通道上读 socket，没有一条看着像原因。继续
+查下去，这台机器的系统日志给出了更硬的结论：
+
+```
+2026-11-03 15:49:09  计算机已从错误检查后重新启动。可能相关的驱动程序： nvlddmkm.sys
+2026-10-30 11:49:47  计算机已从错误检查后重新启动。可能相关的驱动程序： nvlddmkm.sys
+```
+
+两次蓝屏都是 `0xD1`，参数 `(addr, 2, 8, addr)`——IRQL 2 上**执行**了一个坏地址
+（`8` = execute）。今天 Application 日志里那两百多条 `LiveKernelEvent 0x1b8` 附带的
+文件是 `C:\WINDOWS\LiveKernelReports\WATCHDOG4400\*.dmp`，也就是**GPU 调度看门狗**
+生成的 live dump：07:31 一波 293 条，之后 08:26 / 12:13 / 12:29 / 12:59 / 14:58 反复。
+
+界面是 WebView2 + GPU 合成，显卡驱动一卡，宿主进程会跟着一起走。所以这一版加一个
+开关，**不猜原因，先做对照**：
+
+**设置 → 界面 → 「界面不使用 GPU 渲染（显卡驱动有问题时用，下次启动生效）」**
+
+- 勾上之后启动时给 WebView2 加 `--disable-gpu --disable-gpu-compositing`，界面走
+  纯 CPU 合成。下次启动生效（WebView2 的参数只在创建环境时读一次）。
+- 也可以不改设置直接试：`set MT_WEBVIEW_NO_GPU=1` 再启动。
+- 每次带着参数启动，都会在 `userdata\logs\crash.log` 里留一行
+  `界面禁用 GPU 渲染：WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=…`，对照时不至于记错。
+
+**怎么用它做判断**：勾上跑一轮批量。
+
+| 结果 | 结论 |
+|---|---|
+| 批量跑完，且 `WATCHDOG4400` 不再出新 dump | 之前是显卡驱动/硬件那条线，去 DDU 干净重装驱动 |
+| 批量跑完，但别的 GPU 程序仍在打看门狗 | 驱动仍不稳，但至少能确认翻译器本身没问题 |
+| 照样崩 | 与 GPU 无关，回头查内存/CPU（XMP 关掉 + MemTest86） |
+
+顺带说明：**v2.52.2 的记忆落盘修复在这次崩溃里是有效的**——`memory.json` 完整、
+没有半截 `.tmp`、没有出现坏档留证的 `memory.json.bad-*`，崩的前一秒那次保存是好的。
 
 ## v2.52.2 更新：翻译记忆的落盘不再被半截档带走；坏档改名留证，不再静默清空
 

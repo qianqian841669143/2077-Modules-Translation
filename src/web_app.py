@@ -330,6 +330,8 @@ class Api(object):
                   "official_weak", "use_official_tm", "local_model_enabled",
                   # 关窗时问一句「要停掉本地模型吗」：默认开，嫌烦的可以关掉。
                   "ask_unload_model",
+                  # 界面不用 GPU 渲染（排查显卡驱动问题时用，下次启动生效）。
+                  "webview_disable_gpu",
                   # 这三个是批量面板上的勾选：以前漏在这张白名单外，前端存了也
                   # 被丢掉，于是「跑完覆盖回原模组」永远读到默认的 False ——
                   # 勾上等于没勾，批量只产出到副本，一个字节也不会回写。
@@ -4023,6 +4025,32 @@ def _crash_ready():
         pass
 
 
+def _apply_webview_args(settings):
+    """给 WebView2 传启动参数（目前只有「界面不用 GPU」这一种）。
+
+    为什么需要这个开关：2026-11-05 查到这台机器的 NVIDIA 内核驱动
+    `nvlddmkm.sys` 被 Windows 判成两次 0xD1 蓝屏的相关驱动（系统日志 1019），
+    同一天还有两百多条 GPU 看门狗 live dump（`LiveKernelReports\\WATCHDOG4400`）。
+    而界面是 WebView2 + GPU 合成：显卡驱动一卡，宿主进程会跟着一起消失。
+    勾上「界面不使用 GPU 渲染」之后界面走纯 CPU 合成，就能把「驱动问题」和
+    「程序问题」分开——如果关掉 GPU 后批量能跑完，而别的 GPU 程序仍然打看门狗，
+    那问题就在驱动那侧。
+
+    WebView2 只在创建环境时读一次 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`，
+    所以必须在 `webview.create_window()` 之前设进环境变量，而且下次启动才生效。
+    也支持环境变量 `MT_WEBVIEW_NO_GPU=1` 临时强制打开（不改设置就能试）。
+    """
+    extra = []
+    if settings.get("webview_disable_gpu") or os.environ.get("MT_WEBVIEW_NO_GPU"):
+        extra = ["--disable-gpu", "--disable-gpu-compositing"]
+    if not extra:
+        return ""
+    old = (os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") or "").strip()
+    args = (old + " " + " ".join(extra)).strip() if old else " ".join(extra)
+    os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = args
+    return args
+
+
 def main():
     _startup_log("main start")
     _crash_ready()
@@ -4044,6 +4072,12 @@ def main():
     _startup_log("single_instance: ok")
     api = Api(initial)
     _startup_log("Api initialized")
+    # 必须在 create_window 之前设：WebView2 的环境只创建一次，之后再改环境变量
+    # 不会生效（勾选里那句「下次启动生效」就是这个原因）。
+    _wv_args = _apply_webview_args(api.settings)
+    if _wv_args:
+        _note_log("界面禁用 GPU 渲染：WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=%s"
+                  % _wv_args)
     dark = bool(api.settings.get("dark_mode"))
     theme = "dark" if dark else "light"
     bg = "#17181C" if dark else "#F7F8FA"
