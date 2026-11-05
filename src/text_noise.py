@@ -30,12 +30,16 @@ FAMILY_TECH = "技术串"
 FAMILY_LANG = "外文表"
 FAMILY_TABLE = "双语表"
 FAMILY_DATA = "数据行"
+# "lat|mex bra" / "media|high 40 mid 60" —— 池名|token 列表 的配置行。
+# 它不是文案, 是模组用 StrSplit(row, "|") 现读现用的配置表。
+FAMILY_CONFIG = "配置行"
 # 位置证据挡下来的「名字」（call(obj,"Method") 的方法名、插槽名、能力清单）。
 # 判据在 mod_text_engine 里（需要 token 上下文），这里只占一个家族名，
 # 好让扫描报告能说清「少掉的这些条是为什么少的」。
 FAMILY_POSITION = "位置标识符"
 
-HARD_FAMILIES = (FAMILY_ASSET, FAMILY_KEY, FAMILY_TECH, FAMILY_DATA)
+HARD_FAMILIES = (FAMILY_ASSET, FAMILY_KEY, FAMILY_TECH, FAMILY_DATA,
+                 FAMILY_CONFIG)
 ALL_FAMILIES = (HARD_FAMILIES + (FAMILY_IDENT, FAMILY_LOCKEY,
                                  FAMILY_LANG, FAMILY_TABLE, FAMILY_POSITION))
 
@@ -98,6 +102,35 @@ def data_row_shape(seg_text):
         else:
             out.append("other")
     return out
+
+
+# "media|high 40 mid 60" / "lat|mex bra" / "asi|chn jap kor"
+#
+# 池名|token 列表 —— 模组自己的配置表，不是给玩家看的文案。Crowd Voice Unlocked
+# 的 CVO_Accents() / CVO_Mixes() 就是这种写法，消费端是
+#
+#   let cols: array<String> = StrSplit(row, "|");
+#   ArrayPush(this.m_accentKeys, cols[0]);
+#   ArrayPush(this.m_accentSets, " " + cols[1] + " ");
+#
+# 一旦把 "lat|mex bra" 翻成 "墨西哥佬"，竖线消失、StrSplit 只返回 1 个元素，
+# cols[1] 越界取到 null，取它的字段就是初始化期的 AV（read at 0x14）——
+# 而文件照样能编译通过，所以只能靠形状在提取层挡掉。
+#
+# 右侧要求**至少两个** token：`male|female` 这种二选一界面文本必须放过，它该翻。
+_CONFIG_DSL = re.compile(
+    r"^[a-z][a-z0-9_]*\|"
+    r"[a-z][a-z0-9_]*(?:\s+\d+)?"
+    r"(?:\s+[a-z][a-z0-9_]*(?:\s+\d+)?)+$"
+)
+
+
+def is_config_dsl(s):
+    """池名|token 列表 的配置行；空串/中文返回 False。"""
+    t = (s or "").strip()
+    if not t or CJK_RE.search(t):
+        return False
+    return bool(_CONFIG_DSL.match(t))
 
 
 # "meta.read,perspective.read,events.push," —— 点分逗号清单（能力/协议清单）。
@@ -193,6 +226,8 @@ def hard_family(t):
         return FAMILY_ASSET
     if is_data_row(s):
         return FAMILY_DATA
+    if is_config_dsl(s):
+        return FAMILY_CONFIG
     if is_protocol_list(s):
         return FAMILY_POSITION
     if _PATH_COUNT.match(s):

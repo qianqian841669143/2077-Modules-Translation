@@ -6,12 +6,20 @@
 242 秒中的 **211 秒（87%）**，而 WolvenKit 一次 CLI 操作本身就是 2.2 秒的
 固定开销（8 KB 的归档也一样）。
 
-复用判据三条全中，少一条就老实重打：
+判据看的是**产物本身还对不对**，而不是源归档有没有被改：
 
-* 源归档的 sha1 没变 —— 模组自己没更新；
 * 这次要写进归档的译文对（``资源路径|entryId|译文``）与上次一致；
 * 上次产出的 ``<mod>_zh-cn.archive``（以及配套的 ``.xl``）还在，且 sha1 与
-  记录一致。
+  记录一致；
+* 这次要写的每一条（``资源路径|entryId``）在旧产物里对应的**原文**也没变
+  （记录里存的是原文的 sha1）。
+
+为什么不再看源归档 sha1：Vortex 更新模组时会把这个目录整个重写一遍（实测
+会删掉我们新增的 ``*_zh-cn.archive``，也会把改写过的原文件换回英文），源归档
+的 sha1 每次都变；但产物是 ``entryId → 译文`` 的映射，``entryId`` 来自 CR2W
+的 ``primaryKey`` / ``stringId``，和归档里脚本、模型改没改无关。所以「源归档
+变了、译文表没变」的模组可以直接复用，0 秒。原文真的变了、或新版多出条目要
+翻译，才重打包。
 
 记录只存指纹，不存译文，落在 ``userdata/cache/archive_reuse.json``。
 任何一项对不上都会退回原来的「重打包」路径，所以记录损坏/过期只会慢一点，
@@ -22,7 +30,7 @@ import io
 import json
 import os
 
-VERSION = 1
+VERSION = 2
 
 
 def store_path():
@@ -126,11 +134,35 @@ def files_hash(paths):
     return out
 
 
-def reusable(rec, src, pairs, files):
-    """这条记录还能不能直接用。"""
+def orig_sig(rows):
+    """本次要写进归档的「条目 → 原文」指纹：{``资源路径|entryId``: sha1(原文)}。
+
+    产物是 ``entryId → 译文`` 的映射，所以判「旧产物还能不能用」要盯住每条
+    原文是否还是原来那句，而不是整个源归档的 sha1（模组更新会重写整个目录，
+    但绝大多数条目的原文没动）。
+    """
+    out = {}
+    for r in rows or ():
+        if str(r.get("kind") or "") != "resource":
+            continue
+        text = r.get("trans")
+        if text is None or not str(text).strip():
+            continue
+        key = "%s\x1f%s" % (str(r.get("file") or ""),
+                            str(r.get("entryId") or ""))
+        out[key] = hashlib.sha1(str(r.get("orig") or "").encode("utf-8")).hexdigest()
+    return out
+
+
+def reusable(rec, pairs, files, sig):
+    """这条记录还能不能直接用。
+
+    旧产物里多出来的条目（新版归档删掉的 key）不影响——游戏不会去查它们；
+    但这次要写的每一条都必须在旧产物里有对应条目、且原文没变。
+    """
     if not isinstance(rec, dict):
         return False
-    if rec.get("src") != src or rec.get("pairs") != pairs:
+    if rec.get("pairs") != pairs:
         return False
     have = rec.get("files") or {}
     if not have or have != files:
@@ -139,13 +171,19 @@ def reusable(rec, src, pairs, files):
     for path, sha in files.items():
         if path.lower().endswith(".archive") and not sha:
             return False
+    old = rec.get("sig")
+    if not isinstance(old, dict):
+        return False        # v2 之前的记录没有原文指纹，重打一次即可
+    for k, v in (sig or {}).items():
+        if old.get(k) != v:
+            return False
     return True
 
 
-def remember(key, src, pairs, files, path=None):
+def remember(key, pairs, files, sig, path=None):
     """记下这次成功打包的指纹。"""
     items = load(path)
-    items[key] = {"src": src, "pairs": pairs, "files": files}
+    items[key] = {"pairs": pairs, "files": files, "sig": dict(sig or {})}
     return save(items, path)
 
 

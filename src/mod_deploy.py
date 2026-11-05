@@ -250,6 +250,51 @@ def up_to_date(mod_root):
     return "已部署且源文件未变"
 
 
+def audit_mods():
+    """巡检：哪些模组的译文已经被外部冲掉了。
+
+    Vortex 更新模组时是把那个目录整个重写一遍——实测会删掉我们新增的
+    `*_zh-cn.archive` / `.xl` / 语言包，也会把改写过的原文件换回英文。
+    这里按清单逐文件比对 sha1，把「文件缺失 / 内容变了」的模组报出来，
+    界面据此只修这几个，不用整轮重扫 285 个目录。
+
+    只读，不改任何文件（也不清清单）：目录已经不存在的模组直接跳过。
+    """
+    mods = (load().get("mods") or {})
+    stale = []
+    checked = 0
+    for key, e in mods.items():
+        if not isinstance(e, dict):
+            continue
+        root = str(e.get("root") or "")
+        files = {str(k): v for k, v in (e.get("files") or {}).items()
+                 if isinstance(v, dict) and v.get("sha1")}
+        if not root or not files or not os.path.isdir(root):
+            continue
+        checked += 1
+        missing = changed = 0
+        for rel, info in files.items():
+            p = os.path.join(root, rel.replace("\\", os.sep))
+            if not os.path.isfile(p):
+                missing += 1
+            elif file_sha1(p) != str(info["sha1"]):
+                changed += 1
+        if not (missing or changed):
+            continue
+        done = e.get("done") or {}
+        stale.append({
+            "root": root,
+            "name": os.path.basename(root) or root,
+            "total": len(files),
+            "missing": missing,
+            "changed": changed,
+            "doneAt": str(done.get("at") or ""),
+        })
+    stale.sort(key=lambda r: (-(r["missing"] + r["changed"]),
+                              r["name"].lower()))
+    return {"checked": checked, "stale": stale}
+
+
 def forget_in(mod_root, memory, lang):
     """把清单里记的译文对从翻译记忆里删掉（只删 machine/memory 来源）。
 

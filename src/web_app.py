@@ -149,6 +149,9 @@ class Api(object):
         # Vortex 三层映射（下载包 / 安装缓存 / 游戏部署）的扫描缓存。
         # 目录一变就作废；只读不写，不会影响 Vortex。
         self._vmap = None
+        # 部署清单巡检结果（被 Vortex 更新冲掉的模组）的短缓存：面板重开
+        # 不必把 100 多个模组的文件重新哈希一遍。
+        self._audit_cache = None
 
     # ------------------------------------------------------------ 延迟加载
     # 这两个属性也必须保持私有，避免 pywebview 在启动时触发磁盘加载
@@ -1441,9 +1444,10 @@ class Api(object):
     def _reuse_archive(self, sess, items, outdir):
         """上次的产物还能不能直接用；能就返回 {"archive", "xl"}，否则 None。
 
-        判据见 ``localization/reuse.py``：源归档 sha1、译文对指纹、产物 sha1
-        三者都对得上才复用。任何一项不同（换了译文、模组更新、产物被删）
-        都会退回原来的重打包路径。
+        判据见 ``localization/reuse.py``：译文对指纹、产物 sha1、以及每条
+        ``资源路径|entryId`` 对应的原文指纹。Vortex 更新会重写整个模组目录
+        （连我们新增的产物一起删），但只要本地化条目和原文没变，旧产物照样
+        有效——这时不用再拉 WolvenKit 重打。
         """
         try:
             from localization import reuse as Lreuse
@@ -1455,8 +1459,8 @@ class Api(object):
             if not rec:
                 return None
             files = Lreuse.files_hash(list(outs) + list(xls))
-            if not Lreuse.reusable(rec, Lreuse.src_hash(srcs),
-                                   Lreuse.pairs_hash(items), files):
+            if not Lreuse.reusable(rec, Lreuse.pairs_hash(items), files,
+                                   Lreuse.orig_sig(items)):
                 return None
             return {"archive": outs[0] if os.path.exists(outs[0]) else "",
                     "xl": xls[0] if os.path.exists(xls[0]) else ""}
@@ -1475,8 +1479,8 @@ class Api(object):
             if not any(files.values()):
                 return
             Lreuse.remember(Lreuse.mod_key(self.root or "", srcs),
-                            Lreuse.src_hash(srcs), Lreuse.pairs_hash(items),
-                            files)
+                            Lreuse.pairs_hash(items), files,
+                            Lreuse.orig_sig(items))
         except Exception:       # noqa: BLE001
             pass
 
@@ -2056,6 +2060,47 @@ class Api(object):
         w._terms = self._terms
         w._emit = lambda obj: None
         return w
+
+    def batch_audit(self, force=False):
+        """巡检部署清单：列出被 Vortex 更新（或解压还原）冲掉译文的模组。
+
+        只读清单 + 磁盘 sha1，不复制、不改任何文件。结果缓存 60 秒——面板
+        重开时不用把 100 多个模组的记录文件重新哈希一遍。配合
+        `mod_deploy.audit_mods()`：Vortex 更新会把模组目录整个重写，我们
+        新增的归档/语言包被删、改写的原文件被换回英文，这里负责把它们找出来。
+        """
+        now = time.time()
+        cache = self._audit_cache
+        if not force and cache and now - cache[0] < 60 and cache[1].get("ok"):
+            return cache[1]
+        try:
+            import mod_deploy
+            res = mod_deploy.audit_mods()
+        except Exception as ex:      # noqa: BLE001
+            return {"ok": False, "error": str(ex)}
+        # 和这次扫描到的队列对一下：能不能一键修，得看它在不在 _mb_items 里
+        by_root = {}
+        for it in (self._mb_items or []):
+            try:
+                by_root[os.path.normcase(os.path.abspath(it.get("root") or ""))] = it
+            except Exception:       # noqa: BLE001
+                continue
+        fixable = 0
+        for row in res.get("stale") or []:
+            try:
+                it = by_root.get(
+                    os.path.normcase(os.path.abspath(row.get("root") or "")))
+            except Exception:       # noqa: BLE001
+                it = None
+            row["scanned"] = it is not None
+            row["itemKey"] = (it or {}).get("key") or ""
+            row["todo"] = int((it or {}).get("todo") or 0)
+            if it is not None and row["todo"]:
+                fixable += 1
+        out = {"ok": True, "checked": res.get("checked", 0),
+               "stale": res.get("stale") or [], "fixable": fixable}
+        self._audit_cache = (now, out)
+        return out
 
     def batch_scan(self, staging=""):
         """异步：列出 staging 下的一级目录并预扫行数。不复制、不翻译。"""

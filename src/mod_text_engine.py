@@ -2584,6 +2584,11 @@ def guard_level(path, orig, trans):
     if NOISE.is_data_row(orig):
         if NOISE.data_row_shape(orig) != NOISE.data_row_shape(trans or ""):
             return "hard", "竖线数据行的段数或属性变了, 写回会打断 id 表"
+    # 池名|token 列表（"lat|mex bra"）。翻成中文后竖线消失，模组用
+    # StrSplit(row,"|") 切出来只有一段，紧接着的 cols[1] 越界取到 null，
+    # 初始化期直接 AV。这条永远不给覆盖开关 —— 它不是文案。
+    if NOISE.is_config_dsl(orig):
+        return "hard", "这是「池名|配置」行, 翻掉后模组按竖线切分会越界"
     return "", ""
 
 

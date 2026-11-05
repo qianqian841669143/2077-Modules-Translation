@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.52.4**
+当前版本：**v2.52.5**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -15,6 +15,53 @@
 > (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.52.5 更新：`lat|mex bra` 这类配置行不再被翻译（它会崩游戏）
+
+这轮把「翻译后必崩」追到了**单个文件**：`Crowd Voice Unlocked` 的
+`CrowdVoicesRestored.reds`。不是猜的——50 个翻译文件里只放回它一个就崩，
+拿掉它就不崩。
+
+**它为什么能把游戏搞崩**
+
+这个模组把配置直接写成字符串数组：
+
+```redscript
+public func CVO_Accents() -> array<String> = [
+    "kau|enus engb rus nat",
+    "lat|mex bra",
+    "asi|chn jap kor",
+];
+```
+
+消费端是：
+
+```redscript
+let cols: array<String> = StrSplit(row, "|");
+ArrayPush(this.m_accentKeys, cols[0]);
+ArrayPush(this.m_accentSets, " " + cols[1] + " ");
+```
+
+翻译工具把 `"lat|mex bra"` 翻成了 `"墨西哥佬"` —— **竖线没了**。`StrSplit`
+于是只返回 1 段，`cols[1]` 越界取到 null，再读它的字段就是
+`EXCEPTION_ACCESS_VIOLATION`、`read at 0x14`、`r8 = 0`，初始化期直接崩。
+
+文件本身照样能编译通过，所以只靠编译错误永远发现不了；症状是「每次启动
+都在同一个位置崩、RIP 一样、日志里没有任何红色报错」。
+
+**改法：按形状把它挡在提取层**
+
+新增噪音家族 `配置行`（`text_noise.is_config_dsl`），特征是 `池名|token 列表`：
+左半边是单个小写标识符，右半边至少两个小写 token（可带数字）。
+
+- 进表前就判死，`is_translatable()` 直接返回 False；
+- 写回前还有第二道 `guard_level()`，命中就按 hard 拒绝，不给单条覆盖开关；
+- **`male|female` 这种二选一界面文本不会被误伤**（右侧只有一个 token，不算配置行）。
+
+**顺带修好的遗留问题**：`selftest.check_archive_reuse` 还在调
+`reusable(rec, src, pairs, files)` 的旧签名（上一轮改成 `(rec, pairs, files, sig)`
+时漏改），自检因此一直是红的。现在按新签名重写，并补了一条「译文没变、但原文
+变了也必须重打包」。
 
 ## v2.52.4 更新：语言包类名不再撞车（`ChineseSimplified` → `ICACoreZhcn` 这种带前缀的短码）
 

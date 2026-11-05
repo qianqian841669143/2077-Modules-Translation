@@ -4618,38 +4618,93 @@ def check_archive_reuse():
             f.write(b"xl")
 
         rows = [
-            {"kind": "resource", "file": "a.json", "entryId": "1", "trans": "甲"},
-            {"kind": "resource", "file": "a.json", "entryId": "2", "trans": "乙"},
+            {"kind": "resource", "file": "a.json", "entryId": "1",
+             "orig": "original one", "trans": "甲"},
+            {"kind": "resource", "file": "a.json", "entryId": "2",
+             "orig": "original two", "trans": "乙"},
             {"kind": "source", "file": "a.reds", "orig": "x", "trans": "丙"},
         ]
         key = R.mod_key(os.path.join(tmp, "root"), [arch])
         src = R.src_hash([arch])
         pairs = R.pairs_hash(rows)
         files = R.files_hash([out, out + ".xl"])
+        sig = R.orig_sig(rows)
         store = os.path.join(tmp, "reuse.json")
 
         # 没有记录：不复用
-        assert not R.reusable(R.load(store).get(key), src, pairs, files)
-        assert R.remember(key, src, pairs, files, path=store)
+        assert not R.reusable(R.load(store).get(key), pairs, files, sig)
+        assert R.remember(key, pairs, files, sig, path=store)
         rec = R.load(store).get(key)
-        assert R.reusable(rec, src, pairs, files), rec
+        assert R.reusable(rec, pairs, files, sig), rec
 
         # 行顺序变了不算改动（排序后算指纹）；明文层的行不参与
         assert R.pairs_hash(list(reversed(rows))) == pairs
+        assert R.orig_sig(list(reversed(rows))) == sig
         assert R.pairs_hash(rows[:2]) == pairs
         # 改一条译文：指纹变，必须重打包
         changed = [dict(r) for r in rows]
         changed[0]["trans"] = "甲甲"
         assert R.pairs_hash(changed) != pairs
-        # 源归档变了：不复用
+        # 译文没变、但原文变了：同样必须重打包（存量译文已经对不上原文）
+        reorig = [dict(r) for r in rows]
+        reorig[0]["orig"] = "original one, edited"
+        assert R.pairs_hash(reorig) == pairs
+        assert R.orig_sig(reorig) != sig
+        assert not R.reusable(rec, pairs, files, R.orig_sig(reorig))
+        # 源归档变了不影响复用：判据看的是产物和原文，不是源归档的 sha1
         assert R.src_hash([arch]) != R.src_hash([arch, arch])
+        assert R.reusable(rec, pairs, files, sig)
         # 产物被删 / 被改：不复用
         os.remove(out)
-        assert not R.reusable(rec, src, pairs, R.files_hash([out, out + ".xl"]))
+        assert not R.reusable(rec, pairs, R.files_hash([out, out + ".xl"]), sig)
         # 记录能落盘再读回来
         assert R.load(store).get(key) == rec
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_config_dsl():
+    r"""池名|token 列表 的配置行不能被当成文案翻掉。
+
+    背景（v2.52.4）：Crowd Voice Unlocked 的 ``CVO_Accents()`` / ``CVO_Mixes()``
+    把配置写成 ``"lat|mex bra"`` / ``"media|high 40 mid 60"``，消费端是
+
+        let cols: array<String> = StrSplit(row, "|");
+        ArrayPush(this.m_accentKeys, cols[0]);
+        ArrayPush(this.m_accentSets, " " + cols[1] + " ");
+
+    被翻译后竖线没了，``StrSplit`` 只返回 1 段，``cols[1]`` 越界取到 null，
+    初始化期直接 AV（read at 0x14，读了 +0x14 的字段）。文件照样能编译通过，
+    所以只能靠形状在提取层挡掉。
+    """
+    import text_noise as NOISE
+    import mod_text_engine as ENG
+
+    block = [
+        "lat|mex bra",
+        "asi|chn jap kor",
+        "kau|enus engb rus nat",
+        "neu|enus engb",
+        "corpo|high 55 mid 40 depr 5",
+        "media|high 40 mid 60",
+        "worker|low 60 mid 35 depr 5",
+        "sex|prst 60 low 30 mid 10",
+        "junkie|jnk 40 prnd 15 frk 10 depr 10 hmls 5 low 20",
+        "homeless|hmls 30 jnk 15 depr 15 prnd 10 frk 5 low 25",
+    ]
+    for s in block:
+        assert NOISE.hard_family(s) == NOISE.FAMILY_CONFIG, s
+        assert not ENG.is_translatable(s), s
+
+    # 二选一/三选一的界面文本必须放过 —— 它们该翻
+    for s in ("male|female", "Alive|Dead|Unknown", "Press to continue"):
+        assert NOISE.hard_family(s) != NOISE.FAMILY_CONFIG, s
+    # 已经是中文的不再拦：用户还得能改措辞
+    assert NOISE.hard_family("媒体 | 高 40 中 60") != NOISE.FAMILY_CONFIG
+
+    # 第二道防线：即使原文已经进了表，也不许写回
+    lvl, _why = ENG.guard_level("x.reds", "lat|mex bra", "墨西哥佬")
+    assert lvl == "hard", lvl
 
 
 def check_stamp_versioned():
@@ -5632,6 +5687,8 @@ def main():
     print("   OK: 模型跑飞的译文 (同一段连写几十遍/占位符爆炸) 不写回, 记忆里也清掉")
     check_archive_reuse()
     print("   OK: 归档产物复用 (源归档/译文对/产物指纹三条都对得上才跳过重打包)")
+    check_config_dsl()
+    print("   OK: 池名|配置行 不进翻译表 (翻了竖线消失, StrSplit 后越界崩)")
     check_stamp_versioned()
     print("   OK: 引擎指纹跟版本走 (升级后老模组会重新抽一遍)")
     check_evbus_keepalive()
