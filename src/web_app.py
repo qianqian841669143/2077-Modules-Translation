@@ -1895,6 +1895,12 @@ class Api(object):
         elif t in ("mb-start", "mb-scanned", "mb-done"):
             keys = ("total", "done", "cancelled", "usable", "cached")
             self._batch_log("%s %s" % (t, {k: obj[k] for k in keys if k in obj}))
+        elif t == "mb-stage":
+            # 崩在 C 层时 Python 这一侧没有 traceback，日志就是唯一的现场：
+            # 阶段（复制/加载/机翻/写回/部署）比「第几个模组」更接近真相。
+            self._batch_log("stage %s %s %ss" % (
+                obj.get("name") or "", obj.get("label") or "",
+                obj.get("seconds")))
 
     def batch_poll(self, limit=300):
         """前端定时取事件。批量线程不碰 WebView2，只有这里（UI 线程侧的轮询）碰。"""

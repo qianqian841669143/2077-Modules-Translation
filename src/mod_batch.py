@@ -249,6 +249,20 @@ class Ctx(object):
     def stopped(self):
         return self.cancel is not None and self.cancel.is_set()
 
+    def stage(self, key, name, label, seconds=None):
+        """记一条阶段（复制 / 加载 / 机翻 / 写回 / 部署）。
+
+        batch.log 原来只有 start/done 两行，窗口被 C 层带走时只能看出「崩在第
+        30 个模组」，看不出崩在复制、加载还是写回。把阶段也落一行，下一轮看
+        日志就能指到具体那一步——这类崩溃在 Python 层没有 traceback，日志是
+        唯一的现场。
+        """
+        try:
+            self.on_event({"type": "mb-stage", "key": key, "name": name,
+                           "label": label, "seconds": seconds})
+        except Exception:
+            pass
+
 
 def _skip_reason(ctx, cand):
     """S6：已经部署好、源文件也没动的模组，整块跳过。
@@ -306,6 +320,9 @@ def prepare(ctx, cand):
     cp = copy_mod(cand["root"], dst, with_archive=ctx.with_archive,
                   skip_assets=ctx.skip_assets, cancel=ctx.cancel)
     prep["cp"] = cp
+    t_copy = time.time()
+    ctx.stage(cand.get("key"), cand.get("name"), "复制",
+              round(t_copy - t0, 2))
     if ctx.stopped():
         raise Cancelled()
     if not cp["files"]:
@@ -317,6 +334,8 @@ def prepare(ctx, cand):
     load = w._do_load(dst, {"resource": bool(ctx.with_archive),
                             "lua": True, "loose": True})
     prep["load"] = load
+    ctx.stage(cand.get("key"), cand.get("name"), "加载",
+              round(time.time() - t_copy, 2))
     if not load or not load.get("ok"):
         prep["error"] = (load or {}).get("error") or "加载失败"
     elif ctx.stopped():
@@ -340,6 +359,7 @@ def finish(ctx, cand, prep, r):
         r["skippedDone"] = prep["skip"]
         return
     cp = prep.get("cp") or {}
+    t_work = time.time()
     r.update(copied=cp.get("files", 0), bytes=cp.get("bytes", 0),
              skipped=cp.get("skipped", 0), own=cp.get("own", 0))
     if prep.get("error"):
@@ -362,6 +382,9 @@ def finish(ctx, cand, prep, r):
         raise Cancelled()
     if todo:
         w._run_translate(todo, ctx.base, ctx.model, ctx.target)
+    t_tr = time.time()
+    ctx.stage(cand.get("key"), cand.get("name"), "机翻",
+              round(t_tr - t_work, 2))
     if ctx.stopped():
         raise Cancelled()
 
@@ -408,8 +431,13 @@ def finish(ctx, cand, prep, r):
         if res.get("archive"):
             r["archive"] = res.get("archive")
             r["xl"] = res.get("xl") or ""
+    t_ap = time.time()
+    ctx.stage(cand.get("key"), cand.get("name"), "写回",
+              round(t_ap - t_tr, 2))
     if ctx.deploy and items:
         r["deploy"] = _deploy_one(ctx, cand, dst, items, r)
+        ctx.stage(cand.get("key"), cand.get("name"), "部署",
+                  round(time.time() - t_ap, 2))
     r["ok"] = True
 
 

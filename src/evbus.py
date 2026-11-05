@@ -127,11 +127,24 @@ class EventBus(object):
                     # 跨源取回环需要放行；本来也只是本机只读进度。
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.send_header("Access-Control-Allow-Headers", "*")
-                    self.send_header("Connection", "close")
+                    # 连接复用：前端每 200 ms 取一次事件，一个连接用完就扔的话，
+                    # 每次都要 accept 再新开一个伺服线程（ThreadingHTTPServer 是
+                    # 一连接一线程）。一轮批量跑十分钟就是几千次线程创建/销毁，
+                    # 在这种「Python + pythonnet/CLR + WebView2」的进程里，线程
+                    # 抖动本身就是历史崩溃的温床（见模块开头那段）。改成 keep-alive
+                    # 后整轮只剩浏览器连接池里那几个长连接，线程数基本恒定。
+                    if getattr(self, "close_connection", False):
+                        self.send_header("Connection", "close")
+                    else:
+                        self.send_header("Connection", "keep-alive")
+                        self.send_header("Keep-Alive", "timeout=120")
                     self.end_headers()
                     if body:
                         self.wfile.write(body)
-                    self.close_connection = True
+                    try:
+                        self.wfile.flush()
+                    except Exception:
+                        self.close_connection = True
 
             srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
             srv.daemon_threads = True

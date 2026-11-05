@@ -4679,6 +4679,43 @@ def check_stamp_versioned():
     assert MD.extraction_stamp() == a
 
 
+def check_evbus_keepalive():
+    """批量事件通道复用连接（v2.52.1）：200 ms 一次轮询，不能每次新开线程。
+
+    背景：前端每 200 ms 从一个只读回环端口取批量事件，而 ThreadingHTTPServer
+    是「一连接一线程」。原来每个响应都带 `Connection: close`，一轮十分钟的
+    批量就是几千次线程创建/销毁；在这种 Python + CLR + WebView2 的进程里，
+    线程抖动本身就是历史崩溃的温床（见 evbus 模块开头那段）。这里钉住
+    「同一个 socket 连取三次、每次响应都 keep-alive」。
+    """
+    import http.client
+    from urllib.parse import urlparse
+    import evbus
+
+    bus = evbus.EventBus()
+    url = bus.start()
+    assert url, "事件端口没起来"
+    u = urlparse(url)
+    conn = http.client.HTTPConnection(u.hostname, u.port, timeout=10)
+    ids = []
+    try:
+        for i in range(3):
+            bus.push({"type": "mb-stage", "label": "复制", "seconds": i})
+            conn.request("GET", u.path + "?" + u.query)
+            resp = conn.getresponse()
+            body = resp.read()
+            assert resp.status == 200, resp.status
+            assert "keep-alive" in (resp.getheader("Connection") or "").lower(), \
+                "响应没带 keep-alive: %r" % (resp.getheader("Connection"),)
+            got = json.loads(body.decode("utf-8"))
+            assert len(got.get("events") or []) >= 1, got
+            ids.append(id(conn.sock))
+        assert len(set(ids)) == 1, "三次请求换了连接: %s" % (ids,)
+    finally:
+        conn.close()
+        bus.stop()
+
+
 def check_cache_tools():
     """设置页「缓存清理」：统计准、只删选中的、印章和真数据不碰。
 
@@ -5330,6 +5367,8 @@ def main():
     print("   OK: 归档产物复用 (源归档/译文对/产物指纹三条都对得上才跳过重打包)")
     check_stamp_versioned()
     print("   OK: 引擎指纹跟版本走 (升级后老模组会重新抽一遍)")
+    check_evbus_keepalive()
+    print("   OK: 批量事件通道复用连接 (200 ms 一次轮询不新开线程)")
     check_cache_tools()
     print("   OK: 缓存清理只删选中的目录 / 印章与记忆文件不动")
     check_batch_export_rows()
