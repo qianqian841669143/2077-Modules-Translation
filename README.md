@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.52.3**
+当前版本：**v2.52.4**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -15,6 +15,57 @@
 > (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.52.4 更新：语言包类名不再撞车（`ChineseSimplified` → `ICACoreZhcn` 这种带前缀的短码）
+
+修完 GPU 那轮，RedRequire 的报告变成 2 条，全是类型重定义：
+
+```
+* ICAWeather is installed twice.        (duplicate)
+* ImmersiveCityAmbience is installed twice.  (duplicate)
+  ICAWeather\localization\ChineseSimplified.reds:5   [SYM_REDEFINITION]
+    ... conflicts with a type defined at ICACore\localization\ChineseSimplified.reds:5:1
+```
+
+不是装了两次，是**我们生成的中文语言包类名重复**。这三个是同一套件的三个独立
+模组（Core / Streets / Weather），原版都没有中文包，只有：
+
+| 模组 | 原版英文包类名 |
+|---|---|
+| ICACore | `ICACoreEnglish` |
+| ImmersiveCityAmbience | `ICAEnglish` |
+| ICAWeather | `ICAWeatherEnglish` |
+
+它们共用 `module ImmersiveCityAmbience.Localization`。旧代码生成的类名只按目标语言
+取（`ChineseSimplified`），把作者的前缀丢了 → 三个文件声明同一个类型 → 整个
+redscript 层编译失败（**所有模组的脚本都不加载**，比丢几句译文严重得多）。
+
+`SYM_REDEFINITION` 是编译期错误，红色报错一屏；这就是它的全部来源。
+
+**改法一：类名 = 源类名前缀 + 语言短码**
+
+```
+ICACoreEnglish       → ICACoreZhcn
+ICAEnglish           → ICAZhcn
+ICAWeatherEnglish    → ICAWeatherZhcn
+English（无前缀）     → Zhcn          （与现网几十个单模组完全兼容，无需迁移）
+```
+
+短码表（zh-CN 与 zh-TW 必须可区分，否则换语言又撞）：`Zhcn / Zhtw / En / Ja / Kr /
+Ru / De / Fr / Es / Pl / Ptbr / It / Cs / Tr / Hu / Ua / Ar`。
+
+**改法二：撞名时换名字，不再「报错跳过」**
+
+以前 `_class_owners()` 一命中就放弃整份语言包（译文全丢，用户只看到一行错误）。
+现在依次试 `前缀+码` → `+2` → `+3` → `前缀+码_<目录名>`，换不出来才放弃。另外撞名
+检查的范围加上了**部署侧** `游戏目录\r6\scripts`：批量里每个模组一份副本，副本之间
+互相看不见，只有把部署侧算进来才知道别人占了什么名字。
+
+**改法三：现场那 6 行直接修好**
+
+`ICACore` / `ImmersiveCityAmbience` / `ICAWeather` 的 `ChineseSimplified.reds` 类名
+和各自 `Provider.reds` 的 `case n"zh-cn"` 已按上表改掉（原地写，硬链接保持），
+译文一个字节没动。
 
 ## v2.52.3 更新：可以关掉界面的 GPU 渲染（显卡驱动不稳时用来对照排查）
 

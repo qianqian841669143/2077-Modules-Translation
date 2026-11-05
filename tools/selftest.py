@@ -1171,11 +1171,11 @@ def check_codeware_provider_apply():
         assert res["ok"] == 1 and res["fail"] == 0, res
         target = io.open(os.path.join(tmp, tgt_rel.replace("/", os.sep)),
                          encoding="utf-8").read()
-        assert "public class ChineseSimplified extends ModLocalizationPackage" in target, target
+        assert "public class Zhcn extends ModLocalizationPackage" in target, target
         assert '"任务"' in target, target
         provider = io.open(os.path.join(tmp, prov_rel.replace("/", os.sep)),
                            encoding="utf-8").read()
-        assert 'case n"zh-cn": return new ChineseSimplified();' in provider, provider
+        assert 'case n"zh-cn": return new Zhcn();' in provider, provider
         assert provider.count('case n"zh-cn"') == 1, provider
         assert os.path.exists(os.path.join(
             tmp, prov_rel.replace("/", os.sep)) + ".bak"), "Provider 未备份"
@@ -1186,7 +1186,7 @@ def check_codeware_provider_apply():
         assert provider2.count('case n"zh-cn"') == 1, provider2
         target2 = io.open(os.path.join(tmp, tgt_rel.replace("/", os.sep)),
                           encoding="utf-8").read()
-        assert "public class ChineseSimplified" in target2, target2
+        assert "public class Zhcn" in target2, target2
 
         base2 = os.path.join(tmp, "r6", "scripts", "Demo2", "Localization")
         packdir = os.path.join(base2, "Packages")
@@ -1227,7 +1227,7 @@ def check_codeware_provider_apply():
         assert res2["ok"] == 1 and res2["fail"] == 0, res2
         provider2 = io.open(os.path.join(tmp, prov2_rel.replace("/", os.sep)),
                             encoding="utf-8").read()
-        assert 'case n"zh-cn": return new ChineseSimplified();' in provider2, provider2
+        assert 'case n"zh-cn": return new Zhcn();' in provider2, provider2
         assert 'import Demo2.Localization.Packages.*' in provider2, provider2
         return True
     finally:
@@ -1301,7 +1301,7 @@ def check_provider_pairs_and_undo():
         provider_path = os.path.join(modroot, prov_rel.replace("/", os.sep))
         assert os.path.isfile(target_path), "目标语言包未创建"
         provider_text = io.open(provider_path, encoding="utf-8").read()
-        assert 'case n"zh-cn": return new ChineseSimplified();' in provider_text, provider_text
+        assert 'case n"zh-cn": return new Zhcn();' in provider_text, provider_text
         undone = undo_store.undo_last(modroot)
         assert undone.get("ok"), undone
         assert not os.path.exists(target_path), "撤销后新建目标文件仍存在"
@@ -3208,15 +3208,14 @@ def check_locale_pack_names():
         mod2 = "Bad.Translations"
         _lp_write(root, "Bad/English.reds", pkg(mod2, "Bad_English", "English"))
         _lp_write(root, "Bad/ChineseSimplified.reds", pkg(mod2, "Bad_English", "中文"))
-        _lp_write(root, "Bad/ZhPackage.reds", pkg(mod2, "ChineseSimplified", "中文"))
+        _lp_write(root, "Bad/ZhPackage.reds", pkg(mod2, "Bad_Zhcn", "中文"))
         _lp_write(root, "Bad/Provider.reds", prov(
             mod2, "Bad_LocalizationProvider", [("en-us", "Bad_English")]))
         rep2 = locale_pack.prepare_codeware_package(
             root, "Bad/English.reds", "Bad/ChineseSimplified.reds",
             target_locale="zh-CN")
-        assert rep2["error"], rep2
-        assert rep2["applied"] is False
-        assert "ChineseSimplified" in rep2["error"], rep2
+        assert not rep2["error"], rep2
+        assert rep2["class"] == "Bad_Zhcn2", rep2
 
         # 3) 同一 module 下并列两个 Provider, 只许动认领了当前包类的那个
         mod3 = "Two.Translations"
@@ -3235,9 +3234,9 @@ def check_locale_pack_names():
             root, "A/English.reds", "A/ChineseSimplified.reds",
             target_locale="zh-CN")
         assert not rep3["error"], rep3
-        assert rep3["class"] == "ChineseSimplified", rep3
+        assert rep3["class"] == "A_Zhcn", rep3
         a_text = open(os.path.join(root, "A/Provider.reds"), encoding="utf-8").read()
-        assert 'case n"zh-cn": return new ChineseSimplified();' in a_text, a_text
+        assert 'case n"zh-cn": return new A_Zhcn();' in a_text, a_text
         b_after = open(os.path.join(root, "B/Provider.reds"),
                        encoding="utf-8").read()
         assert b_after == b_before, "动了别的语言包的 Provider"
@@ -3264,7 +3263,7 @@ def check_locale_pack_names():
         prov4 = open(os.path.join(root, "Sen/Provider.reds"),
                      encoding="utf-8").read()
         assert prov4.count('n"zh-cn"') == 1, prov4
-        assert "new ChineseSimplified()" in prov4, prov4
+        assert "new Demo_Zhcn()" in prov4, prov4
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -4876,6 +4875,114 @@ def check_webview_gpu_switch():
     assert 'webview_disable_gpu: $("set-no-gpu").checked' in js, "保存没带上这个键"
 
 
+def check_locale_class_unique():
+    """Codeware 语言包类名（v2.52.4）：带前缀的短码，且跨模组不撞名。
+
+    现场：ICA 套件是三个独立模组（Core / Streets / Weather），各自一份语言包，
+    原类名 ``ICACoreEnglish`` / ``ICAEnglish`` / ``ICAWeatherEnglish``，共用
+    ``module ImmersiveCityAmbience.Localization``。生成中文包时旧代码一律起名
+    ``ChineseSimplified`` → 三个 `[SYM_REDEFINITION]`，整个 redscript 层编译
+    失败（所有模组的脚本都不加载）。
+
+    这里钉住三件事：
+      1. 类名 = 源类名前缀 + 语言短码（``ICACoreEnglish`` → ``ICACoreZhcn``），
+         裸 ``English`` → ``Zhcn``；重复调用不能二次拼接；
+      2. zh-CN 与 zh-TW 的短码必须不同；
+      3. 撞名时换名字（加序号/带目录名）而不是「报错跳过整份语言包」，并且
+         部署侧（另一个 root）的占用也算数。
+    """
+    import locale_pack as LP
+
+    # ---- 1. 纯函数：前缀 + 短码，幂等
+    f = LP._reds_class_for_target
+    assert f("loc/ChineseSimplified.reds", "zh-CN", "ICACoreEnglish") == "ICACoreZhcn"
+    assert f("loc/ChineseSimplified.reds", "zh-CN", "ICAEnglish") == "ICAZhcn"
+    assert f("loc/ChineseSimplified.reds", "zh-CN", "ICAWeatherEnglish") == "ICAWeatherZhcn"
+    assert f("loc/ChineseSimplified.reds", "zh-CN", "English") == "Zhcn"
+    # 幂等：已经是「前缀+短码」的名字不能再拼一次
+    assert f("loc/ChineseSimplified.reds", "zh-CN", "ICACoreZhcn") == "ICACoreZhcn"
+    # 繁中与简中必须能区分，否则换个语言又撞
+    assert f("loc/ChineseTraditional.reds", "zh-TW", "ICACoreEnglish") == "ICACoreZhtw"
+    assert ("Zhcn" != "Zhtw")
+
+    # ---- 2. 撞名兜底：换名字，不放弃
+    tmp = tempfile.mkdtemp(prefix="mt-loccls-")
+    try:
+        def put(root, rel, text):
+            p = os.path.join(root, *rel.split("/"))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with io.open(p, "w", encoding="utf-8", newline="\r\n") as fh:
+                fh.write(text)
+
+        MOD = "ImmersiveCityAmbience.Localization"
+        body = ('module %s\n\nimport Codeware.Localization.*\n\n'
+                'public class %s extends ModLocalizationPackage {\n'
+                '  protected func DefineTexts() -> Void {\n'
+                '    this.Text("Hello", "Hello");\n  }\n}\n')
+
+        # 2a. 同一 root 里已被占用 → 加序号
+        r1 = os.path.join(tmp, "r1")
+        put(r1, "Other/localization/ChineseSimplified.reds",
+            body % (MOD, "ICACoreZhcn"))
+        name, err = LP._unique_class_name(r1, MOD, "ICACoreZhcn")
+        assert not err and name == "ICACoreZhcn2", (name, err)
+        # exclude 生效：把自己排除掉就该拿回原名
+        me = os.path.join(r1, "Other", "localization", "ChineseSimplified.reds")
+        name, err = LP._unique_class_name(r1, MOD, "ICACoreZhcn", exclude=[me])
+        assert not err and name == "ICACoreZhcn", (name, err)
+        # 2b. 占用在别的 root（部署侧）→ 也算数
+        r2 = os.path.join(tmp, "r2")
+        put(r2, "ICAWeather/localization/ChineseSimplified.reds",
+            body % (MOD, "ICAWeatherZhcn"))
+        name, err = LP._unique_class_name(r2, MOD, "ICAWeatherZhcn")
+        assert not err and name == "ICAWeatherZhcn2", (name, err)
+
+        # ---- 3. 端到端：两个子模组各生成一份，类名必须不同
+        root = os.path.join(tmp, "mods")
+        prov = ('module %s\n\nimport Codeware.Localization.*\n\n'
+                'public class %s extends ModLocalizationProvider {\n'
+                '  public func GetPackage(language: CName) -> ref<ModLocalizationPackage> {\n'
+                '    switch language {\n'
+                '      case n"en-us": return new %s();\n'
+                '      default: return null;\n    }\n  }\n\n'
+                '  public func GetFallback() -> CName {\n'
+                '    return n"en-us";\n  }\n}\n')
+        made = []
+        for sub, en_cls, prov_cls in (
+                ("ICACore", "ICACoreEnglish", "ICACoreLocalizationProvider"),
+                ("ICAWeather", "ICAWeatherEnglish", "ICAWeatherLocalizationProvider")):
+            base = os.path.join(root, sub, "localization")
+            os.makedirs(base, exist_ok=True)
+            put(os.path.join(root, sub), "localization/English.reds",
+                body % (MOD, en_cls))
+            put(os.path.join(root, sub), "localization/Provider.reds",
+                prov % (MOD, prov_cls, en_cls))
+            # 目标包 = 英文包的副本（等价于 ensure_target 干的事）
+            with io.open(os.path.join(base, "English.reds"), encoding="utf-8") as fh:
+                src_txt = fh.read()
+            with io.open(os.path.join(base, "ChineseSimplified.reds"), "w",
+                         encoding="utf-8", newline="\r\n") as fh:
+                fh.write(src_txt)
+            prep = LP.prepare_codeware_package(
+                os.path.join(root, sub), "localization/English.reds",
+                "localization/ChineseSimplified.reds", target_locale="zh-CN")
+            assert prep.get("applied"), (sub, prep)
+            assert not prep.get("error"), (sub, prep)
+            with io.open(os.path.join(base, "ChineseSimplified.reds"),
+                         encoding="utf-8") as fh:
+                cls_txt = fh.read()
+            with io.open(os.path.join(base, "Provider.reds"),
+                         encoding="utf-8") as fh:
+                prov_txt = fh.read()
+            assert "class %s " % prep["class"] in cls_txt, (sub, prep["class"])
+            assert "new %s();" % prep["class"] in prov_txt, (sub, prep["class"])
+            made.append(prep["class"])
+        assert len(set(made)) == 2, "两个子模组的类名还是撞了: %s" % (made,)
+        assert made[0].startswith("ICACore") and made[1].startswith("ICAWeather"), made
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_cache_tools():
     """设置页「缓存清理」：统计准、只删选中的、印章和真数据不碰。
 
@@ -5533,6 +5640,8 @@ def main():
     print("   OK: 记忆落盘要么完整覆盖要么不动 / 坏档改名留证 / 锁按路径共享")
     check_webview_gpu_switch()
     print("   OK: 界面可切到纯 CPU 渲染 (WebView2 参数在建窗口前设好, 不覆盖已有值)")
+    check_locale_class_unique()
+    print("   OK: 语言包类名带前缀短码 / 跨模组不撞名 / 撞名换名字不丢译文")
     check_cache_tools()
     print("   OK: 缓存清理只删选中的目录 / 印章与记忆文件不动")
     check_batch_export_rows()

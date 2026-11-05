@@ -16,7 +16,7 @@ v2.47.0（英文界面 100% + 功能说明）、v2.48.0（注册器别名 + 引�
 v2.48.1（`<Rich …>` 标记补两遍 / 不闭合）、v2.49.0（设置页缓存清理）、
 v2.50.0（批量结果导出）、v2.51.0（占位符顺序不再被换掉）、v2.51.1（缩写徽标不再被翻）、
 v2.51.2（代号按值判断，shortName 真文案照收）、v2.51.3（归档预筛认 .json）、
-v2.51.4（带空格的查表键不收）、v2.51.5（两段式查表键不收 + 跳过勾选持久化）、v2.51.6（多语言包文件写回不再被自检拒）、v2.51.7（tweakdb yaml 的内联说明进表）、v2.51.8（语言包 key 不再被译文物顶掉）、v2.51.9（模型跑飞的译文不写回 + 记忆排毒）、v2.52.0（归档产物复用 + 引擎指纹带版本 + 关窗问要不要停模型）、v2.52.1（批量阶段日志 + 事件通道长连接）、v2.52.2（记忆原子落盘 + 坏档留证 + 每批落盘）、v2.52.3（界面可关 GPU 渲染，用来区分驱动与程序）
+v2.51.4（带空格的查表键不收）、v2.51.5（两段式查表键不收 + 跳过勾选持久化）、v2.51.6（多语言包文件写回不再被自检拒）、v2.51.7（tweakdb yaml 的内联说明进表）、v2.51.8（语言包 key 不再被译文物顶掉）、v2.51.9（模型跑飞的译文不写回 + 记忆排毒）、v2.52.0（归档产物复用 + 引擎指纹带版本 + 关窗问要不要停模型）、v2.52.1（批量阶段日志 + 事件通道长连接）、v2.52.2（记忆原子落盘 + 坏档留证 + 每批落盘）、v2.52.3（界面可关 GPU 渲染，用来区分驱动与程序）、v2.52.4（语言包类名带前缀短码，不再 SYM_REDEFINITION）
 都已发布，见下「已修」。真实部署一轮已经在 v2.48.0 之前跑过（`deploy-20261102-090450.csv`）。
 
 ## 待办（v2.48.0 起）
@@ -41,6 +41,15 @@ v2.51.4（带空格的查表键不收）、v2.51.5（两段式查表键不收 + 
 **不做**：`copy_mod` 逐文件记 `mtime_ns` 指纹判「跑完后原件被改过」（原 B5）。
 还原就是被允许的动作，改了也照覆盖，记一份指纹只是给清单加一列备注，不值当。
 「原件已含中文」已经在部署清单里按文件标出来了。
+
+## 已修（v2.52.4）
+
+| 条目 | 做法 |
+|---|---|
+| RedRequire 报 `ICAWeather is installed twice` / `ImmersiveCityAmbience is installed twice`，Redscript 2 个 `[SYM_REDEFINITION]` —— 整个 redscript 层编译失败，所有模组的脚本都不加载 | 不是装两遍：ICA 套件是三个独立模组（Core / Streets / Weather），共用 `module ImmersiveCityAmbience.Localization`，原版英文包类名分别是 `ICACoreEnglish` / `ICAEnglish` / `ICAWeatherEnglish`；旧代码生成中文包时**丢掉前缀一律叫 `ChineseSimplified`** → 三个文件声明同一类型。已核对原始 zip（三份都没有中文包，只有 English/French/Provider）与现网三个 Provider（都写着 `new ChineseSimplified();`）确认来源是我们自己的部署 |
+| 生成类名的规则：`_reds_class_for_target()` 只按目标语言取名，不看源类名 | 改名为 `前缀 + 语言短码`（`TARGET_SHORT`）：`ICACoreEnglish` → `ICACoreZhcn`、`ICAEnglish` → `ICAZhcn`、`ICAWeatherEnglish` → `ICAWeatherZhcn`、裸 `English` → `Zhcn`；zh-CN 与 zh-TW 用 `Zhcn`/`Zhtw` 区分；重复调用幂等（不会拼成 `…ZhcnZhcn`）。文件名保持 `ChineseSimplified.reds` |
+| 撞名处理：`_class_owners()` 命中就 `applied=False` + 报错 → **整份语言包的译文丢弃**，用户只看到一行错误；而且它只扫当前模组副本，批量里三个子模组互相看不见 | 新增 `_unique_class_name()`：依次试 `前缀+码` → `+2` → `+3` → `前缀+码_<目录名>`，换不出来才报错；`_class_owners()` 的 `exclude` 支持列表（同时排除副本与部署侧同一份）；`prepare_codeware_package()` 新增 `scan_roots`，由 `web_app._deploy_scan_roots()` 传入 `游戏目录\r6\scripts`，跨模组也能发现占用 |
+| 现场三份已生成错的语言包 | `ICACore` / `ImmersiveCityAmbience` / `ICAWeather` 的 `ChineseSimplified.reds` 类名改为 `ICACoreZhcn` / `ICAZhcn` / `ICAWeatherZhcn`，各自 `Provider.reds` 的 `case n"zh-cn"` 同步；**原地写**（r6\scripts 是 Vortex 的硬链接，`os.replace` 会断链），译文一个字节没动，备份在 `.m0\backup\reds_ica_20261105-154016`。自测 `check_locale_class_unique()`（前缀+短码 / 幂等 / zh-CN≠zh-TW / 撞名换名不放弃 / 部署侧占用也算 / 两个子模组端到端类名必须不同） |
 
 ## 已修（v2.52.3）
 

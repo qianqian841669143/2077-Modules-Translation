@@ -96,6 +96,29 @@ TARGET_LANG_CODES = {
     "Español": "es-ES", "Deutsch": "de-DE", "Français": "fr-FR",
 }
 
+# v2.52.4：语言包**类名**用的短码（PascalCase）。
+#
+# 以前类名直接取 ``TARGET_NAMES[locale]["reds"]``，于是生成出来的类名是一整个
+# ``ChineseSimplified``。问题在于 Codeware 语言包是「一个 module 下并排十几个
+# 语言类，靠类名前缀区分」，作者写的是 ``ICACoreEnglish`` / ``ICAEnglish`` /
+# ``ICAWeatherEnglish``；我们把前缀丢掉、一律改成裸的 ``ChineseSimplified``，
+# 三个同套件的子模组（Core / Streets / Weather）就撞成同一个类型：
+#   ICACore\localization\ChineseSimplified.reds:5  [SYM_REDEFINITION]
+# 后果是整个 redscript 层编译失败，所有模组的脚本都不加载。
+#
+# 现在类名 = 源类名的前缀 + 下面的短码：``ICACoreEnglish`` → ``ICACoreZhcn``。
+# 短码必须能区分 zh-CN 与 zh-TW（都缩成 ZH 会再撞一次）。文件名不跟着改，
+# 仍然是 ``ChineseSimplified.reds``（Codeware 社区惯例，Provider 按 case 加载，
+# 文件名不参与类型解析）。
+TARGET_SHORT = {
+    "zh-CN": "Zhcn", "zh-TW": "Zhtw",
+    "en-US": "En", "ja-JP": "Ja", "ko-KR": "Kr", "ru-RU": "Ru",
+    "de-DE": "De", "fr-FR": "Fr", "es-ES": "Es", "es-MX": "Esmx",
+    "pl-PL": "Pl", "pt-BR": "Ptbr", "it-IT": "It", "cs-CZ": "Cs",
+    "tr-TR": "Tr", "hu-HU": "Hu", "uk-UA": "Ua", "ar-SA": "Ar",
+    "th-TH": "Th",
+}
+
 
 def target_code(target_lang):
     return TARGET_LANG_CODES.get(target_lang, "zh-CN")
@@ -847,11 +870,23 @@ def reds_is_pure_package(text):
 
 
 def _class_owners(root, module, class_name, exclude=None):
-    """同一 module 里还有谁声明了这个类名。"""
+    """同一 module 里还有谁声明了这个类名。
+
+    ``exclude`` 可以是单个路径或路径列表：批量里要同时排除「副本里这份目标
+    文件」和「游戏目录里已经部署的同一份」（否则自己上次的部署会被当成占用，
+    每轮都往后加序号）。
+    """
     out = []
     if not root or not class_name:
         return out
-    skip = os.path.normcase(os.path.abspath(exclude)) if exclude else ""
+    skips = set()
+    if exclude:
+        for x in ([exclude] if isinstance(exclude, str) else exclude):
+            if x:
+                try:
+                    skips.add(os.path.normcase(os.path.abspath(x)))
+                except Exception:
+                    continue
     pat = re.compile(r"\bclass\s+" + re.escape(class_name) + r"\b")
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d.lower() not in
@@ -860,7 +895,7 @@ def _class_owners(root, module, class_name, exclude=None):
             if not fn.lower().endswith(".reds"):
                 continue
             path = os.path.join(dirpath, fn)
-            if skip and os.path.normcase(os.path.abspath(path)) == skip:
+            if skips and os.path.normcase(os.path.abspath(path)) in skips:
                 continue
             try:
                 text = _read_reds(path)
@@ -873,6 +908,39 @@ def _class_owners(root, module, class_name, exclude=None):
             out.append(os.path.relpath(path, root).replace("\\", "/"))
     out.sort()
     return out
+
+
+def _unique_class_name(root, module, base, exclude=None, scan_roots=(), tag=""):
+    """给语言包类名找一个没人占的名字，返回 ``(名字, 错误文本)``。
+
+    撞名时的退路：``ICACoreZhcn`` → ``ICACoreZhcn2`` → ``ICACoreZhcn3`` →
+    ``ICACoreZhcn_<目录名>``。以前这里直接放弃并报错，结果是那份模组的中文
+    包根本不生成（译文全丢）；而 ICA 那种「三个子模组共用一个 module」的套件
+    几乎是必然撞名的。
+
+    ``scan_roots`` 是额外的扫描根（游戏目录 ``r6\\scripts``）：三个子模组在
+    批量里各自一份副本，副本之间互相看不见，只有把部署侧也算进来才知道
+    别人的类名已经占了。
+    """
+    cands = [base, base + "2", base + "3"]
+    if tag:
+        safe = re.sub(r"[^A-Za-z0-9_]", "", tag or "")
+        if safe and safe[0].isdigit():
+            safe = "_" + safe
+        if safe:
+            cands.append(base + "_" + safe)
+    take = []
+    for cand in cands:
+        owners = _class_owners(root, module, cand, exclude=exclude) if root else []
+        for er in (scan_roots or ()):
+            if owners:
+                break
+            owners = _class_owners(er, module, cand, exclude=exclude)
+        if not owners:
+            return cand, ""
+        take.extend(owners[:1])
+    return "", ("语言包类名 %s 在 module %s 下已被占用（%s），换名字也换不出来，已跳过"
+                % (base, module, ", ".join(take[:2])))
 
 
 def _parse_imports(text):
@@ -1055,20 +1123,37 @@ def discover_provider_pairs(root, target_locale):
     return pairs, issues
 
 
-def _reds_class_for_target(target_rel, target_locale=None):
-    """Return the language class name used by a copied Codeware package."""
+def _reds_class_for_target(target_rel, target_locale=None, src_class=""):
+    """目标语言包的类名：``<源类名的前缀><语言短码>``。
+
+    ``ICACoreEnglish`` + zh-CN → ``ICACoreZhcn``；源类名本身就是裸的
+    ``English`` 时 → ``Zhcn``。**前缀不能丢**：Codeware 语言包是一个 module
+    下并排多个语言类、靠前缀区分的，丢掉前缀会让同套件的子模组撞成同一个
+    类型（SYM_REDEFINITION → 整个脚本层编译失败）。
+
+    ``src_class`` 已经是「前缀+短码」时原样返回：这个函数会在重复调用时被
+    再次问到同一个文件（prepare 是幂等的），二次拼接会得到 ``ICACoreZhcnZhcn``。
+    """
     stem = os.path.splitext(os.path.basename(target_rel.replace("\\", "/")))[0]
     prefix = _locale_prefix(stem)
     suffix = stem[len(prefix):] if prefix else stem
     cand = ""
-    if target_locale and target_locale in TARGET_NAMES:
-        cand = TARGET_NAMES[target_locale].get("reds") or ""
+    if target_locale and target_locale in TARGET_SHORT:
+        cand = TARGET_SHORT[target_locale]
     if not cand:
         cand = suffix
     cand = re.sub(r"[^A-Za-z0-9_]", "_", cand or "Localized")
     if not cand or cand[0].isdigit():
         cand = "_" + cand
-    return cand
+    if src_class and cand and src_class != cand and src_class.endswith(cand):
+        return src_class          # 已经处理过，别二次拼接
+    base = ""
+    if src_class:
+        # 从当前类名里剥掉语言词：ICACoreEnglish -> ICACore / ICAEnglish -> ICA
+        m = _LOCALE_SUFFIX_RE.match(src_class)
+        if m and m.group(1):
+            base = re.sub(r"[^A-Za-z0-9_]", "_", m.group(1))
+    return (base + cand) if base else cand
 
 
 def _provider_matches(root, src_module, target_dir):
@@ -1205,18 +1290,22 @@ def _add_provider_case(text, locale, class_name):
 
 def prepare_codeware_package(root, src_rel, tgt_rel, target_locale=None,
                              provider_rel=None, provider_rels=None,
-                             before_write=None):
+                             before_write=None, scan_roots=None):
     """Make a copied Codeware package loadable in the target language.
 
-    - rename the copied package class from ``English`` to e.g.
-      ``ChineseSimplified`` so REDscript no longer reports SYM_REDEFINITION;
-    - add ``case n"zh-cn": return new ChineseSimplified();`` to the matching
+    - rename the copied package class from ``English`` to e.g. ``ICACoreZhcn``
+      so REDscript no longer reports SYM_REDEFINITION:
+      类名 = 源类名的前缀 + 语言短码（见 ``_reds_class_for_target``）。前缀
+      必须留着，否则同一 module 下的几个子模组会撞成同一个类型；
+    - add ``case n"zh-cn": return new ICACoreZhcn();`` to the matching
       ModLocalizationProvider so the translated package is actually loaded.
 
     ``provider_rel`` / ``provider_rels`` lock the operation to the Provider(s)
     discovered during extraction. Without them the old narrow matcher is used.
     ``before_write(path)`` is called immediately before each modified file is
     written, allowing the caller to build an undo snapshot.
+    ``scan_roots`` 是额外要扫的「别人已经占了哪些类名」的根目录（部署侧的
+    ``游戏目录\\r6\\scripts``）：批量时每个模组一份副本，光看副本看不见别人。
     Safe to call repeatedly.
     """
     report = {"applied": False, "class": "", "providers": [],
@@ -1301,16 +1390,21 @@ def prepare_codeware_package(root, src_rel, tgt_rel, target_locale=None,
                 break
         if pref:
             break
-    class_name = pref or _reds_class_for_target(tgt_rel, locale)
-    report["class"] = class_name
+    class_name = pref or _reds_class_for_target(tgt_rel, locale,
+                                                src_class=m.group(1))
     if m.group(1) != class_name:
-        owners = _class_owners(root, src_module, class_name, exclude=dst)
-        if owners:
+        # 撞名不再「报错跳过」：跳过等于这份语言包的译文全丢，而用户只看到
+        # 一行错误。改成换名字（前缀+码 → 加序号 → 带目录名），换不出来才放弃。
+        uniq, err = _unique_class_name(
+            root, src_module, class_name, exclude=[dst],
+            scan_roots=scan_roots,
+            tag=os.path.basename(os.path.dirname(dst)))
+        if err:
             report["applied"] = False
-            report["error"] = (
-                "语言包类名 %s 已被 %s 占用, 改名会产生重复类型, 已跳过"
-                % (class_name, owners[0]))
+            report["error"] = err
             return report
+        class_name = uniq
+    report["class"] = class_name
 
     def write_text(path, text):
         if before_write:

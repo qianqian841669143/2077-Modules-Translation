@@ -192,6 +192,19 @@ class Api(object):
                 self._terms = False
         return self._terms or None
 
+    def _deploy_scan_roots(self):
+        """查「语言包类名被谁占了」时要额外扫的根目录：部署侧的 r6\\scripts。
+
+        批量里每个模组一份副本（`batch\\out\\<mod>`），副本之间互相看不见；
+        而 ICA 那类套件是「三个子模组共用一个 module」，类名撞车只有把部署侧
+        一起算进来才发现得了（v2.52.4，见 locale_pack._unique_class_name）。
+        """
+        gd = (self.settings.get("game_dir") or "").strip()
+        if not gd:
+            return ()
+        p = os.path.join(gd, "r6", "scripts")
+        return (p,) if os.path.isdir(p) else ()
+
     # ------------------------------------------------------------ 工具
     def _emit(self, obj):
         if not self._window:
@@ -3458,7 +3471,8 @@ class Api(object):
                         modroot, src, tgt,
                         target_locale=target_code_for(tgt),
                         provider_rels=(pair.get("providers") if pair else None),
-                        before_write=snapshot)
+                        before_write=snapshot,
+                        scan_roots=self._deploy_scan_roots())
                     if prep.get("error"):
                         raise RuntimeError(prep["error"])
                     prepared_providers.extend(prep.get("providers") or [])

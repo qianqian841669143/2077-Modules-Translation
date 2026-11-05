@@ -13,6 +13,24 @@
                              注册的设置名称、描述、分类、选项、按钮标签
                              这是 v1.1 新增的重点功能
 
+【v2.52.4 更新: 生成的中文语言包类名不再重复(不再让整个脚本层编译失败)】
+  1. 症状: RedRequire 报 "ICAWeather is installed twice / [SYM_REDEFINITION]",
+     Redscript 2 个错误, 整个 redscript 层编译不过 —— 所有模组的脚本都不加载。
+  2. 原因: 不是装了两遍。ICA 套件是三个独立模组(Core / Streets / Weather),
+     共用 module ImmersiveCityAmbience.Localization, 原版英文包的类名分别是
+     ICACoreEnglish / ICAEnglish / ICAWeatherEnglish。旧版生成中文包时把作者的
+     前缀丢掉、一律叫 ChineseSimplified, 三个文件就声明了同一个类型。
+  3. 现在类名 = 原类名前缀 + 语言短码:
+       ICACoreEnglish -> ICACoreZhcn     ICAEnglish -> ICAZhcn
+       ICAWeatherEnglish -> ICAWeatherZhcn   English(无前缀) -> Zhcn
+     短码 zh-CN=Zhcn, zh-TW=Zhtw(必须能区分, 否则换语言又撞)。
+     文件名不变(仍是 ChineseSimplified.reds), 只是类名变短、带前缀。
+  4. 撞名时不再「报错跳过整份语言包」(那等于译文全丢), 而是换名字:
+     前缀+码 -> 再加 2 / 3 -> 前缀+码_目录名; 并且检查范围扩大到
+     游戏目录 r6\scripts, 跨模组也能发现别人占用的类名。
+  5. 已经生成错的会被这一步直接修好: ICA 三个模组的 ChineseSimplified.reds
+     类名与各自 Provider 的 zh-cn 分支已改成上表的名字, 译文不动。
+
 【v2.52.3 更新: 界面可以关掉 GPU 渲染(排查显卡驱动用)】
   1. 起因: 11-05 15:00 那次崩溃是 0xC0000005(访问违例), 崩在后台「预取下一个模组」
      的线程里一句普通的列表追加, 访问地址是 -1。顺着查系统日志发现: 这台机器的
