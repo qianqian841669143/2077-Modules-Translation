@@ -4716,6 +4716,96 @@ def check_evbus_keepalive():
         bus.stop()
 
 
+def check_memory_atomic():
+    """翻译记忆的落盘与读档（v2.52.2）：要么完整覆盖，要么什么都不动。
+
+    2026-11-05 一天崩了 5 次，每次都恰好死在 `Memory.save()` 写
+    `memory.json.tmp` 的中途（残留 .tmp 1.97 MB，完整档 3.17 MB），于是磁盘
+    上留下半截档；下一次启动又静默把坏档当成「空记忆」，丢掉十几万条。这里
+    钉住三件事：
+      1. 序列化先做完、一次写完、核对长度，失败时正式档一个字节都不动；
+      2. 读不动的档改名 `.bad-<时间>` 留证，并且 `load_error` 说得出原因；
+      3. 锁按文件路径共享——两个 Memory 实例写同一份档也是串行的。
+    """
+    import json
+    import tm as TMod
+
+    tmp = tempfile.mkdtemp(prefix="mt-tmatomic-")
+    try:
+        path = os.path.join(tmp, "memory.json")
+        mem = TMod.Memory(path)
+        mem.put("Hello there", "简体中文", "你好", origin="machine")
+        mem.put("Body", "简体中文", "身体", origin="manual")
+        assert mem.save(force=True) is not False
+        assert not mem.save_error, mem.save_error
+        with io.open(path, encoding="utf-8") as f:
+            disk = json.load(f)
+        assert len(disk["entries"]) == 2, disk
+        assert not [n for n in os.listdir(tmp) if n.endswith(".tmp")], \
+            "落盘后还留着临时文件: %s" % os.listdir(tmp)
+        again = TMod.Memory(path)
+        assert again.count() == 2 and not again.load_error, again.load_error
+
+        # ---- 序列化失败：正式档必须原封不动
+        real_dumps = TMod.json.dumps
+
+        def _boom(*a, **kw):
+            raise MemoryError("模拟序列化失败")
+        TMod.json.dumps = _boom
+        try:
+            mem.put("New line", "简体中文", "新的一行")
+            mem.save(force=True)
+        finally:
+            TMod.json.dumps = real_dumps
+        assert mem.save_error, "序列化失败没记下来"
+        with io.open(path, encoding="utf-8") as f:
+            disk = json.load(f)
+        assert len(disk["entries"]) == 2, "写失败了还把正式档改了: %s" % disk
+        assert not [n for n in os.listdir(tmp) if n.endswith(".tmp")], \
+            "写失败没清掉临时文件: %s" % os.listdir(tmp)
+
+        # ---- 坏档：改名留证 + 报出原因，不再静默清空
+        bad = os.path.join(tmp, "bad", "memory.json")
+        os.makedirs(os.path.dirname(bad))
+        with io.open(bad, "wb") as f:
+            f.write(b'{"version": 1, "entries": {"x": {"s": "a"')   # 半截
+        broken = TMod.Memory(bad)
+        assert broken.count() == 0
+        assert broken.load_error, "坏档没报错"
+        assert not os.path.exists(bad), "坏档还占着正式路径"
+        left = [n for n in os.listdir(os.path.dirname(bad))
+                if n.startswith("memory.json.bad-")]
+        assert len(left) == 1, "坏档没改名留证: %s" % left
+
+        # ---- 锁按路径共享（两个实例 = 同一把锁）
+        a = TMod.Memory(path)
+        b = TMod.Memory(path)
+        assert TMod._path_lock(a.path) is TMod._path_lock(b.path), \
+            "两个实例拿到了不同的锁"
+        errs = []
+
+        def _hammer(m, tag):
+            try:
+                for i in range(20):
+                    m.put("%s-%d" % (tag, i), "简体中文", "值%d" % i)
+                    m.save(force=True)
+            except Exception as ex:      # noqa: BLE001
+                errs.append(ex)
+        threads = [threading.Thread(target=_hammer, args=(m, t))
+                   for m, t in ((a, "a"), (b, "b"))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errs, errs
+        with io.open(path, encoding="utf-8") as f:
+            json.load(f)        # 并发写完之后必须还是能解析的 JSON
+        assert not [n for n in os.listdir(tmp) if n.endswith(".tmp")], \
+            "并发写留下了临时文件: %s" % os.listdir(tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_cache_tools():
     """设置页「缓存清理」：统计准、只删选中的、印章和真数据不碰。
 
@@ -5369,6 +5459,8 @@ def main():
     print("   OK: 引擎指纹跟版本走 (升级后老模组会重新抽一遍)")
     check_evbus_keepalive()
     print("   OK: 批量事件通道复用连接 (200 ms 一次轮询不新开线程)")
+    check_memory_atomic()
+    print("   OK: 记忆落盘要么完整覆盖要么不动 / 坏档改名留证 / 锁按路径共享")
     check_cache_tools()
     print("   OK: 缓存清理只删选中的目录 / 印章与记忆文件不动")
     check_batch_export_rows()

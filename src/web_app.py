@@ -106,6 +106,7 @@ class Api(object):
         # 翻译记忆和术语表体积可能很大，改为第一次真正使用时再读取，
         # 避免启动阶段被磁盘 JSON 解析拖慢。
         self._memory = None
+        self._memory_init = threading.Lock()
         self._glossary = None
         self._terms = None
         self.rows = []
@@ -154,9 +155,19 @@ class Api(object):
     # 并继续递归遍历 Memory / Glossary 对象。
     @property
     def _memory_store(self):
+        # 批量线程与界面线程可能同时第一次用到记忆（S4 里一个在加载下一个模组、
+        # 一个在翻当前模组）。不做保护就会各自构造一个 Memory：两份独立的字典，
+        # 谁后落盘谁把对方的条目盖掉——不坏档，但等于丢翻译。
         if self._memory is None:
-            from tm import Memory
-            self._memory = Memory()
+            with self._memory_init:
+                if self._memory is None:
+                    from tm import Memory
+                    mem = Memory()
+                    if mem.load_error:
+                        # 记忆档读不动时会改名留证并从这里报一声：批量日志会被
+                        # 下一轮覆盖，crash.log 留得住。
+                        _note_log("翻译记忆读档失败：%s" % mem.load_error)
+                    self._memory = mem
         return self._memory
 
     @property
@@ -2866,12 +2877,15 @@ class Api(object):
                     self._memory_store.put(rows[i]["orig"], tgt, text)
                 done += len(groups[key])
                 retried += 1
-                self._memory_store.save()
                 self._emit({"type": "rows", "items": made})
                 self._emit({"type": "progress", "done": done,
                             "total": len(targets), "memory": len(hits),
                             "note": self._tr("单条补翻 %d / %d") % (n_s, len(singles))})
             blanks = left
+            # 补翻循环里以前每成一条就 save 一次：每次都要把整份记忆（十几万
+            # 条、好几 MB）重新序列化再写盘，崩溃窗口被放大到每条一次。攒到
+            # 循环结束落一次盘就够了。
+            self._memory_store.save()
 
         # 重翻时旧译文还在，按 trans 非空判断会把失败行也算成「翻好了」。
         if force:
@@ -3932,6 +3946,23 @@ def _startup_log(msg):
         import time
         with open(path, "a", encoding="utf-8") as f:
             f.write("%.3f %s\n" % (time.time(), msg))
+    except Exception:
+        pass
+
+
+def _note_log(msg):
+    """把不该静默过去的事记进 logs/crash.log。
+
+    crash.log 是常驻的诊断档（见 `_crash_ready`），不随批量轮次轮转；数据
+    受损这种事必须留得住证据，否则用户只看到「译文全没了」。
+    """
+    try:
+        d = os.path.join(config_dir(), "logs")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "crash.log"), "a", buffering=1,
+                  encoding="utf-8") as f:
+            f.write("[%s] %s\n"
+                    % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
     except Exception:
         pass
 

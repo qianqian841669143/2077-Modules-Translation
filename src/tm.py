@@ -20,6 +20,23 @@ def _app_dir():
     return appconfig.data_dir()
 
 
+# 按文件路径共享的保存锁。锁挂在实例上是不够的：批量在 S4 里会同时有两个
+# 会话在跑（一个加载下一个模组、一个在机翻当前模组），各自构造自己的
+# Memory，于是有两把互不相干的锁，两边同时写同一份 memory.json 就成了
+# 坏档。这里按规范化后的绝对路径取同一把锁。
+_LOCKS = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _path_lock(path):
+    key = os.path.normcase(os.path.abspath(path))
+    with _LOCKS_GUARD:
+        lk = _LOCKS.get(key)
+        if lk is None:
+            lk = _LOCKS[key] = threading.Lock()
+        return lk
+
+
 # 来源优先级：手改 > 官方 > 官方待核 > 机翻。数字越大越优先。
 # 与 baseline.ORIGIN_RANK 保持一致；这里自带一份，避免 tm 反向依赖 baseline。
 # official-weak 必须在这张表里：漏掉的话它的 rank 会算成 0，既覆盖不了机翻
@@ -59,22 +76,44 @@ class Memory(object):
         self.entries = {}
         self._dirty = False
         self._last_save = 0.0
-        # 批量在 S4 里会同时有两个会话在跑（一个加载下一个模组、一个在机翻当前
-        # 模组），两边都可能触发 save()。以前只用同一个 `.tmp` 直接写：
-        # 两段 json 交错写进同一份文件，再 os.replace 就成了坏档。
-        self._save_lock = threading.Lock()
+        # 读档/存档失败要给界面一个能说清话的地方，别再静默当好事发生过。
+        self.load_error = ""
+        self.save_error = ""
         self.load()
 
     # ------------------------------------------------------------ 磁盘
     def load(self):
+        """读盘。坏档不再静默清空——改名留证，并把原因记在 load_error 里。
+
+        以前这里是 `except Exception: self.entries = {}`：一旦 save() 把半截
+        文件 os.replace 成了正式档，下次启动就把整份记忆悄悄丢掉，用户只会
+        发现「怎么全都要重翻」，磁盘上连个痕迹都没有（2026-11-05 丢过一份
+        5.4 MB / 十几万条的记忆）。
+        """
+        self.load_error = ""
+        if not os.path.exists(self.path):
+            return self
         try:
             with open(self.path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
-            if isinstance(data, dict) and isinstance(data.get("entries"), dict):
-                self.entries = data["entries"]
-        except Exception:
+            if not (isinstance(data, dict) and isinstance(data.get("entries"), dict)):
+                raise ValueError("memory.json 结构不对（缺 entries）")
+            self.entries = data["entries"]
+        except Exception as ex:     # noqa: BLE001  坏档不能挡住程序启动
             self.entries = {}
+            self.load_error = str(ex) or ex.__class__.__name__
+            self._quarantine()
         return self
+
+    def _quarantine(self):
+        """把读不动的记忆档改名留证，别让下一次 save() 直接覆盖掉现场。"""
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dst = "%s.bad-%s" % (self.path, stamp)
+        try:
+            os.replace(self.path, dst)
+            self.load_error += "（原文件已备份为 %s）" % os.path.basename(dst)
+        except OSError:
+            pass
 
     def save(self, force=False):
         if not self._dirty and not force:
@@ -86,17 +125,44 @@ class Memory(object):
         if not force and now - self._last_save < 3.0:
             return
         self._last_save = now
+        # 先在内存里序列化出完整一份，再一次写完，最后核对长度才 os.replace。
+        # 边生成边写的时候进程一旦死在中间（2026-11-05 连崩 4 次，每次都留下
+        # 半截 memory.json.tmp：1.97 MB / 完整档 3.17 MB），磁盘上就只剩半截
+        # 档。整份写 + 核对 + 原子替换：落盘要么完整覆盖，要么什么都不动。
         try:
-            with self._save_lock:
+            try:
+                payload = json.dumps({"version": 1, "entries": self.entries},
+                                     ensure_ascii=False)
+            except RuntimeError:
+                # 边序列化边被别的线程改了字典：拷一份快照再序列化。
+                payload = json.dumps({"version": 1, "entries": dict(self.entries)},
+                                     ensure_ascii=False)
+            blob = payload.encode("utf-8")
+            with _path_lock(self.path):
                 os.makedirs(os.path.dirname(self.path), exist_ok=True)
-                tmp = self.path + ".tmp"
-                with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump({"version": 1, "entries": self.entries}, f,
-                              ensure_ascii=False)
-                os.replace(tmp, self.path)
+                # 每个写入者用自己的临时名：万一真并发了，也是各写各的完整
+                # 文件，不会把两段 json 交错灌进同一个 .tmp。
+                tmp = "%s.%d.%d.tmp" % (self.path, os.getpid(),
+                                        threading.get_ident())
+                try:
+                    with open(tmp, "wb") as f:
+                        f.write(blob)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    if os.path.getsize(tmp) != len(blob):
+                        raise IOError("临时文件长度不对（%d/%d）"
+                                      % (os.path.getsize(tmp), len(blob)))
+                    os.replace(tmp, self.path)
+                except Exception:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+                    raise
             self._dirty = False
-        except Exception:
-            pass
+            self.save_error = ""
+        except Exception as ex:     # noqa: BLE001  存不下也不能把应用带走
+            self.save_error = str(ex)
 
     # ------------------------------------------------------------ 查询
     @staticmethod
