@@ -2094,6 +2094,13 @@ def _extract_yaml(text):
         text_ = inner.strip()
         if len(text_) < 3 or _yaml_is_key_like(text_):
             continue
+        if is_loc_key(text_):
+            # `Gameplay-RepeatableNcpdGigs-Parts-WeaponMods-AbilityDescription-
+            # RangedWeaponMod` 这种大写连字符的查表键。以前只认「全小写 + 下划线」
+            # 的写法（murphys_web_desc），大写这类漏进表：三个武器改装件的属性
+            # 说明被翻成中文后，游戏里查不到 key，整段说明凭空消失
+            # （2026-11-06 实测 repeatable_ncpd_gigs）。
+            continue
         out.append((line_no, typ, record or _ctx(body, m.start(2)), inner))
     return out
 
@@ -2633,6 +2640,10 @@ def guard_level(path, orig, trans):
     # 返回空数组，那一类 NPC 静默失声 —— 游戏不报错，界面上也看不出来。
     if NOISE.is_token_row(orig):
         return "hard", "这是空格分隔的配置行, 翻掉后模组按位置取字段会全部失配"
+    # 本地化查表键（`Gameplay-...-AbilityDescription-RangedWeaponMod`）。写回侧
+    # 再挡一次：旧表 / 记忆里残留的条目也会被拒，否则游戏里查不到 key，文本消失。
+    if is_loc_key(orig):
+        return "hard", "这是本地化查表键, 翻了游戏里查不到这串文本"
     # 模组/归档内的路径（"/mods/Cyberpunk Render Tweaks/"）。提取层本来就不收
     # 它，这里再挡一次：旧表 / 记忆里残留的条目、前端手填的行，写回去会让
     # StrBeginsWith、ResRef、归档内路径查找全部落空，而游戏里只是"这个功能没

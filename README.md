@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.52.8**
+当前版本：**v2.52.9**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -15,6 +15,26 @@
 > (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.52.9 更新：tweakdb yaml 里的大写查表键不再被翻译
+
+repeatable_ncpd_gigs 的三个武器改装件说明在游戏里整段消失，根子在这三行：
+
+```yaml
+localizedDescription: "Gameplay-RepeatableNcpdGigs-Parts-WeaponMods-AbilityDescription-RangedWeaponMod"
+```
+
+这个值不是文案，是 onscreens 的查表键。被翻成「游戏性 - 可重复 NCPD 委托 - 部件
+- 武器模组 - 能力描述 - 远程武器模组」之后游戏查不到这个 key，说明就没了。原来的
+key 判定只认「全小写 + 下划线」的写法（`murphys_web_desc`），大写连字符这种从缝
+里漏了过去。
+
+现在 `_extract_yaml` 也走 `is_loc_key`，写回侧 `guard_level` 加同一条硬围栏
+（「这是本地化查表键, 翻了游戏里查不到这串文本」）。内联文案
+（`localizedDescription: 'Uploads a priming daemon …'`）照常进表，不受影响。
+
+已经翻坏的 3 行按 `.bak` 还原（staging 与游戏目录是硬链接，一边恢复两边同步），
+记忆库里那条 `…-MeleeWeaponMod → 游戏性…` 也删掉了。
 
 ## v2.52.8 更新：空格分隔的 token 组也不再被翻译
 

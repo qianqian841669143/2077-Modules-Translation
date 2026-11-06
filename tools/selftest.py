@@ -4601,6 +4601,40 @@ def check_path_string_guard():
     return True
 
 
+def check_yaml_loc_key_guard():
+    """tweakdb yaml 里大写连字符的 localized* 是查表键，不能翻。
+
+    回归 (2026-11-06, repeatable_ncpd_gigs)：
+
+        localizedDescription: "Gameplay-RepeatableNcpdGigs-Parts-WeaponMods-AbilityDescription-RangedWeaponMod"
+
+    这个值不是文案，是 onscreens 的查表键。翻成「游戏性 - 可重复 NCPD 委托 - …」
+    之后游戏查不到 key，三个武器改装件的属性说明整段消失。原来的 key 判定只认
+    「全小写 + 下划线」的写法（murphys_web_desc），大写连字符这种从缝里漏过去。
+    """
+    yaml = (
+        "RepeatableNCPDGigs.Parts.RangedWeaponMod:\n"
+        "  UIData:\n"
+        '    localizedDescription: "Gameplay-RepeatableNcpdGigs-Parts-WeaponMods-'
+        'AbilityDescription-RangedWeaponMod"\n'
+        "    localizedName: ''\n"
+        "RepeatableNCPDGigs.Quickhack.Murphys:\n"
+        "  UIData:\n"
+        "    localizedDescription: 'Uploads a priming daemon and weakens the target.'\n"
+        "    localizedName: murphys_web_name\n"
+    )
+    rows = E._extract_yaml(yaml)
+    assert [r[3] for r in rows] == [
+        "Uploads a priming daemon and weakens the target."], rows
+    lvl, why = E.guard_level(
+        "x.yaml",
+        "Gameplay-RepeatableNcpdGigs-Parts-WeaponMods-AbilityDescription-RangedWeaponMod",
+        "游戏性 - 可重复 NCPD 委托 - 部件 - 武器模组 - 能力描述 - 远程武器模组")
+    assert lvl == "hard" and why, (lvl, why)
+    assert E._extract_yaml("x:\n  localizedName: murphys_web_name\n") == []
+    return True
+
+
 def check_token_row_guard():
     """空格分隔的 token 组不进表，写回也被硬挡。
 
@@ -5801,6 +5835,8 @@ def main():
     print("   OK: /mods/模组名/ 这类路径串不进表, 写回硬挡 (单位串与界面文本不误伤)")
     check_token_row_guard()
     print("   OK: 空格分隔的 token 组 (rich m ym asi - -) 不进表, 写回硬挡")
+    check_yaml_loc_key_guard()
+    print("   OK: tweakdb yaml 的大写查表键不进表 (内联文案照收), 写回硬挡")
     check_markup_closer_balance()
     print("   OK: 关闭标记只补到配平, 末尾不挂一串 </>")
     check_repeat_run_guard()
