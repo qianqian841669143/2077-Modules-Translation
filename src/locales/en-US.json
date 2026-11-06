@@ -136,6 +136,7 @@
     "按类型:": "By type:",
     "已过滤噪音 %d 条": "Filtered out %d noise rows",
     "资源转储": "Asset dumps",
+    "空格配置行": "Space-separated config rows",
     "记录名": "Record keys",
     "技术串": "Technical strings",
     "外文表": "Non-English tables",

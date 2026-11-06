@@ -33,13 +33,17 @@ FAMILY_DATA = "数据行"
 # "lat|mex bra" / "media|high 40 mid 60" —— 池名|token 列表 的配置行。
 # 它不是文案, 是模组用 StrSplit(row, "|") 现读现用的配置表。
 FAMILY_CONFIG = "配置行"
+# "rich m ym asi - -" / "street m ym lat - freak" —— 空格分隔的 token 组。
+# 定义在 CVO_Casts() 里，消费端 StrSplit(casts[c], " ") 之后按位置取
+# key[0]=池名、key[1]=m|f、key[2]=ym|mid|old、key[3]=口音。它不是文案。
+FAMILY_TOKEN_ROW = "空格配置行"
 # 位置证据挡下来的「名字」（call(obj,"Method") 的方法名、插槽名、能力清单）。
 # 判据在 mod_text_engine 里（需要 token 上下文），这里只占一个家族名，
 # 好让扫描报告能说清「少掉的这些条是为什么少的」。
 FAMILY_POSITION = "位置标识符"
 
 HARD_FAMILIES = (FAMILY_ASSET, FAMILY_KEY, FAMILY_TECH, FAMILY_DATA,
-                 FAMILY_CONFIG)
+                 FAMILY_CONFIG, FAMILY_TOKEN_ROW)
 ALL_FAMILIES = (HARD_FAMILIES + (FAMILY_IDENT, FAMILY_LOCKEY,
                                  FAMILY_LANG, FAMILY_TABLE, FAMILY_POSITION))
 
@@ -131,6 +135,42 @@ def is_config_dsl(s):
     if not t or CJK_RE.search(t):
         return False
     return bool(_CONFIG_DSL.match(t))
+
+
+# "rich m ym asi - -" / "street m ym lat - freak" / "street m old afr big freak"
+#
+# CVO_Casts() 把 NPC 语音组写成空格分隔的 token，消费端是
+#
+#   let casts: array<String> = CVO_Casts();
+#   group.voices = this.Pick(c, StrSplit(casts[c], " "), mixes);
+#   if StrBeginsWith(casts[c], "vendor ") { ... }
+#
+# Pick() 里按位置取 key[0]=池名 / key[1]=m|f / key[2]=ym|mid|old / key[3]=口音，
+# 还要求 ArraySize(key) >= 6。翻成 "商贩 m 年轻 非 - -" 之后这些比对全部失配，
+# Pick 返回空数组，整组语音被 ArraySize < CVO_MinList() 清掉 —— 不崩，只是那类
+# NPC 再也不出声，比崩难查得多。
+#
+# 判据刻意收窄：4~10 段、每段 ≤8 字符、第 2 段必须是单字母 m/f、第 3 段必须是
+# 年龄 token，其余只允许小写字母/数字/下划线/短横。全量 68.5 万个字面量里只
+# 命中 CVO 的 284 条、别的模组 0 条 —— 普通英文句子第 2 段极少正好是 "m"/"f"
+# 且第 3 段正好是 ym/mid/old。
+_TOKEN_ROW_WORD = re.compile(r"^[a-z0-9_\-]{1,8}$")
+_AGE_TOKENS = {"ym", "yng", "young", "mid", "old", "teen", "kid", "adult"}
+
+
+def is_token_row(s):
+    """空格分隔的 token 组（不是文案）；空串 / 中文返回 False。"""
+    t = (s or "").strip()
+    if not t or CJK_RE.search(t):
+        return False
+    parts = t.split(" ")
+    if not (4 <= len(parts) <= 10):
+        return False
+    if parts[1] not in ("m", "f"):
+        return False
+    if parts[2] not in _AGE_TOKENS:
+        return False
+    return all(_TOKEN_ROW_WORD.match(p) for p in parts)
 
 
 # "meta.read,perspective.read,events.push," —— 点分逗号清单（能力/协议清单）。
@@ -228,6 +268,8 @@ def hard_family(t):
         return FAMILY_DATA
     if is_config_dsl(s):
         return FAMILY_CONFIG
+    if is_token_row(s):
+        return FAMILY_TOKEN_ROW
     if is_protocol_list(s):
         return FAMILY_POSITION
     if _PATH_COUNT.match(s):

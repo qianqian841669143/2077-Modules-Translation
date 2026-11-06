@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.52.7**
+当前版本：**v2.52.8**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -15,6 +15,30 @@
 > (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.52.8 更新：空格分隔的 token 组也不再被翻译
+
+上一版挡的是 `池名|token`（竖线版）。同一个模组里还有一份空格版的配置表：
+
+```redscript
+public func CVO_Casts() -> array<String> = ["rich m ym asi - -", "vendor f old afr - -", ...]
+```
+
+消费端按位置取字段：
+
+```redscript
+group.voices = this.Pick(c, StrSplit(casts[c], " "), mixes);   // key[0]=池名 key[1]=m|f key[2]=ym|mid|old key[3]=口音
+if ArraySize(key) < 6 { return out; }
+```
+
+翻成 `商贩 m 年轻 非 - -` 之后这些比对全部失配，`Pick()` 返回空数组，那一类 NPC
+静默失声——不崩，比崩更难查。这次一并挡掉。
+
+判据：4–10 段、每段 ≤8 字符、第 2 段必须是单字母 `m`/`f`、第 3 段必须是年龄
+token（`ym`/`mid`/`old`…），其余只允许小写字母、数字、下划线、短横。全量 68.5
+万个字面量里命中 284 条，全部在 Crowd Voice Unlocked，其它模组 0 条。
+
+翻译记忆里已经翻坏的 159 条（`vendor m ym afr - - → 商贩 m 年轻 非 - -`）已删除。
 
 ## v2.52.7 更新：模组路径串不再被翻译（`/mods/模组名/`）
 

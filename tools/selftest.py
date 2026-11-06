@@ -4601,6 +4601,32 @@ def check_path_string_guard():
     return True
 
 
+def check_token_row_guard():
+    """空格分隔的 token 组不进表，写回也被硬挡。
+
+    回归 (2026-11-05, Crowd Voice Unlocked)：`CVO_Casts()` 返回
+    "rich m ym asi - -"，消费端 `StrSplit(casts[c], " ")` 之后按位置取
+    key[0]=池名 / key[1]=m|f / key[2]=ym|mid|old / key[3]=口音，还要求 >= 6 段。
+    翻成 "商贩 m 年轻 非 - -" 之后这些比对全部失配，`Pick()` 返回空数组，
+    整组语音被静默清掉 —— 不崩，只是那类 NPC 再也不出声。和「池名|配置」
+    同类，只是分隔符是空格。
+    """
+    rows = ["rich m ym asi - -", "street m ym lat - freak",
+            "street m old afr big freak", "vendor f old afr - -"]
+    for s in rows:
+        assert NOISE.is_token_row(s), s
+        assert not E.is_translatable(s), s
+        assert NOISE.hard_family(s) == NOISE.FAMILY_TOKEN_ROW, s
+    lvl, why = E.guard_level("x.reds", rows[0], "商贩 m 年轻 非 - -")
+    assert lvl == "hard" and why, (lvl, why)
+    # 不能误伤：普通英文句子、界面文本
+    assert not NOISE.is_token_row("the m in the word")
+    assert E.is_translatable("the m in the word")
+    assert E.is_translatable("Select Game Menus to Snapshot/Restore:")
+    assert E.guard_level("x.reds", "Enable", "启用") == ("", "")
+    return True
+
+
 def check_markup_closer_balance():
     """补关闭标记只补到配平为止, 不许在末尾挂一串 `</>`。
 
@@ -5773,6 +5799,8 @@ def main():
     print("   OK: CET 的 ui.text(文字) 不当查表键 / 裸 text(key) 仍是键 / XML 注释不进表")
     check_path_string_guard()
     print("   OK: /mods/模组名/ 这类路径串不进表, 写回硬挡 (单位串与界面文本不误伤)")
+    check_token_row_guard()
+    print("   OK: 空格分隔的 token 组 (rich m ym asi - -) 不进表, 写回硬挡")
     check_markup_closer_balance()
     print("   OK: 关闭标记只补到配平, 末尾不挂一串 </>")
     check_repeat_run_guard()

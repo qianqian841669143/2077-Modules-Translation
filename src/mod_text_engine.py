@@ -2628,6 +2628,11 @@ def guard_level(path, orig, trans):
     # 初始化期直接 AV。这条永远不给覆盖开关 —— 它不是文案。
     if NOISE.is_config_dsl(orig):
         return "hard", "这是「池名|配置」行, 翻掉后模组按竖线切分会越界"
+    # 空格分隔的 token 组（CVO_Casts() 的 "rich m ym asi - -"）。翻成
+    # "商贩 m 年轻 非 - -" 后，Pick() 里按位置比的池名/性别/年龄/口音全部失配，
+    # 返回空数组，那一类 NPC 静默失声 —— 游戏不报错，界面上也看不出来。
+    if NOISE.is_token_row(orig):
+        return "hard", "这是空格分隔的配置行, 翻掉后模组按位置取字段会全部失配"
     # 模组/归档内的路径（"/mods/Cyberpunk Render Tweaks/"）。提取层本来就不收
     # 它，这里再挡一次：旧表 / 记忆里残留的条目、前端手填的行，写回去会让
     # StrBeginsWith、ResRef、归档内路径查找全部落空，而游戏里只是"这个功能没
