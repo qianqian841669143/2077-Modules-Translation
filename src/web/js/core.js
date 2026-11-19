@@ -268,6 +268,36 @@ function updateAppSub() {
   el.innerHTML = parts.join(" · ");
 }
 
+/* 设置面板：把 .setpane 里「h4 小节标题 + 后面的一串控件」包成一组，
+   分类导航只显示当前那一组（原来是滚动定位，用户要的是只显示当前分类）。 */
+function buildSetGroups() {
+  const pane = $("set-pane");
+  if (!pane || pane.dataset.grouped) return;
+  const kids = [...pane.children];
+  let cur = null;
+  kids.forEach((el) => {
+    if (el.classList.contains("setsec")) {
+      cur = document.createElement("div");
+      cur.className = "setgroup";
+      cur.dataset.sec = el.id;
+      pane.appendChild(cur);
+      cur.appendChild(el);
+    } else if (cur) {
+      cur.appendChild(el);
+    }
+  });
+  pane.dataset.grouped = "1";
+}
+
+function showSetGroup(sec) {
+  const pane = $("set-pane");
+  if (!pane) return;
+  pane.querySelectorAll(".setgroup").forEach((g) => {
+    g.classList.toggle("on", g.dataset.sec === sec);
+  });
+  pane.scrollTop = 0;
+}
+
 /* 提取范围那几个 chip（现在在设置面板里）：按 state.opts 同步 on/off */
 function syncOptChips() {
   document.querySelectorAll("[data-opt]").forEach((el) => {

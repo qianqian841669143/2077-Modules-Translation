@@ -223,18 +223,33 @@ function bind() {
   };
   $("loc-src").onchange = () => renderLocaleList();
   $("btn-settings").onclick = () => openSettings();
-  // 设置面板左侧分类：点了滚到对应小节，顺便把高亮挪过去
+  // 设置面板左侧分类：只显示当前分类
   const setnav = $("set-nav");
   if (setnav) {
     setnav.onclick = (e) => {
       const b = e.target.closest("button[data-sec]");
       if (!b) return;
       setnav.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
-      const target = $(b.getAttribute("data-sec"));
-      if (target) target.scrollIntoView({ block: "start" });
+      showSetGroup(b.getAttribute("data-sec"));
     };
   }
-  $("btn-queue").onclick = () => openQueue();
+  // ---- 批量面板就地嵌入模组列表页（不再走弹窗，DOM 只搬一次，id 全保留）----
+  const mbHost = $("mb-host"), qMask = $("modal-queue");
+  if (mbHost && qMask) {
+    const card = qMask.querySelector(".modal");
+    if (card) {
+      card.classList.add("mbpanel");
+      mbHost.appendChild(card);
+      qMask.style.display = "none";
+      try { openQueue(); } catch (_) {}   // 先把安装缓存 / 输出目录填好
+      qMask.classList.remove("on");
+    }
+  }
+  $("btn-queue").onclick = () => {
+    const host = $("mb-host");
+    if (!host) { openQueue(); return; }
+    host.hidden = !host.hidden;
+  };
   $("btn-q-pick").onclick = () => pickMbDir();
   $("btn-q-scan").onclick = () => scanQueue();
   $("btn-q-start").onclick = () => startQueue();

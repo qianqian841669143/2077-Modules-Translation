@@ -12,7 +12,6 @@
 <!-- ============ 顶栏：只管整个窗口（名字 + 窗口按钮） ============ -->
 <div class="head pywebview-drag-region" title="按住这里可以拖动窗口">
   <div class="brand">
-    <div class="badge">CMT</div>
     <div class="htitle" id="app-title" data-i18n="模组翻译工具">模组翻译工具</div>
     <span id="app-ver" style="display:none">v2.0</span>
   </div>
@@ -35,7 +34,7 @@
     <button class="tab on" data-page-btn="translate">
       <span data-i18n="翻译">翻译</span></button>
     <button class="tab" data-page-btn="manage">
-      <span data-i18n="模组清单">模组清单</span><span class="n" id="tab-mods-n"></span></button>
+      <span data-i18n="模组列表">模组列表</span><span class="n" id="tab-mods-n"></span></button>
     <button class="tab" data-page-btn="pack">
       <span data-i18n="汉化包">汉化包</span><span class="n" id="tab-pack-n"></span></button>
   </div>
@@ -179,16 +178,18 @@
 
   </div><!-- /work -->
 
-  <!-- ============ 模组清单页 ============ -->
+  <!-- ============ 模组列表页 ============ -->
   <section class="pagecol" data-page="manage" hidden>
     <div class="mtools">
-      <input class="input" id="mods-search" style="width:330px"
+      <input class="input" id="mods-search" style="width:300px"
              data-i18n-ph="搜索模组名或目录…" placeholder="搜索模组名或目录…">
       <button class="chip" id="mods-hide-orphan" data-i18n="隐藏目录不存在的">隐藏目录不存在的</button>
       <div class="mright" id="mods-summary"></div>
       <button class="btn" id="btn-queue" data-i18n="批量翻译">批量翻译</button>
       <button class="btn" id="btn-mods-refresh" data-i18n="刷新">刷新</button>
     </div>
+    <!-- 批量翻译面板：运行时从 #modal-queue 里搬进来（见 inlineQueuePanel） -->
+    <div id="mb-host" hidden></div>
     <div class="mchips">
       <button class="chip on" id="mods-filter-all">
         <span data-i18n="全部">全部</span> <b id="mc-all">0</b></button>

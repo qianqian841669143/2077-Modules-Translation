@@ -374,9 +374,21 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .setpane { flex: 1; min-width: 0; overflow: auto; padding: 12px 18px 4px; }
 .setpane .setsec {
   font-size: 12px; letter-spacing: 1.4px; font-weight: 700;
-  color: var(--primary); margin: 18px 0 8px; scroll-margin-top: 8px;
+  color: var(--primary); margin: 0 0 10px;
 }
-.setpane .setsec:first-child { margin-top: 2px; }
+/* 分类只显示当前那一组 */
+.setgroup { display: none; }
+.setgroup.on { display: block; }
+
+/* 批量翻译面板：从弹窗搬进模组列表页后的样子 */
+.mbpanel, .mbpanel.wide {
+  position: static; width: auto; max-width: none; max-height: none;
+  margin: 0 20px 10px; border: 1px solid var(--border); border-radius: 9px;
+  background: var(--panel); box-shadow: none;
+}
+.mbpanel .modal-body { overflow: auto; max-height: 300px; }
+.mbpanel .modal-foot .btn[data-close],
+.mbpanel .modal-head .winbtn { display: none; }
 
 /* ------------------------------------------------- 表格：5 列窄版布局 */
 /* 三栏之后中间只剩 600 出头，8 列挤不下（原来的 974px 要横向滚动）。
