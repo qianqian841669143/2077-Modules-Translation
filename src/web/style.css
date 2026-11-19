@@ -304,6 +304,26 @@ textarea.input { height: auto; min-height: var(--ctl-h); max-height: 76px; paddi
 .q-row.done-err .q-state { color: var(--danger); }
 .q-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .q-num { color: var(--muted); text-align: right; }
+
+/* ================= 模组清单 ================= */
+.m-head, .m-row {
+  display: grid; grid-template-columns: 1fr 72px 88px; gap: 8px;
+  align-items: center; padding: 4px 8px; font-size: 12px;
+}
+.m-head {
+  color: var(--muted); font-weight: 600;
+  border-bottom: 1px solid var(--border); padding-bottom: 5px;
+}
+.m-head span:nth-child(n+2) { text-align: right; }
+.m-row { border-bottom: 1px solid var(--border); }
+.m-row:last-child { border-bottom: 0; }
+.m-row:hover { background: var(--hover); }
+.m-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-num { color: var(--muted); text-align: right; }
+.m-state { text-align: right; font-size: 11.5px; color: var(--muted); }
+.m-row.s-done .m-state { color: var(--success); }
+.m-row.s-done .m-num { color: var(--text); }
+.m-row.s-orphan .m-state { color: var(--danger); }
 .q-state { text-align: right; color: var(--muted); }
 /* 「重译」：只在部署过的行上出现，别让它抢走整行点击（勾选）的手感 */
 .q-forget { border: 0; background: transparent; color: var(--muted); cursor: pointer;

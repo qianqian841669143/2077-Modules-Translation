@@ -193,6 +193,71 @@ async function refreshThemes() {
   sel.value = cur || "";
 }
 
+/* ---------------- 模组清单 ---------------- */
+let _modsData = null;
+let _modsFilter = "all";
+
+function syncModsChips() {
+  ["all", "done", "todo"].forEach((k) => {
+    const b = $("mods-filter-" + k);
+    if (b) b.classList.toggle("on", _modsFilter === k);
+  });
+}
+
+async function openMods() {
+  openModal("modal-mods");
+  $("mods-search").value = "";
+  _modsFilter = "all";
+  syncModsChips();
+  await refreshMods();
+}
+
+async function refreshMods() {
+  const box = $("mods-list");
+  box.innerHTML = `<p class="hint" style="padding:12px">${esc(T("读取中 ..."))}</p>`;
+  let r = null;
+  try { r = await pywebview.api.list_mods(); } catch (_) { r = null; }
+  if (!r || !r.ok) {
+    box.innerHTML = `<p class="hint" style="padding:12px">${esc(T("读不到模组清单。"))}</p>`;
+    return;
+  }
+  _modsData = r;
+  renderMods();
+}
+
+function renderMods() {
+  const d = _modsData || { mods: [], summary: {} };
+  const q = ($("mods-search").value || "").trim().toLowerCase();
+  const rows = (d.mods || []).filter((m) => {
+    const done = (m.entries || 0) > 0;
+    if (_modsFilter === "done" && !done) return false;
+    if (_modsFilter === "todo" && done) return false;
+    if (q && !String(m.name || "").toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const box = $("mods-list");
+  if (!rows.length) {
+    box.innerHTML = `<p class="hint" style="padding:12px">${esc(T("没有匹配的模组。"))}</p>`;
+  } else {
+    box.innerHTML = rows.map((m) => {
+      const done = (m.entries || 0) > 0;
+      const cls = m.orphan ? "s-orphan" : (done ? "s-done" : "s-todo");
+      const st = m.orphan ? T("目录已不存在") : (done ? T("已汉化") : T("未汉化"));
+      return `<div class="m-row ${cls}" title="${esc(m.name || "")}">
+        <span class="m-name">${esc(m.name || "")}</span>
+        <span class="m-num">${done ? Number(m.entries).toLocaleString() : "-"}</span>
+        <span class="m-state">${esc(st)}</span>
+      </div>`;
+    }).join("");
+  }
+  const s = d.summary || {};
+  $("mods-summary").textContent =
+    T("共 %d 个模组：已汉化 %d，未汉化 %d，目录缺失 %d；合计 %d 条")
+      .replace("%d", s.total || 0).replace("%d", s.done || 0)
+      .replace("%d", s.todo || 0).replace("%d", s.orphan || 0)
+      .replace("%d", Number(s.entries || 0).toLocaleString());
+}
+
 function openSettings() {
   $("set-api").value = state.settings.api_base || "";
   $("set-model").value = state.settings.model || "";

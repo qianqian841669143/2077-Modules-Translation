@@ -117,6 +117,14 @@ function bind() {
   };
   // ---- 汉化包状态（管理用）----
   $("btn-pack-status").onclick = () => openPackStatus();
+  // ---- 模组清单 ----
+  $("btn-mods").onclick = () => openMods();
+  $("btn-mods-refresh").onclick = () => refreshMods();
+  $("mods-search").oninput = () => { if (_modsData) renderMods(); };
+  ["all", "done", "todo"].forEach((k) => {
+    const b = $("mods-filter-" + k);
+    if (b) b.onclick = () => { _modsFilter = k; syncModsChips(); renderMods(); };
+  });
   $("btn-pack-sync").onclick = async () => {
     const b = $("btn-pack-sync");
     b.disabled = true;

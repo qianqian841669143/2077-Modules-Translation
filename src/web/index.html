@@ -48,6 +48,7 @@
           <button class="btn" id="btn-export" data-i18n="导出 Excel">导出 Excel</button>
           <button class="btn" id="btn-zip" data-i18n="打开压缩包">打开压缩包</button>
           <button class="btn" id="btn-pack-status" data-i18n="汉化包状态">汉化包状态</button>
+          <button class="btn" id="btn-mods" data-i18n="模组清单">模组清单</button>
           <button class="btn" id="btn-l10n" data-i18n="打开 mod 归档">打开 mod 归档</button>
           <div class="menu-sep"></div>
           <button class="btn" id="btn-clear-trans" data-i18n="清空当前译文">清空当前译文</button>
@@ -387,6 +388,38 @@
       <div class="spacer"></div>
       <button class="btn" data-close data-i18n="关闭">关闭</button>
       <button class="btn primary" id="btn-pack-sync" data-i18n="同步账本">同步账本</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 模组清单 ============ -->
+<div class="mask" id="modal-mods">
+  <div class="modal wide">
+    <div class="modal-head">
+      <h3 data-i18n="模组清单">模组清单</h3>
+      <button class="winbtn close" data-close>✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint" data-i18n="安装缓存里的每个模组一行：有没有账本、多少条。目录已不存在的（Vortex 里卸了或改了名）会在最下面单独标出来。">
+        安装缓存里的每个模组一行：有没有账本、多少条。目录已不存在的会在最下面单独标出来。</p>
+      <div class="row gap" style="padding:4px 0 6px">
+        <button class="chip on" id="mods-filter-all" data-i18n="全部">全部</button>
+        <button class="chip" id="mods-filter-done" data-i18n="已汉化">已汉化</button>
+        <button class="chip" id="mods-filter-todo" data-i18n="未汉化">未汉化</button>
+        <div class="spacer"></div>
+        <input class="input" id="mods-search" style="width:220px" data-i18n-ph="搜索模组">
+        <button class="btn" id="btn-mods-refresh" data-i18n="刷新">刷新</button>
+      </div>
+      <div class="m-head">
+        <span data-i18n="模组">模组</span>
+        <span data-i18n="条目">条目</span>
+        <span data-i18n="状态">状态</span>
+      </div>
+      <div class="queue-list" id="mods-list"></div>
+      <p class="hint" id="mods-summary"></p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn primary" data-close data-i18n="关闭">关闭</button>
     </div>
   </div>
 </div>

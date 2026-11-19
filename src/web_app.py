@@ -3923,6 +3923,69 @@ class Api(object):
             pass
         return out
 
+    def list_mods(self):
+        """模组清单：staging 里每个目录 + 它有没有账本、多少条。
+
+        只读。账本信息取自 ``userdata\\pack\\ledger\\index.json``，目录取自
+        设置里的安装缓存根。两边对不上的也要列出来——「装过但没汉化」和
+        「汉化过但目录没了」正是要靠这张表看出来的。
+        """
+        def _clean(v):
+            return str(v or "").strip().strip('"').strip("'")
+
+        staging = _clean(self.settings.get("staging_dir"))
+
+        # 账本索引：staging 目录名 -> {folder, entries}
+        led = {}
+        idx_path = os.path.join(self._ledger_dir() or "", "index.json")
+        try:
+            with open(idx_path, "r", encoding="utf-8") as f:
+                idx = json.load(f)
+        except Exception:            # noqa: BLE001 - 索引坏了就当没有
+            idx = {}
+        for m in (idx.get("mods") or []):
+            if not isinstance(m, dict):
+                continue
+            key = str(m.get("staging") or m.get("folder") or "")
+            if key:
+                led[key] = {"folder": str(m.get("folder") or ""),
+                            "entries": int(m.get("entries") or 0)}
+
+        rows = []
+        seen = set()
+        if staging and os.path.isdir(staging):
+            try:
+                names = sorted(os.listdir(staging))
+            except OSError:
+                names = []
+            for name in names:
+                if not os.path.isdir(os.path.join(staging, name)):
+                    continue
+                seen.add(name)
+                hit = led.get(name) or {}
+                rows.append({"name": name,
+                             "folder": hit.get("folder") or "",
+                             "entries": int(hit.get("entries") or 0),
+                             "hasLedger": bool(hit),
+                             "orphan": False})
+        # 账本里有、staging 里没有：目录被删掉或改名了（Vortex 里卸了？）
+        for key, v in led.items():
+            if key in seen:
+                continue
+            rows.append({"name": key, "folder": v["folder"],
+                         "entries": v["entries"], "hasLedger": True,
+                         "orphan": True})
+        rows.sort(key=lambda r: (-int(r.get("entries") or 0),
+                                 str(r.get("name") or "").lower()))
+        done = [r for r in rows if int(r.get("entries") or 0) > 0]
+        orphan = [r for r in rows if r.get("orphan")]
+        return {"ok": True, "staging": staging, "mods": rows,
+                "summary": {"total": len(rows), "done": len(done),
+                            "todo": len(rows) - len(done),
+                            "orphan": len(orphan),
+                            "entries": sum(int(r.get("entries") or 0)
+                                           for r in rows)}}
+
     def sync_pack(self):
         """手动把账本同步进 zip（界面上点「同步账本」）。"""
         if self._busy:
