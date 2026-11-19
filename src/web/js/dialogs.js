@@ -112,8 +112,7 @@ function closeModal(id) { $(id).classList.remove("on"); }
 
 /* ---------------- 汉化包状态 ---------------- */
 function openPackStatus() {
-  openModal("modal-pack");
-  refreshPackStatus();
+  switchPage("pack");       // 页面切换里会刷数据
 }
 
 async function refreshPackStatus() {
@@ -205,11 +204,10 @@ function syncModsChips() {
 }
 
 async function openMods() {
-  openModal("modal-mods");
   $("mods-search").value = "";
   _modsFilter = "all";
   syncModsChips();
-  await refreshMods();
+  switchPage("manage");     // 页面切换里会拉数据
 }
 
 async function refreshMods() {

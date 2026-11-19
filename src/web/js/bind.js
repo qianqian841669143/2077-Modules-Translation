@@ -115,10 +115,11 @@ function bind() {
     const p = await pywebview.api.pick_zip();
     if (p) { $("path").value = p; loadMod(); }
   };
-  // ---- 汉化包状态（管理用）----
-  $("btn-pack-status").onclick = () => openPackStatus();
-  // ---- 模组清单 ----
-  $("btn-mods").onclick = () => openMods();
+  // ---- 左侧导航：翻译 / 管理 / 打包 ----
+  document.querySelectorAll("[data-page-btn]").forEach((b) => {
+    b.onclick = () => switchPage(b.getAttribute("data-page-btn"));
+  });
+  // ---- 管理页（模组清单）----
   $("btn-mods-refresh").onclick = () => refreshMods();
   $("mods-search").oninput = () => { if (_modsData) renderMods(); };
   ["all", "done", "todo"].forEach((k) => {

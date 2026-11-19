@@ -84,9 +84,41 @@ body {
 /* ================= 布局 ================= */
 .app {
   height: calc(100% - 34px);
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 8px 10px 0;
+  display: flex; flex-direction: row; gap: 0;
 }
+
+/* ================= 左侧导航 ================= */
+.sidenav {
+  width: 132px; flex: none; display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 6px 6px; background: var(--card);
+  border-right: 1px solid var(--border);
+}
+.nav-item {
+  text-align: left; padding: 7px 10px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--text); font: inherit; font-size: 12.5px;
+  cursor: pointer;
+}
+.nav-item:hover { background: var(--hover); }
+.nav-item.on { background: var(--primary-soft); color: var(--select-fg); font-weight: 600; }
+.nav-spacer { flex: 1; }
+.nav-sep { height: 1px; background: var(--border); margin: 6px 4px; }
+.nav-status {
+  font-size: 11px; color: var(--muted); line-height: 1.6;
+  padding: 6px 8px 2px; border-top: 1px solid var(--border);
+}
+
+/* 右侧主区：原来是 .app 的竖排布局，整体平移过来 */
+.main-col {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  gap: 6px; padding: 8px 10px 0;
+}
+
+/* 整页类页面（管理 / 打包）：卡片撑满，内部列表自己滚 */
+.pagecol { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.grow-list { flex: 1; min-height: 0; max-height: none; margin: 0; overflow: auto; }
+
+/* 页面切换用 hidden 属性；.card / .tablecard 自己声明了 display，得压住 */
+[hidden] { display: none !important; }
 .card {
   background: var(--card);
   border: 1px solid var(--border);

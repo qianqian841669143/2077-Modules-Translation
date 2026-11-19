@@ -214,12 +214,17 @@ def start_dev_server(root, theme="light", theme_name=""):
         def log_message(self, *a):      # 别把每条请求都喷到终端
             pass
 
+        def end_headers(self):
+            # 开发模式下所有响应都不许缓存：改完 reload 必须拿到磁盘上的新文件。
+            # 挂在 end_headers 上，super().do_GET() 服务的 js/css 也一并生效。
+            self.send_header("Cache-Control", "no-store")
+            super().end_headers()
+
         def _send(self, body, ctype):
             if isinstance(body, str):
                 body = body.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", ctype)
-            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)

@@ -30,8 +30,21 @@
 
 <main class="app">
 
+  <!-- ============ 侧边导航 ============ -->
+  <nav class="sidenav">
+    <button class="nav-item on" data-page-btn="translate" data-i18n="翻译">翻译</button>
+    <button class="nav-item" data-page-btn="manage" data-i18n="管理">管理</button>
+    <button class="nav-item" data-page-btn="pack" data-i18n="打包">打包</button>
+    <div class="nav-spacer"></div>
+    <div class="nav-sep"></div>
+    <button class="nav-item" id="btn-settings" data-i18n="设置">设置</button>
+    <div class="nav-status" id="nav-status"></div>
+  </nav>
+
+  <div class="main-col">
+
   <!-- ============ 工具条 ============ -->
-  <section class="card">
+  <section class="card" data-page="translate">
     <div class="row">
       <span class="label" data-i18n="模组目录">模组目录</span>
       <input class="input grow" id="path" placeholder="E:\Vortex Mods\cyberpunk2077\...">
@@ -40,15 +53,12 @@
       <button class="btn primary" id="btn-apply" data-i18n="应用">应用</button>
       <button class="btn" id="btn-undo" data-i18n="撤销上次应用">撤销上次应用</button>
       <button class="btn" id="btn-queue" data-i18n="批量翻译">批量翻译</button>
-      <button class="btn" id="btn-settings" data-i18n="设置">设置</button>
       <div class="menu-wrap">
         <button class="btn" id="btn-more" data-i18n="更多" title="更多操作">更多 ▾</button>
         <div class="menu" id="menu-more">
           <button class="btn" id="btn-import" data-i18n="读入翻译表">读入翻译表</button>
           <button class="btn" id="btn-export" data-i18n="导出 Excel">导出 Excel</button>
           <button class="btn" id="btn-zip" data-i18n="打开压缩包">打开压缩包</button>
-          <button class="btn" id="btn-pack-status" data-i18n="汉化包状态">汉化包状态</button>
-          <button class="btn" id="btn-mods" data-i18n="模组清单">模组清单</button>
           <button class="btn" id="btn-l10n" data-i18n="打开 mod 归档">打开 mod 归档</button>
           <div class="menu-sep"></div>
           <button class="btn" id="btn-clear-trans" data-i18n="清空当前译文">清空当前译文</button>
@@ -85,7 +95,7 @@
   </section>
 
   <!-- ============ 筛选栏 ============ -->
-  <div class="listbar">
+  <div class="listbar" data-page="translate">
     <span class="label" data-i18n="筛选">筛选</span>
     <select class="select" id="filter"></select>
     <span class="label" data-i18n="搜索">搜索</span>
@@ -98,7 +108,7 @@
   </div>
 
   <!-- ============ 表格 ============ -->
-  <section class="card tablecard">
+  <section class="card tablecard" data-page="translate">
     <div class="thead" id="thead">
       <div class="th num"   data-i18n="序号">序号</div>
       <div class="th skip"  data-i18n="跳过">跳过</div>
@@ -129,7 +139,7 @@
   </section>
 
   <!-- ============ 编辑条 ============ -->
-  <section class="card editor">
+  <section class="card editor" data-page="translate">
     <button class="btn icon" id="btn-prev" title="上一行">↑</button>
     <button class="btn icon" id="btn-next" title="下一行">↓</button>
     <textarea class="input grow" id="trans" rows="1"
@@ -138,10 +148,47 @@
     <button class="btn primary" id="btn-tr-all" data-i18n="翻译全部未填">翻译全部未填</button>
   </section>
 
+  <!-- ============ 管理页：模组清单 ============ -->
+  <section class="card pagecol" data-page="manage" hidden>
+    <p class="hint" style="padding:8px 10px 4px"
+       data-i18n="安装缓存里的每个模组一行：有没有账本、多少条。目录已不存在的（Vortex 里卸了或改了名）单独标出来。">
+      安装缓存里的每个模组一行：有没有账本、多少条。目录已不存在的单独标出来。</p>
+    <div class="row gap" style="padding:0 10px 6px">
+      <button class="chip on" id="mods-filter-all" data-i18n="全部">全部</button>
+      <button class="chip" id="mods-filter-done" data-i18n="已汉化">已汉化</button>
+      <button class="chip" id="mods-filter-todo" data-i18n="未汉化">未汉化</button>
+      <div class="spacer"></div>
+      <input class="input" id="mods-search" style="width:220px" data-i18n-ph="搜索模组">
+      <button class="btn" id="btn-mods-refresh" data-i18n="刷新">刷新</button>
+    </div>
+    <div class="m-head">
+      <span data-i18n="模组">模组</span>
+      <span data-i18n="条目">条目</span>
+      <span data-i18n="状态">状态</span>
+    </div>
+    <div class="queue-list grow-list" id="mods-list"></div>
+    <p class="hint" id="mods-summary" style="padding:4px 10px 8px"></p>
+  </section>
+
+  <!-- ============ 打包页：汉化包状态 ============ -->
+  <section class="card pagecol" data-page="pack" hidden>
+    <p class="hint" style="padding:8px 10px 4px"
+       data-i18n="这个 zip 是唯一交付物：覆盖文本、归档产物、运行时补丁、账本都并在这里。重装前确认「账本」一行是「已同步」。">
+      这个 zip 是唯一交付物。重装前确认「账本」一行是「已同步」。</p>
+    <pre class="report grow-list" id="pack-text" style="margin:0 10px"></pre>
+    <p class="hint" id="pack-tip" style="padding:4px 10px"></p>
+    <div class="row gap" style="padding:0 10px 8px">
+      <button class="btn" id="btn-pack-open" data-i18n="打开所在文件夹">打开所在文件夹</button>
+      <div class="spacer"></div>
+      <button class="btn primary" id="btn-pack-sync" data-i18n="同步账本">同步账本</button>
+    </div>
+  </section>
+
   <footer class="statusbar">
     <span id="status" data-i18n="就绪 | 提示: Vortex 用户应用后需在 Vortex 中重新 Deploy">就绪</span>
     <div class="progress" id="progress"><div class="bar" id="bar"></div></div>
   </footer>
+  </div>
 </main>
 
 <!-- ============ 批量（复制后翻译） ============ -->
@@ -370,59 +417,7 @@
   </div>
 </div>
 
-<!-- ============ 汉化包状态 ============ -->
-<div class="mask" id="modal-pack">
-  <div class="modal wide">
-    <div class="modal-head">
-      <h3 data-i18n="汉化包状态">汉化包状态</h3>
-      <button class="winbtn close" data-close>✕</button>
-    </div>
-    <div class="modal-body">
-      <p class="hint" data-i18n="这个 zip 是唯一交付物：覆盖文本、归档产物、运行时补丁、账本都并在这里。重装前确认「账本」一行是「已同步」。">
-        这个 zip 是唯一交付物：覆盖文本、归档产物、运行时补丁、账本都并在这里。重装前确认「账本」一行是「已同步」。</p>
-      <pre class="report" id="pack-text"></pre>
-      <p class="hint" id="pack-tip"></p>
-    </div>
-    <div class="modal-foot">
-      <button class="btn" id="btn-pack-open" data-i18n="打开所在文件夹">打开所在文件夹</button>
-      <div class="spacer"></div>
-      <button class="btn" data-close data-i18n="关闭">关闭</button>
-      <button class="btn primary" id="btn-pack-sync" data-i18n="同步账本">同步账本</button>
-    </div>
-  </div>
-</div>
-
-<!-- ============ 模组清单 ============ -->
-<div class="mask" id="modal-mods">
-  <div class="modal wide">
-    <div class="modal-head">
-      <h3 data-i18n="模组清单">模组清单</h3>
-      <button class="winbtn close" data-close>✕</button>
-    </div>
-    <div class="modal-body">
-      <p class="hint" data-i18n="安装缓存里的每个模组一行：有没有账本、多少条。目录已不存在的（Vortex 里卸了或改了名）会在最下面单独标出来。">
-        安装缓存里的每个模组一行：有没有账本、多少条。目录已不存在的会在最下面单独标出来。</p>
-      <div class="row gap" style="padding:4px 0 6px">
-        <button class="chip on" id="mods-filter-all" data-i18n="全部">全部</button>
-        <button class="chip" id="mods-filter-done" data-i18n="已汉化">已汉化</button>
-        <button class="chip" id="mods-filter-todo" data-i18n="未汉化">未汉化</button>
-        <div class="spacer"></div>
-        <input class="input" id="mods-search" style="width:220px" data-i18n-ph="搜索模组">
-        <button class="btn" id="btn-mods-refresh" data-i18n="刷新">刷新</button>
-      </div>
-      <div class="m-head">
-        <span data-i18n="模组">模组</span>
-        <span data-i18n="条目">条目</span>
-        <span data-i18n="状态">状态</span>
-      </div>
-      <div class="queue-list" id="mods-list"></div>
-      <p class="hint" id="mods-summary"></p>
-    </div>
-    <div class="modal-foot">
-      <button class="btn primary" data-close data-i18n="关闭">关闭</button>
-    </div>
-  </div>
-</div>
+<!-- 汉化包状态 / 模组清单已改成侧边栏的「打包」「管理」两页，弹窗删掉 -->
 
 <!-- ============ 语言包 ============ -->
 <div class="mask" id="modal-locale">

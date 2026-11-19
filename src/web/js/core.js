@@ -91,6 +91,8 @@ async function _boot() {
   fillSelects(d);
   bind();
   render();
+  applyThemeCss();      // 按已存主题刷一次（build_html 已注入，这里只兜底）
+  refreshNavStatus();   // 侧边栏底部的包大小 / 模组数 / 条数
   setStatus(T("就绪 | 提示: Vortex 用户应用后需在 Vortex 中重新 Deploy"));
   if (d.initialPath) {
     $("path").value = d.initialPath;
@@ -120,6 +122,41 @@ async function applyThemeCss() {
     document.head.appendChild(el);
   }
   el.textContent = css;
+}
+
+/* ---------------- 页面切换（左侧导航） ----------------
+   三个页面共用同一条状态栏和标题栏；[data-page] 标归属，[data-page-btn] 是导航项。
+   用 hidden 属性切换而不是 display：各元素原本的 display（flex/block）保留，
+   切回来时不用重新算布局。 */
+const PAGES = ["translate", "manage", "pack"];
+let _page = "translate";
+
+function switchPage(name) {
+  if (PAGES.indexOf(name) < 0) name = "translate";
+  _page = name;
+  document.querySelectorAll("[data-page]").forEach((el) => {
+    el.hidden = el.getAttribute("data-page") !== name;
+  });
+  document.querySelectorAll("[data-page-btn]").forEach((el) => {
+    el.classList.toggle("on", el.getAttribute("data-page-btn") === name);
+  });
+  if (name === "manage") refreshMods();
+  if (name === "pack") refreshPackStatus();
+  refreshNavStatus();
+}
+
+/* 侧边栏底部：包多大 / 几个模组 / 多少条，任何页面都看得到 */
+async function refreshNavStatus() {
+  const el = $("nav-status");
+  if (!el) return;
+  let s = null;
+  try { s = await pywebview.api.pack_status(); } catch (_) { s = null; }
+  if (!s) { el.textContent = ""; return; }
+  const lg = s.ledger || {};
+  el.innerHTML =
+    "<div>" + esc(T("包")) + " " + (s.exists ? fmtBytes(s.size) : "—") + "</div>" +
+    "<div>" + (lg.mods || 0) + " " + esc(T("模组")) + "</div>" +
+    "<div>" + Number(lg.entries || 0).toLocaleString() + " " + esc(T("条")) + "</div>";
 }
 
 function applyI18n() {
