@@ -232,7 +232,8 @@ class Ctx(object):
 
     def __init__(self, spawn_worker, out_root, with_archive=False,
                  skip_assets=True, base="", model="", target="简体中文",
-                 on_event=None, cancel=None, deploy=False, deploy_dry=True):
+                 on_event=None, cancel=None, deploy=False, deploy_dry=True,
+                 ledger=False, ledger_dir=""):
         self.spawn_worker = spawn_worker
         self.out_root = out_root
         self.with_archive = with_archive
@@ -245,6 +246,8 @@ class Ctx(object):
         self.worker = None
         self.deploy = deploy            # 跑完把副本按文件覆盖回原模组目录
         self.deploy_dry = deploy_dry    # 只算不写
+        self.ledger = ledger            # 只写账本（mods/<文件夹>.lua），不回写模组
+        self.ledger_dir = ledger_dir    # 账本输出目录，空则用 out_root
 
     def stopped(self):
         return self.cancel is not None and self.cancel.is_set()
@@ -409,6 +412,42 @@ def finish(ctx, cand, prep, r):
              and str(x.get("trans")).strip() != str(x.get("orig") or "").strip()]
     r["machine"] = sum(1 for x in items
                        if (x.get("transSrc") or "") == "machine")
+    if items and getattr(ctx, "ledger", False):
+        # 账本模式：设置层的文案进账本（显示层替换），其余的写成覆盖文件。
+        # 2026-11-20 之前这里写完账本就 return，语言包 / tweakdb / 源码里的
+        # 文案一条都没产出——账本只在 MCM 显示层生效，拦不到文件里的文本，
+        # 于是「全量汉化」跑完只剩设置项是中文。
+        import mod_ledger
+        got = mod_ledger.write(
+            ctx.ledger_dir or ctx.out_root, dst, items,
+            staging_name=cand.get("name") or "",
+            target=ctx.target, base=ctx.base, model=ctx.model)
+        r["ledger"] = got
+        r["ledgerEntries"] = int(got.get("entries") or 0)
+
+        # 覆盖文件交给宿主的 _pack_apply（collect：先攒，收尾统一合并进 zip）。
+        import mod_pack
+        cls = mod_pack.classify(dst, items)
+        r["routes"] = {"ledger": len(cls["ledger"]), "pack": len(cls["pack"]),
+                       "archive": len(cls["archive"]), "skip": cls["skip"]}
+        pack_apply = getattr(w, "_pack_apply", None)
+        if cls["pack"] and callable(pack_apply):
+            w.root = dst
+            pr = pack_apply(dst, cls["pack"], collect=True)
+            r["applied"] = int(pr.get("ok") or 0)
+            r["failed"] = int(pr.get("fail") or 0)
+            r["errors"] = [str(x) for x in (pr.get("errors") or [])][:20]
+            r["packFiles"] = int(pr.get("files") or 0)
+            r["ok"] = True
+            ctx.stage(cand.get("key"), cand.get("name"), "覆盖",
+                      round(time.time() - t_tr, 2))
+            return
+
+        r["applied"] = 0
+        ctx.stage(cand.get("key"), cand.get("name"), "账本",
+                  round(time.time() - t_tr, 2))
+        r["ok"] = True
+        return
     if items:
         # 批量写的是输出根里的副本：这份副本接下来会被整个部署进游戏目录，
         # 所以不要 `.bak` 也不要撤销记录（两种情况都是 127 份冗余，实测
@@ -562,6 +601,8 @@ def export_status(r):
         return "失败"
     if r.get("skippedDone"):
         return "已是最新"
+    if r.get("ledger"):
+        return "已写账本"
     if not r.get("applied"):
         return "无译文可写"
     return "完成"

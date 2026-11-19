@@ -727,6 +727,68 @@ def _punct_shape(text, lang):
             body.count("{"), body.count("}"))
 
 
+def _target_class_in_file(text, target_locale):
+    """同一个 .reds 里目标语言的包类名（单文件多语言包结构）。"""
+    if not text:
+        return ""
+    ranges = _package_class_ranges(text)
+    if not ranges:
+        return ""
+    names = TARGET_NAMES.get(target_locale) or {}
+    want = names.get("reds") or ""
+    if want:
+        for name, _s, _e in ranges:
+            if name == want:
+                return name
+    # 类名带前缀时（ICACoreZhcn）靠 Provider 的 case 反查。
+    for loc, cls in PROVIDER_CASE_RE.findall(text):
+        if (loc or "").lower() == (target_locale or "").lower():
+            for name, _s, _e in ranges:
+                if name == cls:
+                    return name
+    return ""
+
+
+def source_has_target_class(root, rel, target_locale):
+    """源文件里是否已经写了目标语言的包类（单文件多语言包结构）。"""
+    if not str(rel).lower().endswith(".reds"):
+        return False
+    path = os.path.join(root, rel.replace("/", os.sep))
+    try:
+        text = _read_reds(path)
+    except Exception:
+        return False
+    return bool(_target_class_in_file(text, target_locale))
+
+
+def _existing_in_source(root, rel, target_locale):
+    """目标文件不存在时，从源文件里的目标语言类回填已有译文。
+
+    Equipment-EX / Gang Retaliation 这类把十几个语言包写在同一个
+    Localization.reds 里：target_rel() 算出的 ``ChineseSimplified.reds``
+    并不存在，_existing_target() 返回 None，界面就把全部条目显示成待翻译，
+    应用时还会新建一个同名类（与源文件里的类撞名，REDscript 编译不过）。
+    这里按类名把译文读回来，行上的 inTarget 为真，写回自然被跳过。
+    """
+    path = os.path.join(root, rel.replace("/", os.sep))
+    try:
+        text = _read_reds(path)
+    except Exception:
+        return None
+    cls = _target_class_in_file(text, target_locale)
+    if not cls:
+        return None
+    out = {}
+    try:
+        for line, val, key in _text_pairs_ex(path, only_class=cls):
+            if key and key not in out:
+                out[key] = val
+            out[_LINE_KEY % line] = val
+    except Exception:
+        return None
+    return out or None
+
+
 def extract(root, entries, target_locale, only_class=""):
     """把选中的语言包抽成表格行; 目标文件已存在时顺带把已有译文带出来。
 
@@ -746,6 +808,10 @@ def extract(root, entries, target_locale, only_class=""):
         tgt = target_rel(entry, target_locale, root)
         fmt = entry["format"]
         existing = _existing_target(root, tgt)
+        if existing is None and fmt != "json":
+            # 单文件多语言包：目标文件不存在，但同一个源文件里可能已经
+            # 有目标语言的类。读到它，这些行才算「已翻译」，写回时跳过。
+            existing = _existing_in_source(root, rel, target_locale)
         if fmt == "json":
             pairs = _json_pairs(os.path.join(root, rel))
             for key, val in pairs:
@@ -1584,6 +1650,14 @@ def ensure_target(root, entry_rel, target_rel_path):
             new_cls = _reds_class_for_target(target_rel_path)
             if not new_cls or new_cls == old_cls:
                 new_cls = old_cls + "_Localized"
+            # 同 module 里已有同名类时拒绝生成：多半是「单文件多语言包」
+            # 已经把目标语言写在原文件里了，再建一份就是 SYM_REDEFINITION，
+            # 整个脚本层都编译不过。
+            _mod = _module_name(head)
+            if _mod and _class_owners(root, _mod, new_cls, exclude=[dst]):
+                raise ValueError(
+                    "类名 %s 在 module %s 下已被占用（该模组看起来已自带目标"
+                    "语言包），已拒绝生成重复类型" % (new_cls, _mod))
             body = re.sub(r"\bclass\s+" + re.escape(old_cls) + r"\b",
                           "class " + new_cls, block, count=1)
             out = (head + "\n\n" if head else "") + body.strip() + "\n"

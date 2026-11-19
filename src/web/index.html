@@ -37,7 +37,7 @@
       <input class="input grow" id="path" placeholder="E:\Vortex Mods\cyberpunk2077\...">
       <button class="btn" id="btn-browse" data-i18n="浏览">浏览</button>
       <button class="btn primary" id="btn-load" data-i18n="加载 / 提取">加载 / 提取</button>
-      <button class="btn primary" id="btn-apply" data-i18n="应用到模组">应用到模组</button>
+      <button class="btn primary" id="btn-apply" data-i18n="应用">应用</button>
       <button class="btn" id="btn-undo" data-i18n="撤销上次应用">撤销上次应用</button>
       <button class="btn" id="btn-queue" data-i18n="批量翻译">批量翻译</button>
       <button class="btn" id="btn-settings" data-i18n="设置">设置</button>
@@ -47,6 +47,7 @@
           <button class="btn" id="btn-import" data-i18n="读入翻译表">读入翻译表</button>
           <button class="btn" id="btn-export" data-i18n="导出 Excel">导出 Excel</button>
           <button class="btn" id="btn-zip" data-i18n="打开压缩包">打开压缩包</button>
+          <button class="btn" id="btn-pack-status" data-i18n="汉化包状态">汉化包状态</button>
           <button class="btn" id="btn-l10n" data-i18n="打开 mod 归档">打开 mod 归档</button>
           <div class="menu-sep"></div>
           <button class="btn" id="btn-clear-trans" data-i18n="清空当前译文">清空当前译文</button>
@@ -164,8 +165,8 @@
         <button class="btn" id="btn-q-out-open" data-i18n="打开">打开</button>
       </div>
       <div class="row gap">
-        <label class="chk"><input type="checkbox" id="q-deploy"><span data-i18n="跑完覆盖回原模组">跑完覆盖回原模组</span></label>
-        <label class="chk"><input type="checkbox" id="q-deploy-dry"><span data-i18n="只算不写（预演）">只算不写（预演）</span></label>
+        <label class="chk" style="display:none"><input type="checkbox" id="q-deploy"><span data-i18n="跑完覆盖回原模组">跑完覆盖回原模组</span></label>
+        <label class="chk" style="display:none"><input type="checkbox" id="q-deploy-dry"><span data-i18n="只算不写（预演）">只算不写（预演）</span></label>
         <div class="spacer"></div>
       </div>
       <div class="row gap">
@@ -177,6 +178,13 @@
         <label class="chk"><input type="checkbox" id="q-hide-todo"><span data-i18n="隐藏无需翻译">隐藏无需翻译</span></label>
       </div>
       <div class="progress" id="q-progress"><div class="bar" id="q-bar"></div></div>
+      <div class="row gap" style="padding:6px 0 2px">
+        <button class="btn" id="btn-q-all" data-i18n="全选">全选</button>
+        <button class="btn" id="btn-q-none" data-i18n="全不选">全不选</button>
+        <button class="btn" id="btn-q-invert" data-i18n="反选">反选</button>
+        <div class="spacer"></div>
+        <span class="hint" id="q-sel-count"></span>
+      </div>
       <div class="queue-list" id="q-list"></div>
       <p class="hint" id="q-summary"></p>
       <p class="hint stall" id="q-stall" style="display:none"></p>
@@ -200,15 +208,19 @@
     <div class="modal-body">
       <p class="hint" data-i18n="需为 OpenAI 兼容接口(带 /v1)；留空表示暂不启用机器翻译。">需为 OpenAI 兼容接口</p>
       <div class="field"><label data-i18n="API 地址">API 地址</label>
-        <input class="input grow" id="set-api" placeholder="http://127.0.0.1:11434/v1"></div>
+        <input class="input grow" id="set-api" placeholder="http://127.0.0.1:8080/v1"></div>
+      <p class="hint" data-i18n="llama.cpp 默认 8080 · Ollama 11434 · LM Studio 1234 · vLLM 8000（地址都要带 /v1）">llama.cpp 默认 8080</p>
       <div class="field"><label data-i18n="模型名称">模型名称</label>
-        <input class="input grow" id="set-model" data-i18n-ph="可选，留空则自动用第一个模型"></div>
+        <input class="input grow" id="set-model" list="model-list"
+               data-i18n-ph="可选，留空则自动用第一个模型"></div>
+      <datalist id="model-list"></datalist>
       <div class="row gap">
         <button class="btn" id="btn-test" data-i18n="测试连接">测试连接</button>
+        <button class="btn" id="btn-model-on" data-i18n="启用此模型">启用此模型</button>
         <span class="hint" id="test-result"></span>
       </div>
       <label class="check"><input type="checkbox" id="set-local"> <span data-i18n="启用本地模型(停用后不再走机翻，并释放显存)">启用本地模型(停用后不再走机翻，并释放显存)</span></label>
-      <label class="check"><input type="checkbox" id="set-ask-unload"> <span data-i18n="关闭时询问是否停止本地模型">关闭时询问是否停止本地模型</span></label>
+      <label class="check"><input type="checkbox" id="set-ask-unload"> <span data-i18n="关闭时询问是否停止本地模型(llama.cpp 会结束 llama-server 进程)">关闭时询问是否停止本地模型(llama.cpp 会结束 llama-server 进程)</span></label>
       <div class="row gap">
         <button class="btn" id="btn-model-off" data-i18n="立即释放显存">立即释放显存</button>
         <span class="hint" id="local-state"></span>
@@ -220,6 +232,8 @@
         <select class="select grow" id="set-target"></select></div>
       <label class="check"><input type="checkbox" id="set-tm"> <span data-i18n="使用翻译记忆(加载时自动填充)">使用翻译记忆</span></label>
       <label class="check"><input type="checkbox" id="set-dark"> <span data-i18n="深色模式">深色模式</span></label>
+      <div class="field"><label data-i18n="配色主题">配色主题</label>
+        <select class="select grow" id="set-theme"></select></div>
       <label class="check"><input type="checkbox" id="set-no-gpu"> <span data-i18n="界面不使用 GPU 渲染（显卡驱动有问题时用，下次启动生效）">界面不使用 GPU 渲染（显卡驱动有问题时用，下次启动生效）</span></label>
       <div class="divider"></div>
       <p class="hint" data-i18n="资源模式：翻译 .archive 内的本地化资源，需要游戏目录与 WolvenKit 命令行。">
@@ -235,6 +249,13 @@
         <button class="btn" id="btn-l10n-check" data-i18n="检测资源模式环境">检测资源模式环境</button>
         <span class="hint" id="l10n-check-result"></span>
       </div>
+      <div class="divider"></div>
+      <p class="hint" data-i18n="汉化包输出：点「应用」生成的 zip 放在这个目录，包名固定为 CP2077 Localization Pack.zip。留空则跟着安装缓存目录走。">
+        汉化包输出：点「应用」生成的 zip 放在这个目录，包名固定为 CP2077 Localization Pack.zip。留空则跟着安装缓存目录走。</p>
+      <div class="field"><label data-i18n="输出目录">输出目录</label>
+        <input class="input grow" id="set-pack-dir" placeholder="E:\Vortex Mods">
+        <button class="btn" id="btn-pick-pack-dir" data-i18n="浏览">浏览</button></div>
+      <p class="hint" id="pack-dir-tip"></p>
       <div class="divider"></div>
       <p class="hint" data-i18n="批量翻译：产物写到这个目录，原目录只读。留空则不进行批量翻译。">
         批量翻译：产物写到这个目录，原目录只读。留空则不进行批量翻译。</p>
@@ -345,6 +366,28 @@
     </div>
     <div class="modal-body"><pre id="report-text" class="report"></pre></div>
     <div class="modal-foot"><button class="btn primary" data-close data-i18n="关闭">关闭</button></div>
+  </div>
+</div>
+
+<!-- ============ 汉化包状态 ============ -->
+<div class="mask" id="modal-pack">
+  <div class="modal wide">
+    <div class="modal-head">
+      <h3 data-i18n="汉化包状态">汉化包状态</h3>
+      <button class="winbtn close" data-close>✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint" data-i18n="这个 zip 是唯一交付物：覆盖文本、归档产物、运行时补丁、账本都并在这里。重装前确认「账本」一行是「已同步」。">
+        这个 zip 是唯一交付物：覆盖文本、归档产物、运行时补丁、账本都并在这里。重装前确认「账本」一行是「已同步」。</p>
+      <pre class="report" id="pack-text"></pre>
+      <p class="hint" id="pack-tip"></p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="btn-pack-open" data-i18n="打开所在文件夹">打开所在文件夹</button>
+      <div class="spacer"></div>
+      <button class="btn" data-close data-i18n="关闭">关闭</button>
+      <button class="btn primary" id="btn-pack-sync" data-i18n="同步账本">同步账本</button>
+    </div>
   </div>
 </div>
 
@@ -468,6 +511,13 @@ window.addEventListener("error", function (e) {
   window.__errs.push(String(e.message) + " @" + (e.filename||"") + ":" + (e.lineno||"") + ":" + (e.colno||""));
 });
 </script>
-<script src="app.js"></script>
+<script src="js/core.js"></script>
+<script src="js/bind.js"></script>
+<script src="js/table.js"></script>
+<script src="js/vmap.js"></script>
+<script src="js/events.js"></script>
+<script src="js/queue.js"></script>
+<script src="js/apply.js"></script>
+<script src="js/dialogs.js"></script>
 </body>
 </html>

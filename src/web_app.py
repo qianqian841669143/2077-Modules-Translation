@@ -29,8 +29,114 @@ def web_dir():
     return os.path.join(base, "web")
 
 
-def build_html(theme="light"):
-    """把 index.html + style.css + app.js 合成单页, 交给 pywebview 直接渲染
+# 汉化包的落点：包名固定（Vortex 里重装时认的是同一个包），所在目录可改。
+PACK_ZIP_NAME = "CP2077 Localization Pack.zip"
+
+
+# ---------------------------------------------------------------- 配色主题
+# 主题就是一份只覆盖 CSS 变量的 .css：浅色/深色仍由 dark_mode 切换的
+# data-theme 决定，主题负责换色。放在 userdata\themes\ 下，用户可以自己加；
+# 内置的几份在首次运行时从 web/themes/ 复制过去，已存在的不覆盖
+# （用户改过就尊重他的版本）。
+def themes_dir():
+    return os.path.join(config_dir(), "themes")
+
+
+def _theme_meta(path):
+    """从 /* @name … */ 头注释里取元数据。"""
+    meta = {"id": "", "name": "", "author": "", "description": ""}
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            head = f.read(800)
+    except OSError:
+        return meta
+    for key in ("name", "author", "description"):
+        m = re.search(r"@%s[ \t]+([^\r\n*]+)" % key, head)
+        if m:
+            meta[key] = m.group(1).strip()
+    return meta
+
+
+def list_themes():
+    """可选主题：默认排第一，其余按文件名。"""
+    out = [{"id": "", "name": "默认", "author": "", "description": ""}]
+    d = themes_dir()
+    if not os.path.isdir(d):
+        return out
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return out
+    for fn in names:
+        if not fn.lower().endswith(".css"):
+            continue
+        meta = _theme_meta(os.path.join(d, fn))
+        meta["id"] = fn[:-4]
+        if not meta["name"]:
+            meta["name"] = meta["id"]
+        out.append(meta)
+    return out
+
+
+def theme_css(name):
+    """某主题的 CSS 文本；空名或找不到返回空串。"""
+    name = os.path.basename(str(name or "").strip())
+    if not name:
+        return ""
+    if not name.lower().endswith(".css"):
+        name += ".css"
+    p = os.path.join(themes_dir(), name)
+    if not os.path.isfile(p):
+        return ""
+    try:
+        with open(p, "r", encoding="utf-8-sig") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def seed_themes():
+    """首次运行把内置主题复制到用户目录，返回复制了几个。"""
+    import shutil
+    src = os.path.join(web_dir(), "themes")
+    if not os.path.isdir(src):
+        return 0
+    dst = themes_dir()
+    try:
+        os.makedirs(dst, exist_ok=True)
+        names = os.listdir(src)
+    except OSError:
+        return 0
+    n = 0
+    for fn in names:
+        if not fn.lower().endswith(".css"):
+            continue
+        target = os.path.join(dst, fn)
+        if os.path.exists(target):
+            continue
+        try:
+            shutil.copy2(os.path.join(src, fn), target)
+            n += 1
+        except OSError:
+            pass
+    return n
+
+
+def _theme_style_block(name):
+    """把主题 CSS 包成一段 <style>，给 build_html / dev server 启动时注入。"""
+    css = theme_css(name)
+    if not css:
+        return ""
+    return '<style id="theme-extra">\n%s\n</style>\n' % css
+
+# 前端按功能拆成了多个文件（2026-11-20），这里按顺序内联成单页。
+# 顺序就是依赖顺序：core.js 里的 state / $ / T 必须先于其余脚本出现。
+JS_FILES = ("core.js", "bind.js", "table.js", "vmap.js",
+            "events.js", "queue.js", "apply.js", "dialogs.js")
+
+
+def build_html(theme="light", theme_name=""):
+    """把 index.html + style.css + 各 js 合成单页, 交给 pywebview 直接渲染
     (比走本地 http 服务更稳, 也免去端口占用)"""
     d = web_dir()
     with open(os.path.join(d, "index.html"), "r", encoding="utf-8-sig") as f:
@@ -40,13 +146,111 @@ def build_html(theme="light"):
         html = html.replace('data-theme="light"', 'data-theme="dark"', 1)
     with open(os.path.join(d, "style.css"), "r", encoding="utf-8-sig") as f:
         css = f.read()
-    with open(os.path.join(d, "app.js"), "r", encoding="utf-8-sig") as f:
-        js = f.read()
     html = html.replace('<link rel="stylesheet" href="style.css">',
                         "<style>\n%s\n</style>" % css)
-    html = html.replace('<script src="app.js"></script>',
-                        "<script>\n%s\n</script>" % js)
+    # 前端按功能拆成 8 个文件，逐个内联。缺文件时塞一句注释而不是崩掉：
+    # 至少还能看到界面，日志里也能看出少了哪一块。
+    for name in JS_FILES:
+        try:
+            with open(os.path.join(d, "js", name), "r",
+                      encoding="utf-8-sig") as f:
+                js = f.read()
+        except OSError:
+            js = "/* missing js/%s */" % name
+        html = html.replace('<script src="js/%s"></script>' % name,
+                            "<script>\n%s\n</script>" % js)
+    # 主题在启动前就注入，避免先按默认配色画一帧再跳色
+    extra = _theme_style_block(theme_name)
+    if extra:
+        html = html.replace("</head>", extra + "</head>", 1)
     return html
+
+
+# ---------------------------------------------------------------- 开发模式
+# MT_DEV=1：不起内联单页，改成把 web/ 原样用本地 HTTP 服务出去。
+# 好处是改完 js/css 存盘就自动刷新，不用每次重新打包；生产路径（内联）不动。
+# 自动刷新走前端定时 fetch /__stamp，不从后台线程调 evaluate_js——
+# 那条路是跨到 WebView2 UI 线程的 COM 调用，会和 JS 桥互锁（见 _emit 注释）。
+_DEV_RELOAD_JS = """
+<script>
+(function () {
+  var last = null;
+  setInterval(function () {
+    fetch("/__stamp", { cache: "no-store" })
+      .then(function (r) { return r.text(); })
+      .then(function (s) {
+        if (last !== null && s !== last) { location.reload(); }
+        last = s;
+      })
+      .catch(function () {});
+  }, 800);
+})();
+</script>
+"""
+
+
+def web_stamp(root):
+    """web/ 下所有文件的最新 mtime，前端拿它判断要不要刷新。"""
+    newest = 0.0
+    for base, _dirs, files in os.walk(root):
+        for fn in files:
+            try:
+                m = os.path.getmtime(os.path.join(base, fn))
+            except OSError:
+                continue
+            if m > newest:
+                newest = m
+    return newest
+
+
+def start_dev_server(root, theme="light", theme_name=""):
+    """开发用静态服务：服务 web/，顺手注入自动刷新脚本。返回端口。"""
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    class DevHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=root, **kw)
+
+        def log_message(self, *a):      # 别把每条请求都喷到终端
+            pass
+
+        def _send(self, body, ctype):
+            if isinstance(body, str):
+                body = body.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            path = self.path.split("?")[0]
+            if path == "/__stamp":
+                self._send("%.6f" % web_stamp(root), "text/plain")
+                return
+            if path in ("/", "/index.html"):
+                try:
+                    with open(os.path.join(root, "index.html"), "r",
+                              encoding="utf-8-sig") as f:
+                        html = f.read()
+                except OSError as ex:
+                    self._send("index.html 读不到: %s" % ex, "text/plain")
+                    return
+                if theme == "dark":
+                    html = html.replace('data-theme="light"',
+                                        'data-theme="dark"', 1)
+                extra = _theme_style_block(theme_name)
+                if extra:
+                    html = html.replace("</head>", extra + "</head>", 1)
+                html = html.replace("</body>", _DEV_RELOAD_JS + "</body>")
+                self._send(html, "text/html; charset=utf-8")
+                return
+            super().do_GET()
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), DevHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv.server_address[1]
 
 
 class _MergedReport(object):
@@ -83,6 +287,39 @@ def fill_resource_entry_ids(items, rows):
         if len(hits) == 1:
             it["entryId"] = next(iter(hits))
     return sum(1 for it in (items or ()) if not it.get("entryId"))
+
+
+def _change_digest(entries, limit=24, max_chars=1800):
+    """把本轮已经翻好、写回去的条目压成一段「改动摘要」, 随提示词交给模型。
+
+    本地模型看不见前面几批翻过什么: 同一个词在第 1 批翻成「义体」, 到第 9 批
+    可能翻成「植入体」, 落到文件里就是同一个模组前后不一致; 更糟的是它会把
+    已经确定的说法重新表述一遍, 看起来像是在乱改已经翻好的文件。摘要只留
+    最近若干条短句, 超长条目(说明文/多行模板)直接跳过——那种条目本来就没法
+    靠摘要对齐, 塞进去只会把上下文撑爆, 还可能把模型带到复读上。
+    """
+    if not entries:
+        return ""
+    picked = []
+    used = 0
+    for src, dst in reversed(entries):
+        if len(picked) >= limit or used >= max_chars:
+            break
+        s = " ".join(str(src or "").split())
+        d = " ".join(str(dst or "").split())
+        if not s or not d or s == d:
+            continue
+        if len(s) > 90 or len(d) > 90:
+            continue
+        picked.append((s, d))
+        used += len(s) + len(d) + 8
+    if not picked:
+        return ""
+    picked.reverse()
+    lines = ["【已定译法·仅参考用词】下列条目这一轮已经翻好并写回文件, "
+             "不要翻译、不要输出它们, 续翻时沿用相同的措辞:"]
+    lines += ["- %s = %s" % (s, d) for s, d in picked]
+    return "\n".join(lines)
 
 
 class Api(object):
@@ -210,6 +447,18 @@ class Api(object):
 
     # ------------------------------------------------------------ 工具
     def _emit(self, obj):
+        # 事件统一走本机回环队列（evbus），不要从后台线程直接 evaluate_js：
+        # 那是跨到 WebView2 UI 线程的 COM 调用，会和 JS 桥的同步等待互锁。
+        # 实测症状：点「提取」后界面永远停在「正在提取可翻译文本」，CPU 不涨、
+        # 磁盘不动、loaded/busy 事件一个都回不来（批量早就改走 evbus 了，
+        # 单模组这条路一直漏着）。前端每 200ms 轮询同一个队列，桥只做兜底。
+        bus = getattr(self, "_bus", None)
+        if bus is not None:
+            try:
+                bus.push(obj)
+                return
+            except Exception:
+                pass
         if not self._window:
             return
         try:
@@ -258,6 +507,21 @@ class Api(object):
                     official.close()
                 except Exception:
                     pass
+        # 品牌/系列署名统一（规则表见 mt_client._TERM_FIXES_RAW）。
+        # 翻译记忆里躺着历史译文，比如 16:46 那批全是「SENSATION TECHNOLOGY
+        # · 先知套装」。基线把这句原样填回表格之后，用户就算改了术语表也看
+        # 不到任何变化——所以填充完必须再纠正一次。手改（manual）不动：
+        # 那是用户的最终意图，哪怕是英文也该留着。
+        try:
+            import mt_client
+            for r in (rows or []):
+                if str(r.get("transSrc") or "") == "manual":
+                    continue
+                t = r.get("trans") or ""
+                if t:
+                    r["trans"] = mt_client.normalize_terms(t)
+        except Exception:
+            pass
         stats["officialAvailable"] = official is not None
         stats["officialReason"] = why
         stats["line"] = Lbase.summary(stats, official is not None, why)
@@ -339,7 +603,8 @@ class Api(object):
         new = dict(self.settings)
         for k in ("api_base", "model", "lang", "target_lang",
                   "game_dir", "wkit_path", "res_source_lang",
-                  "staging_dir", "downloads_dir", "batch_out_dir"):
+                  "staging_dir", "downloads_dir", "batch_out_dir",
+                  "zh_pack_dir", "theme"):
             if isinstance(cfg.get(k), str):
                 new[k] = cfg[k]
         for k in ("dark_mode", "use_tm", "res_skip_target", "verify_active",
@@ -357,7 +622,7 @@ class Api(object):
         new["api_base"] = normalize_api_base(new.get("api_base", ""))
         # 路径字段去掉首尾空白与包裹的引号（用户常直接从资源管理器复制带引号）
         for k in ("game_dir", "wkit_path", "staging_dir", "downloads_dir",
-                  "batch_out_dir"):
+                  "batch_out_dir", "zh_pack_dir"):
             v = (new.get(k) or "").strip().strip('"').strip("'")
             new[k] = os.path.normpath(v) if v else ""
         try:
@@ -488,40 +753,48 @@ class Api(object):
         threading.Timer(0.25, lambda: os._exit(0)).start()
 
     def _local_model_target(self):
-        """本地模型还值不值得问一句：返回 (api_base, model)，不是本地就返回 ("", "")。
+        """本地模型还值不值得问一句：返回 (api_base, model, backend)。
 
-        只对**本机**的 Ollama 问：远端接口没有「卸掉本地模型」这回事，
-        而且关窗时多发一次网络请求只会拖慢退出。
+        不是本机、或者后端根本不占显存（LM Studio / vLLM / 远端接口）时返回
+        ("", "", "")。Ollama 和 llama.cpp 都要问，但收尾方式不同：Ollama 能发
+        keep_alive=0 卸载，llama.cpp 只能结束 llama-server 进程。
         """
         base = normalize_api_base(self.settings.get("api_base", ""))
         model = (self.settings.get("model") or "").strip()
-        if not base or not model:
-            return "", ""
+        if not base:
+            return "", "", ""
         try:
             host = urlsplit(base).hostname or ""
         except Exception:
             host = ""
         if host.lower() not in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
-            return "", ""
+            return "", "", ""
         try:
             import mt_client
-            if not mt_client._is_ollama(base):
-                return "", ""
+            backend = mt_client.detect_backend(base)
+            if backend == "llamacpp":
+                # 服务已经停了就别再拦一句
+                if not mt_client.llamacpp_pids(base):
+                    return "", "", ""
+                return base, model, backend
+            if backend == "ollama" and model:
+                return base, model, backend
         except Exception:
-            return "", ""
-        return base, model
+            pass
+        return "", "", ""
 
     def _confirm_exit(self):
         """关窗前的「要不要停掉本地模型」三选一；返回 False 表示取消退出。
 
         Ollama 的模型默认常驻（keep_alive），关掉翻译器它也不会自己走：
         9B 级常占 6~8 GB、27B 常驻 21 GB，玩家接着开游戏就得跟它抢显存。
+        llama.cpp 更彻底：权重就是 llama-server 进程自己的显存，只能结束进程。
         用系统 MessageBox 而不是页面内弹窗：这一步在窗口销毁之前，
         页面里再弹什么都可能被一起关掉。
         """
         if not self.settings.get("ask_unload_model", True):
             return True
-        base, model = self._local_model_target()
+        base, model, backend = self._local_model_target()
         if not base:
             return True
 
@@ -530,12 +803,20 @@ class Api(object):
         MB_SETFOREGROUND = 0x10000
         IDCANCEL, IDYES = 2, 6
         # 分句翻译再拼：整段带换行的中文没法进 locales（键里有 \n 就匹配不上）。
-        text = "\n\n".join([
-            self._tr("要停止本地模型吗？"),
-            self._tr("模型 %s 还常驻在显存里，关掉翻译器它也不会自己退出。") % model,
-            self._tr("停止后下次翻译要重新加载一次（几秒到几十秒，看模型大小）。"),
-            self._tr("是：停止模型并退出      否：直接退出      取消：不退出"),
-        ])
+        if backend == "llamacpp":
+            text = "\n\n".join([
+                self._tr("要停止 llama-server 吗？"),
+                self._tr("llama-server 还在运行并占着显存，关掉翻译器它不会自己退出。"),
+                self._tr("停止后下次翻译前要先重新启动它。"),
+                self._tr("是：停止模型并退出      否：直接退出      取消：不退出"),
+            ])
+        else:
+            text = "\n\n".join([
+                self._tr("要停止本地模型吗？"),
+                self._tr("模型 %s 还常驻在显存里，关掉翻译器它也不会自己退出。") % model,
+                self._tr("停止后下次翻译要重新加载一次（几秒到几十秒，看模型大小）。"),
+                self._tr("是：停止模型并退出      否：直接退出      取消：不退出"),
+            ])
         try:
             import ctypes
             rc = ctypes.windll.user32.MessageBoxW(
@@ -548,7 +829,12 @@ class Api(object):
         if rc == IDYES:
             try:
                 import mt_client
-                mt_client.unload(base, model, timeout=15)
+                if backend == "llamacpp":
+                    # 只杀 llama-server 本身；kill_llamacpp 里还有进程名校验，
+                    # 端口被别的程序占用时不会误伤。
+                    mt_client.kill_llamacpp(base)
+                else:
+                    mt_client.unload(base, model, timeout=15)
             except Exception:           # noqa: BLE001
                 pass
         return True
@@ -1090,6 +1376,19 @@ class Api(object):
 
         sessions, rows, used, empty_arch = [], [], [], []
 
+        def _say(msg):
+            """把扫归档的进展推到遮罩上。
+
+            这一层以前只有一个静态的「正在提取可翻译文本 ...」，而解包 + 逐个
+            转换资源是整次加载里最久的一段（TraumaTeam 实测 139 秒），用户
+            等到两分钟也只能看到同一句话，只能判断成「卡死」。事件走 evbus，
+            前端每 200ms 轮询，不会和 UI 线程互锁。
+            """
+            self._emit({"type": "busy", "on": True, "text": str(msg)})
+
+        total = len(targets)
+        _say(self._tr("正在扫描模组归档（共 %d 个）...") % total)
+
         # 先只读目录：归档里没有 localization 就不必解包（几百 MB 的归档解一遍
         # 要几十秒，只为确认"这里没有可翻的东西"太亏）。这一步只是预筛，目录里
         # 有 localization 目录却没条目也会放行，最终以行数为准。
@@ -1111,14 +1410,16 @@ class Api(object):
         except Exception:
             checks = [True] * len(targets)
 
-        for target, has_loc in zip(targets, checks):
+        for idx, (target, has_loc) in enumerate(zip(targets, checks), 1):
             if not has_loc:
                 continue
+            # 归档名要露出来：多归档模组（AMM 有 3 个）用户才知道扫到第几个了
+            _say(self._tr("正在扫描归档 %d/%d：%s") % (idx, total, target.name))
 
             work = os.path.join(
                 config_dir(), "work",
                 re.sub(r"[^A-Za-z0-9_.-]+", "_", target.name)[:60] or "mod")
-            sess = Lpipe.Session(target, cli, work, lang="zh-cn", log=None,
+            sess = Lpipe.Session(target, cli, work, lang="zh-cn", log=_say,
                                 source_lang=cfg["source_lang"])
             try:
                 sess.scan()
@@ -1522,12 +1823,17 @@ class Api(object):
                     "errors": [self._tr(
                         "这 %d 条归档行都没有条目 ID，无法定位到归档里的条目。"
                         "请重新加载该模组后再应用。") % len(items)]}
+        skips_before = len(sess.format_skips)
         n = sess.apply_rows(items, collect=applied)
+        # 格式串守卫拦下的条目：归到本次应用（Session 可能被复用，按增量取）。
+        fmt_skips = list(sess.format_skips[skips_before:])
         if not n:
             if own_tx and tx is not None:
                 tx.discard()
+            errors = self._fmt_skip_errors(fmt_skips)
+            errors.append(self._tr("没有可提交的译文"))
             return {"ok": 0, "fail": len(items), "mode": "resource",
-                    "errors": [self._tr("没有可提交的译文")]}
+                    "errors": errors}
 
         # 内容与归档里已有的完全一致 -> 不重建。以前这里照样重打包一遍：
         # 字节、时间戳、Vortex 部署状态全变，玩家看到的东西一个都没变。
@@ -1544,8 +1850,10 @@ class Api(object):
                 prev_xl = os.path.join(outdir, out_name + ".archive.xl")
             except Exception:
                 pass
-            return {"ok": n, "fail": 0, "mode": "resource", "unchanged": True,
-                    "errors": [], "archive": prev_archive if os.path.exists(
+            return {"ok": n, "fail": len(fmt_skips), "mode": "resource",
+                    "unchanged": True,
+                    "errors": self._fmt_skip_errors(fmt_skips),
+                    "archive": prev_archive if os.path.exists(
                         prev_archive) else "",
                     "xl": prev_xl if os.path.exists(prev_xl) else "",
                     "outdir": str(outdir), "resources": [],
@@ -1559,8 +1867,9 @@ class Api(object):
         if reuse:
             if own_tx and tx is not None:
                 tx.discard()
-            return {"ok": n, "fail": 0, "mode": "resource", "unchanged": True,
-                    "reused": True, "errors": [],
+            return {"ok": n, "fail": len(fmt_skips), "mode": "resource",
+                    "unchanged": True,
+                    "reused": True, "errors": self._fmt_skip_errors(fmt_skips),
                     "archive": reuse.get("archive", ""),
                     "xl": reuse.get("xl", ""),
                     "outdir": str(outdir), "resources": [],
@@ -1641,6 +1950,10 @@ class Api(object):
                 "%d 个资源转换失败已跳过（对应 %d 条未写入）：%s")
                 % (len(skipped_res), len(missed),
                    "、".join(sorted(missed_files)[:3])))
+        # 格式符守卫拦下的条目也要报出来，否则用户只看到写入数少了，
+        # 不知道是软件没翻还是被挡了。
+        if fmt_skips:
+            problems.insert(0, self._fmt_skip_errors(fmt_skips)[0])
         # 组包并校验通过才写记忆。以前资源模式一条都不写，同一个 mod 再打开
         # 一次还得重新机翻一遍，官方基线也跟着白跑。
         saved = self._remember_applied(items, applied) if report.ok else 0
@@ -1661,6 +1974,20 @@ class Api(object):
             "canInstall": report.ok,
             "memorySaved": saved,
         }
+
+    def _fmt_skip_errors(self, fmt_skips):
+        """格式串守卫拦下的条目，翻成人话（失败列表与批量报告都读它）。
+
+        以前 Session 只把这类条目记进 ``format_skips`` 就返回 False，调用方
+        只看到「写入条数少了几条」，不知道是被哪条规则挡的、也不知道去哪里
+        找原文——用户只会以为工具漏翻了。
+        """
+        if not fmt_skips:
+            return []
+        files = sorted({str(x[0]) for x in fmt_skips})
+        return [self._tr(
+            "%d 条译文的格式符和原文对不上, 写进去 format 会崩, 已跳过：%s")
+            % (len(fmt_skips), "、".join(files[:3]))]
 
     @staticmethod
     def _memory_origin(kind):
@@ -2059,6 +2386,10 @@ class Api(object):
         w._glossary = self._glossary_store
         w._terms = self._terms
         w._emit = lambda obj: None
+        # 覆盖文件的暂存区必须**共享**同一个 dict：文件由 worker 的 _pack_apply
+        # 产生，收尾在主会话里一次性合并（见 _flush_pack）。两个实例各拿一份
+        # 的话，flush 看到的是空字典，zip 里永远不会有覆盖文件。
+        w._pack_pending = self._pack_pending_state()
         return w
 
     def batch_audit(self, force=False):
@@ -2222,8 +2553,22 @@ class Api(object):
                              base=base, model=model, target=tgt,
                              on_event=self._mb_push, cancel=self._mb_cancel,
                              deploy=bool(self.settings.get("batch_deploy")),
-                             deploy_dry=bool(self.settings.get("batch_deploy_dry", True)))
+                             deploy_dry=bool(self.settings.get("batch_deploy_dry", True)),
+                             ledger=True,
+                             ledger_dir=self._ledger_dir())
                 self._mb_results = MB.run(ctx, items)
+                # 覆盖文件是边跑边攒的（collect），收尾一次性并进 zip，
+                # 顺带把账本 / 运行时 / 说明同步进去（见 _flush_pack）。
+                try:
+                    flushed = self._flush_pack()
+                    self._mb_push({"type": "mb-pack",
+                                   "zip": flushed.get("zip") or "",
+                                   "files": int(flushed.get("files") or 0),
+                                   "ok": int(flushed.get("ok") or 0)})
+                except Exception as fex:      # noqa: BLE001
+                    self._batch_log("flush pack failed: %r" % (fex,))
+                    self._mb_push({"type": "error", "action": "mb-pack",
+                                   "message": str(fex)})
             except Exception as ex:
                 import traceback
                 traceback.print_exc()
@@ -2743,11 +3088,16 @@ class Api(object):
             return
 
         done = len(hits) + kept
-        # 批大小：短文本 8 条一批（实测 0.11 秒/行），长文本降到 4 条。
-        # 长文本一批的输出更容易超预算，一旦解析失败要退化成逐条，代价是 4~8 倍。
+        # 批大小按平均长度动态定：目标每批约 6000 字符, 条数限制 4~24。
+        # 2026-11-10 实测（96 条真实 CP2077 短信文本, 平均 253 字符, Q4_K_M）:
+        #   4 条/批 ~1.3 秒/行、8 条 0.99、16 条 0.72、24 条 0.60、32 条 0.63（回升）
+        # 完整率全部 96/96 —— 加大批次不会让模型漏条（JSON 数组约束还在），
+        # 而每批的固定开销（prefill + 网络往返）被摊薄。32 条反而变慢说明
+        # 收益在 24 条附近饱和, 所以上限取 24。长文本自动降到 4~12 条。
         avg_len = (sum(len(str(rows[i].get("orig") or "")) for i in misses)
                    / max(1, len(misses)))
-        batch = 4 if avg_len > 160 else 8
+        batch = int(6000 / max(avg_len, 40))
+        batch = max(4, min(24, batch))
 
         # 2) 按原文去重：同一句话只发给模型一次。
         #
@@ -2789,6 +3139,9 @@ class Api(object):
             order = [k for k in order if k not in _hs]
         blanks = []          # 批量里被模型跳过的 key（空串 / 原样返回）
         echo_n = 0
+        # 本轮机翻写回的 (原文, 译文)。每批翻完就追加, 下一批的提示词里带上
+        # 最近若干条的摘要, 让模型沿用同一套译法, 不至于前后两批各翻各的。
+        digest_src = []
 
         # 预热：先把模型载入并按 keep_alive 保温。首次载入 27B 要 35-80 秒，
         # 以前这段时间整段算在第一个批次的 180 秒里（实测日志里空闲后的首个
@@ -2814,20 +3167,35 @@ class Api(object):
         failed_rows = 0
         consec = 0
         last_err = ""
-        for k in range(0, len(order), batch):
-            if self._stop.is_set():
-                self._emit({"type": "done", "translated": done, "memory": len(hits),
-                            "stopped": True})
-                self._trans_report(
-                    targets, memory=len(hits) - official_n, official=official_n,
-                    stopped=True, dedup=dedup_saved,
-                    reasons=[self._tr("已手动停止，剩下的还没有翻译")],
-                    rows=rows, force=force, written=written)
-                return
-            keys = order[k:k + batch]
+
+        # 一批 = 一个请求，请求之间没有任何共享状态，串行发等于让 GPU 空转。
+        # 2026-11-10 实测（Q4_K_M / RTX 4090 / BountyContracts 7836 条真实文本）:
+        #   24 条每批 串行       0.239 ~ 0.302 秒/行
+        #   24 条每批 四路并发   0.084 ~ 0.111 秒/行  (2.35 ~ 2.84 倍)
+        #   48 条每批 四路并发   只有 1.33 倍 —— 批次越大, 四个 slot 抢显存带宽
+        # 越凶, 并发和加大批次会互相抵消, 所以并发只配在 24 条这一档。
+        # 服务端要配 -np 4; 仍配 -np 1 时请求只是在 llama.cpp 里排队, 不会更慢
+        # 也不会出错, 只是没有收益。
+        _CONCURRENCY = 4
+
+        # 只并发「拼好的 prompt -> HTTP 请求」这一段。rows / 记忆 / _emit /
+        # digest 全部留在主线程：它们要么不是线程安全的，要么顺序有意义。
+        def _ask(keys, gl):
+            try:
+                return mt_client.translate_batch(
+                    base, mdl, [rep_text[c] for c in keys], target=tgt,
+                    glossary=gl), ""
+            except Exception as ex:
+                return None, str(ex)
+
+        def _gloss_for(keys):
             texts = [rep_text[c] for c in keys]
             terms = self._glossary_store.relevant(texts)
-            gloss = self._glossary_store.prompt_block(terms)
+            gl = self._glossary_store.prompt_block(terms)
+            # 摘要放在术语表前面: 先让模型看见「已经定下来的说法」, 再看术语要求。
+            digest = _change_digest(digest_src)
+            if digest:
+                gl = (digest + "\n\n" + gl).strip() if gl else digest
             # 官方语料挖出来的术语：让整批译文在专名与术语上保持一致。
             # 已经在用户术语表里的词不再重复（用户的优先）。
             if self.settings.get("use_official_tm", True):
@@ -2838,58 +3206,91 @@ class Api(object):
                                 for t in (terms or []) if t.get("src")}
                         extra = th.prompt_block(texts, skip=skip)
                         if extra:
-                            gloss = (gloss + "\n\n" + extra).strip()
+                            gl = (gl + "\n\n" + extra).strip()
                     except Exception:
                         pass
-            try:
-                outs = mt_client.translate_batch(base, mdl, texts, target=tgt,
-                                                 glossary=gloss)
-            except Exception as ex:
-                # 单批失败不再作废整轮。超时是偶发的（实测 58 个请求里 2 次），
-                # 以前一次就把已翻好的部分晾在那里、要用户重新点一遍；长任务
-                # 还有一半没跑完就整轮中止，等于白跑。
-                failed_batches += 1
-                failed_rows += sum(len(groups[c]) for c in keys)
-                consec += 1
-                last_err = str(ex)
-                self._emit({"type": "progress", "done": done,
-                            "total": len(targets), "memory": len(hits),
-                            "note": self._tr("这一批没翻成，先跳过：%s") % ex})
-                # 连续失败且一条都没翻出来 = 服务多半挂了，再跑也是白等。
-                if consec >= 5 and done == len(hits):
-                    self._emit({"type": "error", "message": str(ex)})
-                    self._trans_report(
-                        targets, memory=len(hits) - official_n, official=official_n,
-                        stopped=True, dedup=dedup_saved,
-                        reasons=[self._tr("调用本地模型失败：%s") % ex],
-                        rows=rows, force=force, written=written)
+            return gl
+
+        chunks = [order[k:k + batch] for k in range(0, len(order), batch)]
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _stopped():
+            self._emit({"type": "done", "translated": done, "memory": len(hits),
+                        "stopped": True})
+            self._trans_report(
+                targets, memory=len(hits) - official_n, official=official_n,
+                stopped=True, dedup=dedup_saved,
+                reasons=[self._tr("已手动停止，剩下的还没有翻译")],
+                rows=rows, force=force, written=written)
+
+        with ThreadPoolExecutor(max_workers=_CONCURRENCY) as _pool:
+            for w0 in range(0, len(chunks), _CONCURRENCY):
+                # 起新请求之前先看停止标记：停了就不再发新窗口。
+                if self._stop.is_set():
+                    _stopped()
                     return
-                continue
-            consec = 0
-            items = []
-            for key, out in zip(keys, outs or []):
-                text = (out or "").strip()
-                if not text:
-                    # 批量里被整条跳过。以前这里静默 continue，用户点应用时
-                    # 才发现文件只写回了一半，而报告里只有一句「空译文 N 条」。
-                    blanks.append(key)
-                    continue
-                if _echo(text, rep_text[key]):
-                    echo_n += 1
-                    blanks.append(key)
-                    continue
-                for i in groups[key]:
-                    rows[i]["trans"] = text
-                    rows[i]["transSrc"] = "machine"
-                    items.append({"i": i, "trans": text, "src": "machine"})
-                    written.add(i)
-                    # 记忆按行上的原始原文存，和 _baseline_fill 的查询键一致
-                    self._memory_store.put(rows[i]["orig"], tgt, text)
-                done += len(groups[key])
-            self._memory_store.save()
-            self._emit({"type": "rows", "items": items})
-            self._emit({"type": "progress", "done": done, "total": len(targets),
-                        "memory": len(hits)})
+                window = chunks[w0:w0 + _CONCURRENCY]
+                # prompt 在主线程拼好：术语表与摘要都要读共享状态。
+                jobs = [(keys, _gloss_for(keys)) for keys in window]
+                if len(jobs) == 1:
+                    results = [_ask(*jobs[0])]
+                else:
+                    futs = [_pool.submit(_ask, keys, gl) for keys, gl in jobs]
+                    results = [f.result() for f in futs]
+                for (keys, _gl), (outs, err) in zip(jobs, results):
+                    if err:
+                        # 单批失败不再作废整轮。超时是偶发的（实测 58 个请求里 2 次），
+                        # 以前一次就把已翻好的部分晾在那里、要用户重新点一遍；长任务
+                        # 还有一半没跑完就整轮中止，等于白跑。
+                        failed_batches += 1
+                        failed_rows += sum(len(groups[c]) for c in keys)
+                        consec += 1
+                        last_err = err
+                        self._emit({"type": "progress", "done": done,
+                                    "total": len(targets), "memory": len(hits),
+                                    "note": self._tr("这一批没翻成，先跳过：%s") % err})
+                        # 连续失败且一条都没翻出来 = 服务多半挂了，再跑也是白等。
+                        if consec >= 5 and done == len(hits):
+                            self._emit({"type": "error", "message": err})
+                            self._trans_report(
+                                targets, memory=len(hits) - official_n,
+                                official=official_n, stopped=True,
+                                dedup=dedup_saved,
+                                reasons=[self._tr("调用本地模型失败：%s") % err],
+                                rows=rows, force=force, written=written)
+                            return
+                        continue
+                    consec = 0
+                    items = []
+                    for key, out in zip(keys, outs or []):
+                        text = (out or "").strip()
+                        if not text:
+                            # 批量里被整条跳过。以前这里静默 continue，用户点应用时
+                            # 才发现文件只写回了一半，而报告里只有一句「空译文 N 条」。
+                            blanks.append(key)
+                            continue
+                        if _echo(text, rep_text[key]):
+                            echo_n += 1
+                            blanks.append(key)
+                            continue
+                        for i in groups[key]:
+                            rows[i]["trans"] = text
+                            rows[i]["transSrc"] = "machine"
+                            items.append({"i": i, "trans": text, "src": "machine"})
+                            written.add(i)
+                            # 记忆按行上的原始原文存，和 _baseline_fill 的查询键一致
+                            self._memory_store.put(rows[i]["orig"], tgt, text)
+                        digest_src.append((rep_text[key], text))
+                        done += len(groups[key])
+                    self._memory_store.save()
+                    self._emit({"type": "rows", "items": items})
+                    self._emit({"type": "progress", "done": done,
+                                "total": len(targets), "memory": len(hits)})
+                # 窗口里已经回来的批次全部落盘之后再收尾：用户点了停止，
+                # 已经翻好的那几批不该跟着丢掉。
+                if self._stop.is_set():
+                    _stopped()
+                    return
 
         # ---- 单条补翻：占位符密集的 + 批量里被跳过的（P12 / P17）
         #
@@ -2910,6 +3311,11 @@ class Api(object):
                         self._glossary_store.relevant([src_text]))
                 except Exception:
                     gl = ""
+                # 单条补翻同样带上摘要: 这条路最容易「换个说法再翻一遍」,
+                # 而它翻的往往正是同一批里的短界面词。
+                dg = _change_digest(digest_src)
+                if dg:
+                    gl = (dg + "\n\n" + gl).strip() if gl else dg
                 text = ""
                 for attempt in (0, 1):
                     try:
@@ -2937,6 +3343,7 @@ class Api(object):
                     self._memory_store.put(rows[i]["orig"], tgt, text)
                 done += len(groups[key])
                 retried += 1
+                digest_src.append((src_text, text))
                 self._emit({"type": "rows", "items": made})
                 self._emit({"type": "progress", "done": done,
                             "total": len(targets), "memory": len(hits),
@@ -3039,6 +3446,322 @@ class Api(object):
         self.meta = {}
         return {"ok": True}
 
+    # ------------------------------------------------------------ 账本
+    def _ledger_dir(self):
+        """账本输出目录（默认在用户自己的 CET 补丁包里，见 mod_ledger）。"""
+        try:
+            import mod_ledger
+            return mod_ledger.ledger_dir(self.settings)
+        except Exception:
+            return ""
+
+    def _ledger_apply(self, items):
+        """把译文写进账本（userdata\\ledger\\mods\\<文件夹>.lua），不改模组任何文件。
+
+        这是「应用到模组」现在的唯一动作：以前这里调 _do_apply 覆盖原文件，
+        现在只落账本，游戏侧由 zzz_CP2077_Localization 运行时替换。
+        """
+        import mod_ledger
+        root = self.root or ""
+        out = mod_ledger.ledger_dir(self.settings)
+        tgt = self.settings.get("target_lang", "简体中文")
+        base = normalize_api_base(self.settings.get("api_base", ""))
+        model = self.settings.get("model", "").strip()
+        rec = mod_ledger.write(out, root, items,
+                               staging_name=os.path.basename(root),
+                               target=tgt, base=base, model=model,
+                               log=self._batch_log)
+        self._batch_log("ledger: %s (%d 条)"
+                        % (rec.get("file"), rec.get("entries") or 0))
+        return {"ok": int(rec.get("entries") or 0), "fail": 0, "errors": [],
+                "ledger": rec}
+
+    # ---------------------------------------------------- 账本 ↔ 汉化包
+    # 账本是活的运行时数据：all.lua / names.lua 给游戏读，mods\*.lua 是
+    # 重建 all.lua 的源，index.json 是索引。它们全躺在 staging 的补丁包
+    # 目录里，而 zip 只带得动包里有的文件 —— 重装 zip 时 Vortex 会用包里
+    # 那几个条目覆盖 staging，25 个模组账本当场全丢。所以每次写完账本，
+    # 把整个 ledger 目录同步进 zip，让 zip 成为唯一真相。
+    # 汉化包只含一个 CET mod：账本 + 运行时 + 说明都在 zzz_CP2077_Localization 下。
+    # zzz_ 前缀不能去——CET 按目录名字母序加载，必须排在 MCM 之后，patch 它的
+    # provider 才轮得到。2026-11-20 之前是 zzz_mod_text_override +
+    # zzz_CP2077_mod_fix 两个目录（后者原本还是第一人称反射修复），合并掉了。
+    _PACK_MOD_DIR = ("bin/x64/plugins/cyber_engine_tweaks/mods/"
+                     "zzz_CP2077_Localization/")
+    _LEDGER_ZIP_REL = _PACK_MOD_DIR + "ledger/"
+
+    def _pack_zip_path(self):
+        """汉化包 zip 的落点：``<设置里的输出目录>\\CP2077 Localization Pack.zip``。
+
+        输出目录留空时跟随安装缓存推导（staging 是
+        ``E:\\Vortex Mods\\cyberpunk2077`` 就落到 ``E:\\Vortex Mods``）；
+        连 staging 都没设，才退回旧的 zh_pack_zip 绝对路径。
+        """
+        def _clean(v):
+            return str(v or "").strip().strip('"').strip("'")
+
+        d = _clean(self.settings.get("zh_pack_dir"))
+        if not d:
+            st = _clean(self.settings.get("staging_dir"))
+            if st:
+                d = os.path.dirname(st.rstrip("\\/"))
+        if not d:
+            zp = _clean(self.settings.get("zh_pack_zip"))
+            if zp:
+                return zp
+            d = r"E:\Vortex Mods"
+        return os.path.join(d, PACK_ZIP_NAME)
+
+    def _pack_work_dir(self):
+        """工具自己的补丁包工作目录（``userdata\\pack``）。
+
+        刻意不放在 Vortex 的 staging 里：那边归 Vortex 管，而工具是先产 zip、
+        用户才安装，两个动作之间有窗口期。写进 staging 只会两头不讨好——
+        Vortex 不认这些文件（不部署），装包时又被 zip 内容盖掉。
+        """
+        return os.path.join(config_dir(), "pack")
+
+    def _patch_map(self):
+        """工作目录 → {zip 内路径: 磁盘路径}。
+
+            pack\\fix\\init.lua    → .../zzz_CP2077_Localization/init.lua
+            pack\\fix\\README.txt  → .../zzz_CP2077_Localization/README.txt
+            pack\\ledger\\names.lua → .../zzz_CP2077_Localization/names.lua
+            pack\\ledger\\其他      → .../zzz_CP2077_Localization/ledger/...
+
+        names.lua 刻意提到账本目录的**上一级**：init.lua 的 loadNames(dir)
+        找的就是 `<账本目录的上一级>/names.lua`，留在 ledger\\ 里读不到——
+        2026-11-20 之前一直是这个位置，于是模组名从来没生效过。
+        """
+        out = {}
+        root = self._pack_work_dir()
+
+        fix = os.path.join(root, "fix")
+        if os.path.isdir(fix):
+            for base, _dirs, files in os.walk(fix):
+                for fn in files:
+                    p = os.path.join(base, fn)
+                    rel = os.path.relpath(p, fix).replace("\\", "/")
+                    out[self._PACK_MOD_DIR + rel] = p
+
+        led = os.path.join(root, "ledger")
+        if os.path.isdir(led):
+            for base, _dirs, files in os.walk(led):
+                for fn in files:
+                    p = os.path.join(base, fn)
+                    rel = os.path.relpath(p, led).replace("\\", "/")
+                    if rel == "names.lua":
+                        out[self._PACK_MOD_DIR + "names.lua"] = p
+                    else:
+                        out[self._LEDGER_ZIP_REL + rel] = p
+        return out
+
+    def _has_runtime(self):
+        """工作目录里有没有运行时 init.lua（没它装上去也不生效）。"""
+        return os.path.isfile(
+            os.path.join(self._pack_work_dir(), "fix", "init.lua"))
+
+    def _ledger_zip_map(self):
+        """账本目录 → {zip 内路径: 磁盘路径}，只收 .lua / .json。"""
+        out = {}
+        d = self._ledger_dir()
+        if not d or not os.path.isdir(d):
+            return out
+        for base, _dirs, files in os.walk(d):
+            for fn in files:
+                if not fn.lower().endswith((".lua", ".json")):
+                    continue
+                p = os.path.join(base, fn)
+                rel = os.path.relpath(p, d).replace("\\", "/")
+                out[self._LEDGER_ZIP_REL + rel] = p
+        return out
+
+    def _sync_ledger_to_zip(self):
+        """把补丁包整份（账本 + 运行时 + 说明）合并进汉化包 zip。
+
+        不能只并账本：zip 一旦被删/换掉，只并账本会造出一个没有运行时
+        init.lua 的空壳包。这里优先用工作目录整份重建。
+        """
+        import mod_pack
+        zp = self._pack_zip_path()
+        patch = self._patch_map()
+        files = patch or self._ledger_zip_map()
+        if not files:
+            self._batch_log("账本目录为空，跳过同步")
+            return {"files": 0, "zip": zp}
+        r = mod_pack.merge_into_zip(zp, files, log=self._batch_log)
+        self._batch_log("补丁包同步进 zip：%d 个文件（替换 %d，保留 %d）"
+                        % (len(files), r.get("replaced") or 0,
+                           r.get("kept") or 0))
+        return {"files": len(files), "zip": zp,
+                "replaced": r.get("replaced"), "kept": r.get("kept")}
+
+    # ------------------------------------------------------------ 分流
+    def _apply_all(self, items):
+        """按通道分流：设置层写账本，其余写成覆盖文件进汉化包。
+
+        原模组**一行不动**。含设置注册的文件整份留在原地（见 mod_pack.route），
+        那条路上的文案只能靠账本在显示层替换 —— 2026-11 因为直接改写设置文件，
+        整个模组不可用过一次，这条不能退。
+        """
+        import mod_pack
+        root = self.root or ""
+        cls = mod_pack.classify(root, items)
+        self._batch_log("分流：账本 %d 条 / 汉化包 %d 条 / 归档 %d 条 / 跳过 %d 条"
+                        % (len(cls["ledger"]), len(cls["pack"]),
+                           len(cls["archive"]), cls["skip"]))
+        out = {"ok": 0, "fail": 0, "errors": [], "ledger": None, "pack": None,
+               "archive": None}
+
+        if cls["ledger"]:
+            try:
+                lr = self._ledger_apply(cls["ledger"])
+                out["ok"] += int(lr.get("ok") or 0)
+                out["ledger"] = lr.get("ledger")
+            except Exception as ex:
+                out["errors"].append("账本写入失败：%s" % ex)
+
+        if cls["pack"]:
+            try:
+                pr = self._pack_apply(root, cls["pack"])
+                out["ok"] += int(pr.get("ok") or 0)
+                out["fail"] += int(pr.get("fail") or 0)
+                out["errors"].extend(pr.get("errors") or [])
+                out["pack"] = {"zip": pr.get("zip"),
+                               "files": pr.get("files"),
+                               "entries": pr.get("entries")}
+            except Exception as ex:
+                out["errors"].append("汉化包生成失败：%s" % ex)
+
+        # 归档层：交给现有的组包流程（它只写 _zh-cn.archive + .xl，原归档不动），
+        # 产物随后并进汉化包 zip 的 archive/pc/mod/ 下。
+        if cls.get("archive"):
+            try:
+                ar = self._do_apply(cls["archive"])
+                out["ok"] += int(ar.get("ok") or 0)
+                out["fail"] += int(ar.get("fail") or 0)
+                out["errors"].extend(ar.get("errors") or [])
+                out["archive"] = {"archive": ar.get("archive", ""),
+                                  "xl": ar.get("xl", ""),
+                                  "outdir": ar.get("outdir", "")}
+                self._merge_archive_into_zip(ar.get("archive"), ar.get("xl"))
+            except Exception as ex:
+                out["errors"].append("归档组包失败：%s" % ex)
+
+        if cls["settings_files"]:
+            self._batch_log("含设置注册、整份留在原地：%d 个文件"
+                            % len(cls["settings_files"]))
+
+        # 不管这轮走了哪条通道，zip 收尾时都必须是完整的补丁包
+        # （运行时 init.lua + 账本 + 说明）。重装 zip 会用它覆盖 staging，
+        # 缺的不只是译文，还有游戏侧替换设置文本的那个 mod。
+        if cls["ledger"] or cls["pack"] or cls.get("archive"):
+            try:
+                out["patchSync"] = self._sync_ledger_to_zip()
+            except Exception as ex:      # noqa: BLE001 - 同步失败不毁已写内容
+                out["errors"].append("补丁包同步失败：%s" % ex)
+        return out
+
+    def _pack_pending_state(self):
+        """批量暂存区：{"files": {zip路径: 磁盘路径}, "temp": [...], ...}。
+
+        300+ 个模组逐个重写一次 zip 会把时间全花在读写旧包上，所以批量走
+        collect：文件留在各自临时目录，收尾一次性合并（见 _flush_pack）。
+        """
+        p = getattr(self, "_pack_pending", None)
+        if p is None:
+            p = {"files": {}, "temp": [], "ok": 0, "fail": 0, "errors": []}
+            self._pack_pending = p
+        return p
+
+    def _flush_pack(self):
+        """把批量暂存的覆盖文件一次性合并进 zip，再同步账本。"""
+        import mod_pack
+        p = self._pack_pending_state()
+        zp = self._pack_zip_path()
+        files = dict(p["files"])
+        temps = list(p["temp"])
+        out = {"files": len(files), "zip": zp, "ok": p["ok"],
+               "fail": p["fail"], "errors": list(p["errors"])[:20]}
+        try:
+            if files:
+                mod_pack.merge_into_zip(zp, files, log=self._batch_log)
+                self._batch_log("覆盖文件合并：%d 个 → %s"
+                                % (len(files), os.path.basename(zp)))
+            out["patchSync"] = self._sync_ledger_to_zip()
+        finally:
+            for t in temps:
+                mod_pack.cleanup(t)
+            # 就地清空，不换新 dict —— worker 手里握着同一个引用
+            p["files"].clear()
+            p["temp"].clear()
+            p["errors"].clear()
+            p["ok"] = 0
+            p["fail"] = 0
+        return out
+
+    def _pack_apply(self, root, rows, collect=False):
+        """把文案写成覆盖文件，合并进汉化包 zip。原模组只读。
+
+        collect=True：只生成文件、暂存待合并（批量用），临时目录留给
+        _flush_pack 收尾删除，这里不能删。
+        """
+        import mod_pack
+        zip_path = self._pack_zip_path()
+        res = mod_pack.build_pack(root, rows, log=self._batch_log)
+        if not res["files"]:
+            mod_pack.cleanup(res["temp"])
+            return {"ok": 0, "fail": res["fail"], "errors": res["errors"],
+                    "zip": zip_path, "files": 0, "entries": 0}
+
+        names = {}
+        for rel, path in res["files"].items():
+            names[mod_pack.pack_zip_name(zip_path, rel)] = path
+
+        if collect:
+            p = self._pack_pending_state()
+            p["temp"].append(res["temp"])
+            p["files"].update(names)
+            p["ok"] += int(res["ok"] or 0)
+            p["fail"] += int(res["fail"] or 0)
+            p["errors"].extend(res["errors"] or [])
+            return {"ok": res["ok"], "fail": res["fail"],
+                    "errors": res["errors"], "zip": zip_path,
+                    "files": len(names), "entries": res["ok"],
+                    "collected": True}
+
+        try:
+            mod_pack.merge_into_zip(zip_path, names, log=self._batch_log)
+        finally:
+            mod_pack.cleanup(res["temp"])
+
+        st_path = mod_pack.state_path(self.settings)
+        st = mod_pack.load_state(st_path)
+        mod_pack.update_state(st, root, res["ok"], res["files"], zip_path)
+        mod_pack.save_state(st_path, st)
+
+        self._batch_log("汉化包：%d 个文件 / %d 条 → %s"
+                        % (len(names), res["ok"], os.path.basename(zip_path)))
+        return {"ok": res["ok"], "fail": res["fail"], "errors": res["errors"],
+                "zip": zip_path, "files": len(names), "entries": res["ok"]}
+
+    def _merge_archive_into_zip(self, ap, xlp):
+        """把组好的 `_zh-cn.archive` / `.xl` 并进汉化包 zip。
+
+        归档只能落在游戏目录的 `archive/pc/mod/` 下才会被加载，所以 zip 内
+        路径固定成这个，不管产物此刻躺在模组的哪个子目录。
+        """
+        import mod_pack
+        names = {}
+        for p in (ap, xlp):
+            if p and os.path.isfile(p):
+                names["archive/pc/mod/" + os.path.basename(p)] = p
+        if not names:
+            return
+        zip_path = self._pack_zip_path()
+        mod_pack.merge_into_zip(zip_path, names, log=self._batch_log)
+        self._batch_log("归档产物并入 zip：%d 个文件" % len(names))
+
     # ------------------------------------------------------------ 回填
     def apply(self, items, force=False):
         """异步: 立刻返回, 结果通过 applied / error 事件回推"""
@@ -3056,17 +3779,11 @@ class Api(object):
                         "pendingFiles": pending["files"][:5],
                         "error": ""}
         self._busy = True
-        self._emit({"type": "busy", "on": True, "text": i18n.tr("正在写回模组文件 ...")})
+        self._emit({"type": "busy", "on": True, "text": i18n.tr("正在生成汉化包 ...")})
 
         def work():
             try:
-                r = self._do_apply(items)
-                if int(r.get("fail") or 0) and r.get("errors"):
-                    self._log_failure(
-                        "apply",
-                        "fail=%s ok=%s\n%s" % (
-                            r.get("fail"), r.get("ok"),
-                            "\n".join(str(x) for x in r["errors"][:10])))
+                r = self._apply_all(items)
                 self._emit(dict(r, type="applied"))
             except Exception as ex:
                 import traceback
@@ -3109,6 +3826,125 @@ class Api(object):
 
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True, "started": True}
+
+    # ------------------------------------------------------------ 主题
+    def themes(self):
+        """可选配色主题列表（「默认」排第一）。"""
+        return {"ok": True, "themes": list_themes(),
+                "current": self.settings.get("theme") or ""}
+
+    def theme_css(self, name):
+        """取某主题的 CSS 文本，前端拿它做即时预览（不写设置）。"""
+        return {"ok": True, "css": theme_css(name)}
+
+    # ------------------------------------------------ 汉化包状态（管理用）
+    def pack_status(self):
+        """一眼看清汉化包里到底有什么：zip 本身 + 账本 + 覆盖进度。
+
+        「对不上」以前只能去资源管理器翻 staging 和 zip：zip 里 3 个条目、
+        staging 里 30 个文件，肉眼很难发现账本压根没进包。这里把三方数字
+        摆在一起，ledgerInZip < ledgerFiles 就是没同步。
+        """
+        import zipfile
+        import mod_pack
+
+        zp = self._pack_zip_path()
+        out = {
+            "zip": zp, "exists": False, "size": 0, "mtime": "",
+            "entries": 0, "ledgerInZip": 0, "textInZip": 0,
+            "archiveInZip": 0, "overrideInZip": 0, "patchInZip": 0,
+            "patchFiles": 0, "workDir": self._pack_work_dir(),
+            "hasRuntime": self._has_runtime(),
+            "ledger": {"dir": self._ledger_dir(), "files": 0, "mods": 0,
+                       "entries": 0, "all": 0, "mtime": "", "inSync": False},
+            "packed": 0, "error": "",
+        }
+        if os.path.isfile(zp):
+            try:
+                with zipfile.ZipFile(zp, "r") as z:
+                    names = z.namelist()
+                out["exists"] = True
+                out["size"] = os.path.getsize(zp)
+                out["mtime"] = time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.localtime(os.path.getmtime(zp)))
+                out["entries"] = len(names)
+                _mod = "/zzz_CP2077_Localization/"
+                out["ledgerInZip"] = sum(
+                    1 for n in names if _mod + "ledger/" in n)
+                out["overrideInZip"] = sum(
+                    1 for n in names if n.endswith(_mod + "init.lua"))
+                out["archiveInZip"] = sum(
+                    1 for n in names if n.startswith("archive/pc/mod/"))
+                out["patchInZip"] = sum(
+                    1 for n in names
+                    if _mod in n and _mod + "ledger/" not in n
+                    and not n.endswith(_mod + "init.lua"))
+                out["textInZip"] = (out["entries"] - out["ledgerInZip"]
+                                    - out["overrideInZip"]
+                                    - out["archiveInZip"]
+                                    - out["patchInZip"])
+            except Exception as ex:      # noqa: BLE001 - 坏 zip 不该卡住界面
+                out["error"] = "zip 读不动：%s" % ex
+
+        pm = self._patch_map()
+        out["patchFiles"] = len(pm)
+        d = out["ledger"]["dir"]
+        if d and os.path.isdir(d):
+            files = self._ledger_zip_map()
+            out["ledger"]["files"] = len(files)
+            lp = os.path.join(d, "all.lua")
+            if os.path.isfile(lp):
+                out["ledger"]["all"] = os.path.getsize(lp)
+                out["ledger"]["mtime"] = time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.localtime(os.path.getmtime(lp)))
+            ip = os.path.join(d, "index.json")
+            if os.path.isfile(ip):
+                try:
+                    with open(ip, "r", encoding="utf-8") as f:
+                        idx = json.load(f)
+                    ms = [m for m in (idx.get("mods") or [])
+                          if isinstance(m, dict)]
+                    out["ledger"]["mods"] = len(ms)
+                    out["ledger"]["entries"] = sum(
+                        int(m.get("entries") or 0) for m in ms)
+                except Exception:        # noqa: BLE001 - 索引坏了不影响结论
+                    pass
+            in_zip = (out["ledgerInZip"] + out["patchInZip"]
+                      + out["overrideInZip"])
+            out["ledger"]["inSync"] = bool(
+                out["exists"] and pm and in_zip >= len(pm))
+
+        try:
+            st = mod_pack.load_state(mod_pack.state_path(self.settings))
+            out["packed"] = len(st.get("mods") or {})
+        except Exception:                # noqa: BLE001 - 状态库坏了不致命
+            pass
+        return out
+
+    def sync_pack(self):
+        """手动把账本同步进 zip（界面上点「同步账本」）。"""
+        if self._busy:
+            return {"ok": False, "error": "busy"}
+        try:
+            r = self._sync_ledger_to_zip()
+        except Exception as ex:          # noqa: BLE001 - 回给界面显示
+            return {"ok": False, "error": str(ex)}
+        return {"ok": True, "files": r.get("files"), "zip": r.get("zip"),
+                "status": self.pack_status()}
+
+    def open_pack(self):
+        """在资源管理器里定位汉化包 zip（选中它）。"""
+        zp = self._pack_zip_path()
+        if not os.path.isfile(zp):
+            return {"ok": False, "error": self._tr("汉化包还不存在，先应用一次。")}
+        try:
+            import subprocess
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(zp)])
+        except Exception as ex:          # noqa: BLE001 - 打不开就给提示
+            return {"ok": False, "error": str(ex)}
+        return {"ok": True}
 
     def mark_as_code(self, file, orig):
         """把 (相对路径, 原文) 记进「这是代码」排除表, 以后不再当候选。
@@ -3429,6 +4265,9 @@ class Api(object):
                 continue
             lvl, why = E.swapped_spec_order(orig, it["trans"])
             if not lvl:
+                # 顺序没动、类型被换掉（%s → %d）同样报 number expected。
+                lvl, why = E.pct_spec_type_guard(orig, it["trans"])
+            if not lvl:
                 # 模型跑飞：同一段连写几十遍 / 占位符凭空多出一大截。语言包那一层
                 # （apply_text_target）不走 guard_level，所以这里统一先拦一道。
                 lvl, why = E.repeat_run_guard(orig, it["trans"])
@@ -3490,6 +4329,15 @@ class Api(object):
 
         for (src, tgt), group in text_groups.items():
             dst_path = os.path.join(modroot, tgt.replace("/", os.sep))
+            # 单文件多语言包：译文已经存在于源文件里的目标语言类，目标文件
+            # 本来就不存在、也不需要生成——生成出来会与源文件里的类同名
+            # （SYM_REDEFINITION，整个脚本层编译不过）。
+            if (tgt != src and not os.path.exists(dst_path)
+                    and locale_pack.source_has_target_class(
+                        modroot, src, target_code_for(tgt))):
+                ok += len(group)
+                settled += len(group)
+                continue
             snapshot(dst_path)
             snapshot(dst_path + ".bak")
             made = False
@@ -3568,6 +4416,25 @@ class Api(object):
                             add_fail(hit, reason)
                     if bad:
                         errors.append("%s (%d 条未写入)" % (tgt, len(bad)))
+                except Exception as ex:  # noqa: BLE001
+                    fail += len(group)
+                    errors.append("%s (%s)" % (tgt, ex))
+                    for it in group:
+                        add_fail(it, ex)
+            elif dst_path.lower().endswith(".json"):
+                # 数据表 JSON：按 JSON Pointer 改值再整份序列化。不能走下面
+                # 按行号匹配字面量那条路 —— `"键": "值"` 在 reds 词法下是两个
+                # 独立字面量，守卫会判「代码骨架不一致」然后整批拒绝。
+                pairs = [(str(it.get("ctx") or ""), it["orig"], it["trans"])
+                         for it in group]
+                try:
+                    n, details = E.apply_json_ex(dst_path, pairs)
+                    ok += n
+                    fail += len(details)
+                    for idx, _line, _orig, _trans, reason, level in details:
+                        add_fail(group[idx], reason, level)
+                    if details:
+                        errors.append("%s (%d 条未写入)" % (tgt, len(details)))
                 except Exception as ex:  # noqa: BLE001
                     fail += len(group)
                     errors.append("%s (%s)" % (tgt, ex))
@@ -3939,18 +4806,35 @@ class Api(object):
         return self._tr("连接成功 (HTTP %s) · 可用模型 %d 个: %s") % (
             200, len(ids), "、".join(ids[:5]))
 
+    def local_model_options(self, url=""):
+        """设置页模型下拉的数据源：列出服务上的模型与容量信息（只读）。"""
+        base = normalize_api_base(url or self.settings.get("api_base", ""))
+        if not base:
+            return {"ok": False, "error": self._tr("请先填写 API 地址"),
+                    "backend": "", "models": []}
+        try:
+            import mt_client
+            backend = mt_client.detect_backend(base)
+            items = mt_client.list_model_details(base)
+        except Exception as ex:
+            return {"ok": False, "error": str(ex), "backend": "", "models": []}
+        return {"ok": True, "backend": backend, "models": items}
+
     def local_model_status(self):
         """本地模型的开关与现状（不触发任何加载）。"""
         base = normalize_api_base(self.settings.get("api_base", ""))
         out = {"enabled": bool(self.settings.get("local_model_enabled", True)),
                "apiBase": base,
                "model": (self.settings.get("model") or "").strip(),
-               "ollama": False, "models": []}
+               "backend": "", "ollama": False, "llamacpp": False, "models": []}
         if not base:
             return out
         try:
             import mt_client
-            out["ollama"] = bool(mt_client._is_ollama(base))
+            backend = mt_client.detect_backend(base)
+            out["backend"] = backend
+            out["ollama"] = backend == "ollama"
+            out["llamacpp"] = backend == "llamacpp"
             out["models"] = mt_client.list_models(base)
         except Exception as ex:
             out["error"] = str(ex)
@@ -3976,6 +4860,45 @@ class Api(object):
             ok, detail = False, str(ex)
         return {"ok": True, "enabled": False,
                 "unloaded": bool(ok), "detail": str(detail)}
+
+    def enable_local_model(self):
+        """按设置页当前填的地址与模型，确保本机 llama-server 正跑着它。
+
+        已经在跑别的权重（Q8_0 ↔ Q4_K_M）时直接结束旧进程再换，不用去命令行
+        敲脚本。返回值里的 steps 是给界面显示进度用的。
+        """
+        base = normalize_api_base(self.settings.get("api_base", ""))
+        model = (self.settings.get("model") or "").strip()
+        if not base:
+            return {"ok": False, "error": self._tr("请先填写 API 地址"),
+                    "steps": []}
+        steps = []
+
+        def progress(msg):
+            steps.append(str(msg))
+
+        try:
+            import mt_client
+            ok, detail = mt_client.ensure_model(
+                base, model,
+                model_dir=self.settings.get("model_dir", "") or "",
+                llama_exe=self.settings.get("llama_exe", "") or "",
+                ctx=int(self.settings.get("model_ctx", 0) or 0) or mt_client.DEFAULT_CONTEXT,
+                on_progress=progress)
+        except Exception as ex:
+            return {"ok": False, "error": str(ex), "steps": steps}
+        if ok:
+            # 启用成功顺手把「启用本地模型」勾上，省得用户再点一次
+            if not self.settings.get("local_model_enabled", True):
+                try:
+                    new = dict(self.settings)
+                    new["local_model_enabled"] = True
+                    save_settings(new)
+                    self.settings = new
+                except Exception:
+                    pass
+        return {"ok": bool(ok), "detail": str(detail), "steps": steps,
+                "model": model}
 
     def report(self):
         meta = self.meta or {}
@@ -4028,14 +4951,20 @@ def _note_log(msg):
         pass
 
 
-def single_instance():
+def single_instance(dev=False):
     """同一时间只允许一个实例: 双开会让 WebView2 / pythonnet 抢资源, 表现为
-    "Failed to start embedded python interpreter" 或界面卡死。"""
+    "Failed to start embedded python interpreter" 或界面卡死。
+
+    dev 模式用独立的互斥名——否则开着正式版就没法同时开调试窗口，
+    而那正是最需要双开的场景（一边跑正式版对照，一边改界面）。
+    """
+    name = ("Cyberpunk2077ModTranslator.Mutex.Dev" if dev
+            else "Cyberpunk2077ModTranslator.Mutex")
     try:
         import ctypes
         k32 = ctypes.windll.kernel32
         k32.CreateMutexW.restype = ctypes.c_void_p
-        h = k32.CreateMutexW(None, False, "Cyberpunk2077ModTranslator.Mutex")
+        h = k32.CreateMutexW(None, False, name)
         if k32.GetLastError() == 183:      # ERROR_ALREADY_EXISTS
             return False
         _MUTEX.append(h)
@@ -4113,7 +5042,8 @@ def _apply_webview_args(settings):
 def main():
     _startup_log("main start")
     _crash_ready()
-    if not single_instance():
+    dev = os.environ.get("MT_DEV") == "1"
+    if not single_instance(dev=dev):
         _startup_log("single_instance: already running")
         try:
             import ctypes
@@ -4139,18 +5069,38 @@ def main():
                   % _wv_args)
     dark = bool(api.settings.get("dark_mode"))
     theme = "dark" if dark else "light"
+    theme_name = api.settings.get("theme") or ""
+    if seed_themes():
+        _note_log("已复制内置主题到 %s" % themes_dir())
     bg = "#17181C" if dark else "#F7F8FA"
-    window = webview.create_window(
-        "2077 Mod Translator",
-        html=build_html(theme=theme),
-        js_api=api,
-        width=1440, height=900,
-        min_size=(1000, 640),
-        frameless=True,
-        easy_drag=False,
-        resizable=True,
-        background_color=bg,
-    )
+    if dev:
+        # 开发模式：直接服务 web/ 目录，不走内联单页，改完文件自动刷新。
+        port = start_dev_server(web_dir(), theme=theme, theme_name=theme_name)
+        _note_log("dev 模式：http://127.0.0.1:%d/index.html（存盘自动刷新）"
+                  % port)
+        window = webview.create_window(
+            "2077 Mod Translator [dev]",
+            url="http://127.0.0.1:%d/index.html" % port,
+            js_api=api,
+            width=1440, height=900,
+            min_size=(1000, 640),
+            frameless=True,
+            easy_drag=False,
+            resizable=True,
+            background_color=bg,
+        )
+    else:
+        window = webview.create_window(
+            "2077 Mod Translator",
+            html=build_html(theme=theme, theme_name=theme_name),
+            js_api=api,
+            width=1440, height=900,
+            min_size=(1000, 640),
+            frameless=True,
+            easy_drag=False,
+            resizable=True,
+            background_color=bg,
+        )
     api._window = window
     _startup_log("window created")
 
@@ -4158,7 +5108,8 @@ def main():
     # 仍使用私密模式：退出时 pywebview 可清理临时用户数据，避免缓存锁残留。
     _startup_log("webview.start begin")
     try:
-        webview.start(debug=False, gui="edgechromium", private_mode=True)
+        # dev 模式开 WebView2 开发者工具（右键「检查」可用）
+        webview.start(debug=dev, gui="edgechromium", private_mode=True)
     except Exception as ex:
         _startup_log("webview.start error: %r" % (ex,))
         raise

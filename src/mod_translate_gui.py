@@ -409,9 +409,10 @@ class App:
                   style="Hint.TLabel").grid(row=4, column=1, sticky="w",
                                             pady=(int(2 * self.sc), 0))
         ttk.Label(body, justify="left", style="Hint.TLabel",
-                  text=tr("例:  Ollama  http://127.0.0.1:11434/v1\n")
-                       + "      LM Studio  http://127.0.0.1:1234/v1\n"
-                         "      vLLM / llama.cpp  http://127.0.0.1:8000/v1").grid(
+                  text=tr("例:  llama.cpp  http://127.0.0.1:8080/v1\n")
+                       + "      Ollama  http://127.0.0.1:11434/v1\n"
+                         "      LM Studio  http://127.0.0.1:1234/v1\n"
+                         "      vLLM  http://127.0.0.1:8000/v1").grid(
             row=5, column=0, columnspan=2, sticky="w",
             pady=(int(12 * self.sc), int(6 * self.sc)))
 
@@ -522,7 +523,7 @@ class App:
                        ui_codes=None, target_var=None, tm_var=None):
         base = normalize_api_base(url_var.get())
         if base and not re.match(r"^https?://[^\s/]+", base, re.I):
-            status_var.set(tr("地址格式不对，示例: http://127.0.0.1:11434/v1"))
+            status_var.set(tr("地址格式不对，示例: http://127.0.0.1:8080/v1"))
             return
         cfg = dict(self.settings)
         cfg["api_base"] = base
@@ -1243,7 +1244,11 @@ class App:
 
         def work():
             done = 0
-            batch = 8
+            # 批大小按平均长度动态定：目标每批约 6000 字符, 条数限制 4~24
+            # （2026-11-10 实测, 与 web_app 的批量路径同一套结论）。
+            _avg = (sum(len(str(r.get("orig") or "")) for r in misses)
+                    / max(1, len(misses))) if misses else 60
+            batch = max(4, min(24, int(6000 / max(_avg, 40))))
             try:
                 m = mt_client.resolve_model(base, model)
             except Exception as ex:

@@ -1,0 +1,44 @@
+/* @name 公司
+   @author 内置
+   @description 黑与红，冷硬的董事会风格；浅色版压在灰白上 */
+
+:root {
+  --bg: #F6F6F7;
+  --card: #FFFFFF;
+  --border: #E3E3E6;
+  --text: #1B1B1E;
+  --muted: #6B6B72;
+  --primary: #C8102E;
+  --primary-h: #B00D28;
+  --primary-a: #960B22;
+  --primary-soft: #FDECEE;
+  --on-primary: #FFFFFF;
+  --row-alt: #FBFBFC;
+  --row-filled: #FBF3F3;
+  --hover: #F2EEEF;
+  --select: #FBE0E3;
+  --select-fg: #8E0A1E;
+  --danger: #C8102E;
+  --success: #1F8A4C;
+}
+
+[data-theme="dark"] {
+  --bg: #0B0B0C;
+  --card: #141416;
+  --border: #2A2A2E;
+  --text: #ECECEF;
+  --muted: #9A9AA2;
+  --primary: #E01B24;
+  --primary-h: #F2323A;
+  --primary-a: #C0131C;
+  --primary-soft: #2E1216;
+  --on-primary: #FFFFFF;
+  --row-alt: #111112;
+  --row-filled: #1A1416;
+  --hover: #1E1E21;
+  --select: #3A161B;
+  --select-fg: #FF9AA0;
+  --danger: #FF4D4D;
+  --success: #35D07F;
+  --shadow: none;
+}

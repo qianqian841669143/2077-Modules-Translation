@@ -40,6 +40,39 @@ def _norm(text):
 _LANG_RE = re.compile(r"^[a-z]{2}-[a-z]{2}$")
 
 
+# ---- Lua 格式串守卫 -------------------------------------------------------
+#
+# 归档里的文案经常会被 mod 拿去走 `string.format`。原版作者已经按格式串写
+# 好了转义，比如 Repeatable NCPD Gigs 的描述：
+#
+#     "Average Quantity\nExample 1.5 = 1 item plus a 50%% chance for a 2nd."
+#
+# 译文把 `50%%` 写成「50% 概率」以后，`common.lua` 的
+# `self.description:format(value)` 直接抛 `invalid option '% 概' to 'format'`，
+# 而且是在注册设置项的中途——那条描述挂第 3 个分类，它一崩，后面的分类
+# 全部不再注册，设置页只剩前两个（v2.52.9 实测）。
+#
+# 所以写回前按「格式符序列一模一样」把关：`%%`、`%s`、`%d`、`%.2f` 的
+# 个数、顺序、内容都不能变；原文一个 `%` 都没有时，译文也不许冒出来——
+# 宁可这条留英文，也不能把格式串写坏。
+_LUA_PCT_RE = re.compile(r"%(?:\d+\$)?[-+0-9.]*[sdifqxX%]")
+
+
+def pct_specs(text):
+    """按出现顺序取出 Lua 格式符（含转义的 `%%`）。"""
+    return tuple(m.group(0) for m in _LUA_PCT_RE.finditer(text or ""))
+
+
+def pct_guard(orig, trans):
+    """译文的格式符布局能不能安全写回。返回 ``(ok, 原因)``。"""
+    a, b = pct_specs(orig), pct_specs(trans)
+    if a != b:
+        return False, "格式符不一致"
+    if "%" not in (orig or "") and "%" in (trans or ""):
+        return False, "原文没有百分号"
+    return True, ""
+
+
 def strip_lang(rel):
     """把路径里的语言标记抹成 `*`，用于跨语言配对同一份资源。
 
@@ -156,6 +189,7 @@ class Session(object):
         self.refs = {}          # rel -> [EntryRef]
         self.rows = []
         self.warnings = []
+        self.format_skips = []  # [(rel, entryId, orig, trans, 原因)]，格式串守卫拦下的
         self._sub_groups = {}   # rel -> subtitleGroup（从原 mod 的注册表里学到）
         self._byid = {}         # rel -> {entryId: entry}，回写时按主键定位
         self._touched = {}      # rel -> {entryId}，真正被写过的条目
@@ -191,10 +225,15 @@ class Session(object):
         cands = archmod.candidate_json(files, langs=langs)
         self._say("本地化候选 %d 个（语言 %s）" % (len(cands), "/".join(langs)))
 
-        # 每个候选只序列化一次，doc 留在内存里复用
+        # 每个候选只序列化一次，doc 留在内存里复用。
+        # 能整批转的就整批转：逐个调 serialize() 等于每个文件起一个 WolvenKit
+        # 进程，实测 2.79 秒/个，而 CLI 自报的转换耗时只有 1 毫秒——时间全在
+        # .NET 启动上。TraumaTeam 的 50 个候选逐个转要 139 秒，用户看到的就是
+        # 「提取卡住」；同一条命令带上全部路径只要 2.9 秒。
         docs = {}
+        got = self._serialize_batch(cands, raw)
         for rel in cands:
-            doc = self._load_resource(raw / _norm(rel), rel)
+            doc = self._load_resource(raw / _norm(rel), rel, ser=got.get(rel))
             if doc is not None:
                 docs[rel] = doc
 
@@ -216,16 +255,52 @@ class Session(object):
             if tgt:
                 self._sub_groups[_norm(tgt).lower()] = cr2w.sub_map_group(e)
 
-    def _load_resource(self, path, rel):
-        """序列化成 JSON 并读回来；失败只记警告，不中断整次扫描。"""
+    def _serialize_batch(self, cands, raw):
+        """先整批序列化一轮，返回 {rel: json 路径}。
+
+        批量产出是平铺的，撞名的文件 wkit.serialize_many 会整体拒绝并返回 {}，
+        这时退化成逐个转换（正确优先于快）。批量里缺哪个，回退由
+        `_load_resource` 单个补上，所以失败不会让条目凭空消失。
+        """
+        if len(cands) < 2:
+            return {}
+        out = self.workdir / "json" / "_batch"
         try:
-            ser = wkit.serialize(self.cli, path, self.workdir / "json" / _slug(rel))
-        except wkit.WkitError as ex:
-            self.warnings.append("序列化失败 %s: %s" % (rel, ex))
-            return None
-        except Exception as ex:  # noqa: BLE001 - 单个资源坏了不该拖垮整包
-            self.warnings.append("序列化异常 %s: %s" % (rel, ex))
-            return None
+            import shutil
+            if out.exists():
+                shutil.rmtree(out, ignore_errors=True)
+            srcs = {}
+            for rel in cands:
+                srcs[raw / _norm(rel)] = rel
+            self._say("批量序列化 %d 个候选 ..." % len(srcs))
+            done = wkit.serialize_many(self.cli, list(srcs), out)
+        except Exception as ex:  # noqa: BLE001 - 批量只是加速，失败就逐个来
+            self.warnings.append("批量序列化失败: %s" % ex)
+            return {}
+        back = {}
+        for src, ser in done.items():
+            rel = srcs.get(src)
+            if rel:
+                back[rel] = ser
+        miss = len(cands) - len(back)
+        if miss > 0:
+            self._say("批量缺 %d 个，逐个补 ..." % miss)
+        return back
+
+    def _load_resource(self, path, rel, ser=None):
+        """序列化成 JSON 并读回来；失败只记警告，不中断整次扫描。
+
+        ser 已给出时说明批量里转好了，跳过启动 CLI 的那一步。
+        """
+        if ser is None:
+            try:
+                ser = wkit.serialize(self.cli, path, self.workdir / "json" / _slug(rel))
+            except wkit.WkitError as ex:
+                self.warnings.append("序列化失败 %s: %s" % (rel, ex))
+                return None
+            except Exception as ex:  # noqa: BLE001 - 单个资源坏了不该拖垮整包
+                self.warnings.append("序列化异常 %s: %s" % (rel, ex))
+                return None
         try:
             return cr2w.load_doc(ser)
         except cr2w.Cr2wError as ex:
@@ -323,11 +398,17 @@ class Session(object):
         return idx
 
     def set_text(self, rel, entry_id, text):
-        """按 (资源, entryId) 写一条译文；找不到返回 False。"""
+        """按 (资源, entryId) 写一条译文；找不到或会破坏格式串时返回 False。"""
         entry = self._index(rel).get(str(entry_id))
         if entry is None:
             return False
-        if cr2w.get_text(entry) != text:
+        orig = cr2w.get_text(entry)
+        ok, why = pct_guard(orig, text)
+        if not ok:
+            self.format_skips.append(
+                (rel, str(entry_id), orig, text, why))
+            return False
+        if orig != text:
             self._dirty.setdefault(rel, set()).add(str(entry_id))
         cr2w.set_text(entry, text)
         self._touched.setdefault(rel, set()).add(str(entry_id))
@@ -517,6 +598,14 @@ class SessionGroup(object):
         out = []
         for s in self.sessions:
             out.extend(s.warnings or [])
+        return out
+
+    @property
+    def format_skips(self):
+        """格式串守卫拦下的条目，跨归档合并。"""
+        out = []
+        for s in self.sessions:
+            out.extend(getattr(s, "format_skips", []) or [])
         return out
 
     @property

@@ -1,0 +1,44 @@
+/* @name 网络行者
+   @author 内置
+   @description 紫底 + 品红，Netrunner 的终端感 */
+
+:root {
+  --bg: #F8F5FC;
+  --card: #FFFFFF;
+  --border: #E6DDF2;
+  --text: #1E1730;
+  --muted: #6E6484;
+  --primary: #7B2CBF;
+  --primary-h: #6A25A8;
+  --primary-a: #591E90;
+  --primary-soft: #F3E9FF;
+  --on-primary: #FFFFFF;
+  --row-alt: #FCFAFE;
+  --row-filled: #F6EEFF;
+  --hover: #F1EBFA;
+  --select: #EADCFB;
+  --select-fg: #5B1F93;
+  --danger: #D6336C;
+  --success: #2B8A66;
+}
+
+[data-theme="dark"] {
+  --bg: #100A18;
+  --card: #181022;
+  --border: #2E2140;
+  --text: #EDE6F7;
+  --muted: #9B8DB4;
+  --primary: #D000FF;
+  --primary-h: #E43BFF;
+  --primary-a: #B800E0;
+  --primary-soft: #2A1238;
+  --on-primary: #FFFFFF;
+  --row-alt: #150D1E;
+  --row-filled: #1E1428;
+  --hover: #221631;
+  --select: #3A1A4E;
+  --select-fg: #F0B6FF;
+  --danger: #FF3B7B;
+  --success: #2BFFB0;
+  --shadow: none;
+}

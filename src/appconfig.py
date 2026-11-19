@@ -21,16 +21,22 @@ try:
 except Exception:                      # 老版本 Python 没有这些名字, 忽略即可
     pass
 
-VERSION = "v2.52.9"
+VERSION = "v3.1.4"
 APP_DIR_NAME = "2077ModTranslator"
 
 TARGET_LANGS = ["简体中文", "繁體中文", "English", "日本語", "한국어",
                 "Русский", "Español", "Deutsch", "Français"]
 
 DEFAULT_SETTINGS = {
-    "api_base": "http://127.0.0.1:11434/v1",   # Ollama 默认
+    # 本机 llama.cpp 的 llama-server 默认端口（Ollama 是 11434）：两者的
+    # OpenAI 兼容层都认 /v1，但关闭思考的参数不一样，mt_client.detect_backend
+    # 会自己认，这里只决定「没填过地址时指向哪」。
+    "api_base": "http://127.0.0.1:8080/v1",   # llama.cpp 默认
     "model": "",                               # 留空 = 自动取 /models 第一个
     "dark_mode": False,                        # 深色界面
+    # 配色主题：空 = 内置配色；否则是 userdata\themes\<名>.css 的文件名（不含扩展名）。
+    # 主题只覆盖 CSS 变量，浅色/深色仍由 dark_mode 决定。
+    "theme": "",
     "lang": "",                                # 界面语言, 空 = 跟随系统
     "target_lang": "简体中文",                  # 翻译目标语言
     "use_tm": True,                            # 加载时套用翻译记忆
@@ -52,12 +58,22 @@ DEFAULT_SETTINGS = {
     # 批量面板把「无需翻译」（待译行数 0）的目录折起来：255 个 staging 目录里
     # 只有 127 个有待译行，一屏里近一半是噪音。
     "batch_hide_todo": True,
+    # ---- 汉化包输出 ----
+    # 汉化包 zip 的输出目录（包名固定为 CP2077 Localization Pack.zip）。
+    # 留空 = 跟随安装缓存目录推导：<staging 的上一级>；连 staging 都没设时
+    # 退回 E:\Vortex Mods。不想让它混在下载堆里，就在这里换个位置。
+    "zh_pack_dir": "",
     "verify_active": True,                     # 加载时提示该目录是否在部署清单里
     "res_source_lang": "en-us",                # 原始语言
     "res_skip_target": True,                   # 目标语言已存在则跳过
     "use_official_tm": True,                   # 套用官方双语语料（基线 TM）
     "official_weak": True,                     # 单词条的官方命中也算（标「待核」）
     "local_model_enabled": True,               # 启用本地模型（停用时立刻卸显存）
+    # ---- 「启用此模型」按钮用：本机 llama-server 与 GGUF 的位置 ----
+    # 点按钮时按这两个路径挑权重并拉起服务；换机器改这里即可，不必改代码。
+    "llama_exe": r"D:\llama\llama-server.exe",
+    "model_dir": r"D:\Models\Qwen3.5-9B",
+    "model_ctx": 262144,                       # 启动时的上下文长度
     # 关窗时问一句「要停掉本地模型吗」：Ollama 默认 keep_alive，关掉翻译器它
     # 也不会自己退出（9B 常占 6~8 GB、27B 常驻 21 GB）。嫌烦可以关掉这个勾。
     "ask_unload_model": True,

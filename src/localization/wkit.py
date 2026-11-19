@@ -151,12 +151,22 @@ def _error_tail(lines, keep=8):
 _SPAWN_LOCK = threading.Lock()
 
 
+def _no_window():
+    """子进程不许弹控制台窗口。
+
+    主程序是 windowed（spec 里 console=False），自身没有控制台；WolvenKit.CLI.exe
+    和 taskkill 都是控制台程序，Windows 会给它们新建一个黑窗口，每次闪现都抢走
+    一次焦点。批量里每个模组至少要解包一次、打包一次，窗口会连成串往外冒。
+    """
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def _kill_tree(proc):
     """连子进程一起杀掉。超时往往就是孙进程占着句柄不放。"""
     try:
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=15)
+                       timeout=15, creationflags=_no_window())
     except Exception:
         try:
             proc.kill()
@@ -186,7 +196,8 @@ def run(cli, args, timeout=DEFAULT_TIMEOUT, log=None):
                 with open(out_path, "wb") as fh:
                     proc = subprocess.Popen(cmd, stdout=fh,
                                             stderr=subprocess.STDOUT,
-                                            stdin=subprocess.DEVNULL)
+                                            stdin=subprocess.DEVNULL,
+                                            creationflags=_no_window())
         except FileNotFoundError:
             raise WkitError("WolvenKit.CLI.exe 无法启动：%s" % cli)
         try:
@@ -410,6 +421,56 @@ def serialize(cli, src, outdir, timeout=600, log=None):
     if not hits:
         raise WkitError("serialize 未产出 JSON：%s" % src.name)
     return hits[0]
+
+
+def serialize_many(cli, srcs, outdir, timeout=600, log=None):
+    """一次进程把多个 CR2W 转成 JSON，返回 {源路径: 产出路径}。
+
+    为什么需要它：`serialize()` 每调一次就起一个 WolvenKit 进程，实测
+    2.79 秒/文件，而 CLI 自己报的转换耗时只有 1 毫秒——时间全花在 .NET
+    启动上。TraumaTeam 有 50 个候选 JSON，逐个转要 139 秒，用户那边看起来
+    就是「提取卡住」。WolvenKit 的 `convert serialize` 本来接受多个路径，
+    同一条命令转完 50 个只要 2.9 秒。
+
+    批量输出的 JSON 是平铺的（不保留目录层级），同名文件会互相覆盖，所以
+    传入的 src 文件名必须唯一；这里也查一遍，撞名就整体放弃返回 {}，由
+    调用方退回逐个转换。找不到产物的源文件同样不出现在返回里——调用方据此
+    补单个转换即可。
+    """
+    srcs = [Path(s) for s in srcs]
+    if not srcs:
+        return {}
+    seen = set()
+    for s in srcs:
+        low = s.name.lower()
+        if low in seen:
+            return {}                 # 撞名：批量会互相覆盖，不干
+        seen.add(low)
+    cmds = [str(s) for s in srcs]
+    if sum(len(c) + 1 for c in cmds) > 24000:
+        return {}                     # 命令行有长度上限，太多了就分批由上层决定
+
+    out = _ensure_dir(outdir)
+    try:
+        run(cli, ["convert", "serialize"] + cmds + ["-o", str(out)],
+            timeout=timeout, log=log)
+    except WkitError:
+        # 只要有一个输入不存在/坏掉，CLI 就整个返回非 0（实测退出码 160），
+        # 但它照样把其余文件转完了。这里不能一看报错就放弃，否则一个坏文件
+        # 白白拖回逐个转换；到底谁没转出来，下面按名字对账，缺的由上层补。
+        pass
+    # 产出名是「原文件名 + .json」，例如 vomap_ru-ru.json → vomap_ru-ru.json.json
+    hits = {}
+    for p in out.rglob("*.json.json"):
+        hits[p.name.lower()] = p
+    back = {}
+    for s in srcs:
+        got = hits.get((s.name + ".json").lower())
+        if got is not None:
+            back[s] = got
+    if log:
+        log("批量序列化 %d/%d" % (len(back), len(srcs)))
+    return back
 
 
 def deserialize(cli, src, outdir, timeout=600, log=None, expect_name=None):

@@ -15,6 +15,7 @@ mod_text_engine.py —— 《赛博朋克 2077》模组设置文本提取/回填
 """
 import bisect
 import functools
+import json
 import os
 import re
 
@@ -30,7 +31,11 @@ except ImportError:                     # 单文件入口(pyinstaller / 直接�
 #   1: 初版
 #   2: v2.46.0 成对文本表 / 事件名守卫 / 官方弱匹配
 #   3: v2.48.0 注册器别名 / 菜单标题 return "…", opts
-RULES_VERSION = 3
+#   4: v2.7.0 数据表 JSON 提取（强文案字段开门, name/title 只在同记录有强字段时收）
+#   5: v3.1.0 条目表第 2 列 / 宿主 API 签名表 / UI 封装函数的形参名判定
+#   6: v3.1.1 数字前缀的 @runtimeProperty 查表键（01-DNR-Main 这类分类键）
+#   7: v3.1.2 displayValues 选项文本 / displayName 单词值放宽 / 比较位字符串不翻
+RULES_VERSION = 7
 
 TYPE_NAME = "显示名称"
 TYPE_DESC = "描述"
@@ -46,7 +51,12 @@ UI_TYPES = {TYPE_UI, TYPE_LONG}
 SRC_EXTS = {".reds", ".xml", ".lua", ".yaml", ".yml"}
 MAX_BYTES = 8 * 1024 * 1024        # 单个源文件上限, 超过则跳过(避免卡死)
 SKIP_DIRS = {"redmod_backup", ".git", "__pycache__", "node_modules",
-             "_internal", "dist", "build"}
+             "_internal", "dist", "build",
+             # 我们自己维护的两个 CET 补丁目录。labels.lua 里的 id 是 MCM 的
+             # sourceId，账本里的 o 是运行时用来查表的原文——都不是待翻文案。
+             # 被当成普通 .lua 扫进去，翻一次就把主键写坏（2026-11-20 实测过：
+             # 48 条假模组名 + 一条语法错误，整张表读不进来）。
+             "zzz_mcm_label_override", "zzz_cp2077_mod_fix"}
 
 # ---------------------------------------------------------------- 文本判定
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -61,6 +71,13 @@ HEX_RE = re.compile(r"^#?[0-9A-Fa-f]{6,8}$")
 ASSIGN_TAIL_RE = re.compile(
     r"""([A-Za-z_]\w*|\[\s*"[^"]*"\s*\]|\[\s*'[^']*'\s*\])\s*=\s*$""")
 LIST_HEAD_RE = re.compile(r"""([A-Za-z_]\w*)\s*=\s*\{[^{}]*$""")
+# 同一文件里出现在 `==` / `~=` 两侧的字符串是**标识符**, 不是文案:
+# `data.label = "Mods"` + `target:GetData().label == "Mods"` 是一对契约,
+# 只翻赋值侧会让比较恒假 —— 菜单入口照旧显示, 点进去什么也不发生
+# (NativeSettings 的 nativeSettings.fromMods 就是这么坏的, v3.1.4)。
+_COMPARE_LIT_RE = re.compile(
+    r"""(?:==|~=)\s*(?:"([^"\\\n]*)"|'([^'\\\n]*)')"""
+    r"""|(?:"([^"\\\n]*)"|'([^'\\\n]*)')\s*(?:==|~=)""")
 # 同上, 这两个在「每个字面量/每个调用」的路径上各调一次(_assigned_var / _assign_target)。
 _ASSIGN_VAR_RE = re.compile(r"([A-Za-z_]\w*)\s*=\s*[^=;\n]*$")
 _ASSIGN_LINE_RE = re.compile(
@@ -71,7 +88,13 @@ _CAMEL_BOUND_RE = re.compile(r"([a-z0-9])([A-Z])")
 _NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]+")
 _WS_RE = re.compile(r"\s")
 # 语言包文件: en_US.lua / zh-cn.lua / it-it.lua / English.reds / ChineseSimplified.reds
-LOCALE_FILE_RE = re.compile(r"(^|/)[a-z]{2}[-_][a-z]{2,4}\.(lua|reds|json)$", re.I)
+# 还要认 en-us-sms.json 这种「语言码 + 子集后缀」的写法: MissingPersons 与
+# PacificaTyphoon 的 languages/ 下每种语言都是 xxx-xx.json 与 xxx-xx-sms.json
+# 两份, 尾巴上多一段 -sms。原来的 `[a-z]{2}[-_][a-z]{2,4}\.` 要求语言码后
+# 立刻是扩展名, 认不出 -sms 那半 —— 它们会以「源文件」身份进提取表, 把整个
+# 英文原文包当待翻文本翻一遍（引擎以前不读 json, 所以这个口子一直没暴露）。
+LOCALE_FILE_RE = re.compile(
+    r"(^|/)[a-z]{2}[-_][a-z]{2,4}(?:[-_][a-z0-9]+)*\.(lua|reds|json)$", re.I)
 # GarageCoreLocalization_de.reds / strings_ko.lua: 「本地化字样 + 语言后缀」的文件名。
 # 这类文件是同一个键在别的语言里的副本, 当源文件扫会产出整片外文行。
 LOCALE_SUFFIX_RE = re.compile(
@@ -93,15 +116,36 @@ LOCALE_NAMES = {
 }
 
 
+# 纯语言码文件名: localization/en.lua / locales/de.lua / lang/fr.lua。
+# 这类文件既没有地区后缀 (en_US.lua) 也不是语言全名 (English.reds), 前面三条
+# 规则一条都认不出, 于是一整个 localization/ 目录会以「源文件」身份进提取表,
+# 翻完把中文写进德语/法语包 —— 那些语言玩家的界面被改成中文, 而中文用户
+# 看不出任何异常。只在「文件名是纯语言码 + 路径里带语言目录」时才判, 避免
+# 把普通目录下偶然叫 en.lua 的配置当语言包。
+LOCALE_CODE_STEM = {
+    "en", "de", "fr", "es", "it", "pt", "ru", "pl", "cz", "cs", "hu", "tr",
+    "uk", "zh", "cn", "tw", "jp", "ja", "kr", "ko", "nl", "th", "vi", "id",
+    "ro", "el", "sv", "no", "da", "fi", "hi", "ar", "he", "fa", "br", "mx",
+    "sr", "hr", "sk", "sl", "et", "lv", "lt", "ca", "ga", "is", "ms", "tl",
+    "ua",  # CDPR 用 ua 表示乌克兰语 (CustomQuickslots 的 localization/ua.lua)
+}
+LOCALE_DIR_RE = re.compile(
+    r"(^|/)(locali[sz]ations?|locales?|langs?|i18n|l10n|languages?)(/|$)", re.I)
+
+
 def is_locale_file(path):
     """判断是否为语言包文件 (en_US.lua / English.reds / zh-cn.json ...)"""
-    if LOCALE_FILE_RE.search(path.replace("\\", "/")):
+    norm = path.replace("\\", "/")
+    if LOCALE_FILE_RE.search(norm):
         return True
-    stem = os.path.splitext(os.path.basename(path))[0].lower()
+    stem = os.path.splitext(os.path.basename(norm))[0].lower()
     if re.sub(r"[^a-z]", "", stem) in LOCALE_NAMES:
         return True
     m = LOCALE_SUFFIX_RE.search(stem)
     if m and LOCALE_STEM_HINT.search(stem[:m.start()]):
+        return True
+    # 纯语言码文件名 + 语言目录 (localization/en.lua)
+    if stem in LOCALE_CODE_STEM and LOCALE_DIR_RE.search(norm):
         return True
     return False
 SQL_RE = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|WITH|PRAGMA)\s", re.I)
@@ -109,7 +153,66 @@ CODEY_RE = re.compile(r"(function\s*\(|\blocal\s+\w+\s*=|\breturn\s+|^\s*\{|\}\s
                       r"\bself\.|\bend\b\s*$)", re.I)
 
 
-MARKUP_RE = re.compile(r"</?[A-Za-z][^<>]*>")
+MARKUP_RE = re.compile(r"</?[A-Za-z][^<>]*>|</>")
+
+# 标记属性对: `color="MainColors.Blue"` / `l="eng"`。属性值是 CName / 枚举
+# 还是真台词, 决定了整串该不该翻 —— 见 is_markup_only()。
+_ATTR_PAIR_RE = re.compile(r'([A-Za-z_]\w*)\s*=\s*"([^"]*)"')
+# 属性值里的句读: `m="Kaka bèf."` 这种是台词, 要翻。
+_ATTR_TEXT_MARK_RE = re.compile(r"[.!?。！？,;:]\s*$")
+
+# 界面上的技术铺底标签: `SRC // TWEAKDB.DIFF`。全大写 + `//` + 右侧是技术
+# 词, 是「数据来源」注释, 不是句子; 而 `FNCB // SECURE TERMINAL` /
+# `NCR // INTELLIGENCE BRIEFING` 是终端页眉, 必须翻, 不能按形状一刀切。
+_DIAG_LABEL_RE = re.compile(r"^[A-Z0-9][A-Z0-9 .:+\-/]*//\s*([A-Z0-9 .:+\-/]+)$")
+_DIAG_TECH_RE = re.compile(r"\b(TWEAKDB|DIFF|SRC|JSON|LOG|DEBUG|DUMP|EOF|BUILD|"
+                           r"CONFIG|YAML|REDS|LUA)\b")
+
+
+def _attr_value_is_text(v):
+    """属性值里有没有自然语言。"""
+    if _ATTR_TEXT_MARK_RE.search(v):
+        return True
+    return bool(re.search(r"\s", v)) and len(re.findall(r"[A-Za-z]{2,}", v)) >= 2
+
+
+def is_markup_only(s):
+    """整串只是富文本 / 自定义标记的「属性壳」, 没有可翻的文案。
+
+    `<Input context="Combat" actionName="MeleeAttack" color="MainColors.Blue"
+    hold="Hide"></>` 的属性值全是 CName / 枚举(点分、连字符、无空格单词),
+    没有自然语言。翻它只会把标签削掉 —— 2026-11-14 Monowire E3 实测:
+    `"\\" color=\\"MainColors.Blue\\" hold=\\"Hide\\"></>"` 被译成 `</>`,
+    写回后整段消失, 游戏里 perk 提示把 `<Input context="…` 当普通文字打印了一屏。
+
+    但 `<kiroshi l="eng" o="V." t="V。"/>` 这种「文案写在属性值里」的标记必须
+    翻(Universal AI V Voice Swap 有 1712 条), 所以判据看属性值, 不看有没有
+    尖括号。
+
+    返回 True 表示「这是纯标记壳, 别翻」。
+    """
+    # redscript 源码里属性引号是转义的 (`color=\"X\"`), 先还原再判。
+    t = (s or "").strip().replace('\\"', '"')
+    if len(t) < 3:
+        return False
+    pairs = _ATTR_PAIR_RE.findall(t)
+    if not pairs:
+        return False
+    rest = _ATTR_PAIR_RE.sub("", t)
+    rest = re.sub(r"</>|</|/>|<|>", "", rest)
+    rest = re.sub(r"[\s\"'`]+", "", rest)
+    if len(rest) > 8:
+        return False
+    return not any(_attr_value_is_text(v) for _n, v in pairs)
+
+
+def is_diag_label(s):
+    """`SRC // TWEAKDB.DIFF` 这类全大写 + `//` + 右侧技术词的技术铺底标签。"""
+    t = (s or "").strip()
+    if re.search(r"[a-z]", t):
+        return False
+    m = _DIAG_LABEL_RE.match(t)
+    return bool(m) and bool(_DIAG_TECH_RE.search(m.group(1)))
 
 
 def _looks_like_path(t):
@@ -238,7 +341,11 @@ def is_lookup_call(callee):
 # is_loc_key 要求「三段以上」，而 NearbyLoot-Enabled / NearbyLoot-Sound 只有两段，
 # 于是被当成界面文本翻掉——写回 .reds 就把查表键改成了中文，引用当场断掉，
 # 表面上还正常（回退显示的就是那句中文），是最容易被忽略的一类损坏。
-_PROP_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:[-._][A-Za-z0-9_]+)+$")
+# 数字开头也要认：有的模组用 `01-DNR-Main` / `02-DNR-Rules` 这种带序号前缀的
+# 分类键给设置界面排序（Daemon Netrunning Revamp 的 ModSettings.category 全是
+# 这个形状）。只认字母开头的话整组分类都会被当成文案提取，翻掉之后就再也查
+# 不到表；同一分类只要有一行没翻，设置界面还会裂成两个组。
+_PROP_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_]*(?:[-._][A-Za-z0-9_]+)+$")
 # 段内还有大写拐点：NearbyLoot / GeneralCategory。普通连字符词组（Auto-Drive）没有。
 _CAMEL_SEG_RE = re.compile(r"^[A-Za-z]+[A-Z]")
 
@@ -316,6 +423,10 @@ def is_translatable(s):
         return False
     if _looks_like_path(t) or URL_RE.match(t) or HEX_RE.match(t):
         return False
+    # 富文本 / 自定义标记的属性壳 (`color="X" hold="Y"></>`)、界面技术铺底
+    # (`SRC // TWEAKDB.DIFF`) 都不是文案。见 is_markup_only()。
+    if is_markup_only(t) or is_diag_label(t):
+        return False
     if LOCALE_RE.match(t):
         return False
     if is_loc_key(t):
@@ -335,6 +446,34 @@ def is_translatable(s):
         return False
     words = re.findall(r"[A-Za-z]{2,}", t)
     return len(words) >= 2
+
+
+_RP_PURE_NUM_RE = re.compile(r"^[0-9.,%\s]+$")
+_CAMEL_IDENT_RE = re.compile(r"[a-z][A-Z]")
+
+
+def _rp_value_ok(s):
+    """@runtimeProperty 的值位：设置项的显示名 / 描述 / 下拉选项，本来就是
+    给玩家看的，不能套 ``is_translatable`` —— 它要求至少两个字母词，会把
+    ``Off`` / ``Everywhere`` / ``Bonuses (%)`` 这类合法选项整条挡掉
+    （SenSen AIO 的 13 条就是这么漏的：7 个 displayValues + 6 个 * (%)）。
+
+    仍然要拒的：纯数字（min/max/step/order 的 0 / 25 / 1.5）、查表键、
+    代码 token，以及驼峰字段名（``driveDownTheRoadIndefinitely``：有模组
+    把字段名误写进了 displayName）。
+    """
+    t = (s or "").strip()
+    if not t or len(t) > 200:
+        return False
+    if _RP_PURE_NUM_RE.match(t):
+        return False
+    if is_loc_key(t) or is_prop_loc_key(t) or looks_like_code_token(t):
+        return False
+    if is_markup_only(t) or is_diag_label(t):
+        return False
+    if not _WS_RE.search(t) and _CAMEL_IDENT_RE.search(t):
+        return False
+    return True
 
 
 # 当前目标语言 -> 该语言文本常用的 Unicode 字符范围。
@@ -483,6 +622,89 @@ def is_label_text(s):
     # 全大写缩写: HUD / MCM / OFF。代号 (ENC / CET) 不收, 见 is_acronym。
     if t.isupper() and t.isalpha() and 2 <= len(t) <= 8:
         return not is_acronym(t)
+    return False
+
+
+# ---------------------------------------------------------------- 单大写词 UI 标签
+#
+# `is_translatable` 要求「至少两个字母词」, 于是 `CLOTHING` / `COMMON` /
+# `NEWEST` / `PREVIEW` / `QUANTITY` 这类单词标签永远进不了表 —— 而它们恰恰
+# 是玩家最常看到的(筛选页签、品质名、排序按钮、数量栏)。2026-11-14 实测
+# Requisition: Screen.reds 有 302 条字面量, 只提出 28 条, 12 个品质名
+# (COMMON…ICONIC) 和 4 个筛选页签全漏。
+#
+# 放宽只能靠位置证据, 不能靠形状 —— 否则枚举值(MeleeBlock / Choice1)和
+# CName 也会被当文案翻掉。四条位置证据见 _ui_label_position()。
+_UI_LABEL_CALLS = {
+    "text", "settext", "setdefaulttext", "setplaceholdertext",
+    "outlinebutton", "ghostbutton", "button", "addbutton", "label",
+    "setlabel", "settooltip", "settextbyindex",
+}
+
+# 技术缩写不是给玩家念的词, 别因为「全大写单词」就收进来。
+_UI_WORD_SKIP = {
+    "HUD", "MCM", "UI", "UX", "NPC", "DPS", "HP", "RAM", "XP", "CET",
+    "RED4EXT", "TDBID", "SQL", "URL", "API", "CPU", "GPU", "PC", "PS",
+    "VR", "AI", "POI", "NCPD", "FPS", "DLC", "WIP", "TODO", "EOF",
+    "JSON", "XML", "YAML", "LUA", "REDS", "ID", "OK", "TRUE", "FALSE",
+    "NULL", "NIL", "SDK", "FFI",
+}
+
+# 形状: 全大写(允许数字与少量标点), 2~28 字符, 不含小写。
+_UI_WORD_RE = re.compile(r"^[A-Z0-9][A-Z0-9'&/+:.\-]{1,27}$")
+
+
+def _is_ui_word(s):
+    t = (s or "").strip()
+    if not (2 <= len(t) <= 28):
+        return False
+    if t in _UI_WORD_SKIP:
+        return False
+    return bool(_UI_WORD_RE.match(t))
+
+
+def _ui_label_position(text, pos):
+    """单大写词的位置证据。
+
+    1. 控件构造器 / SetText 的参数位 —— `OutlineButton(…, "NEWEST", 24)`
+    2. switch 分支 —— `case gamedataQuality.Common: return "COMMON";`
+    3. 纯字面量数组 —— `let labels = ["ALL", "CLOTHING", "WEAPONS", "OTHER"];`
+    4. 三元分支 —— `item.isClothing ? "TRY ON" : "PREVIEW"`
+    """
+    seg = text[max(0, pos - 160):pos]
+    # 1. 控件构造器参数位
+    m = re.search(r"([A-Za-z_]\w*)\s*\([^()]*$", seg)
+    if m and m.group(1).lower() in _UI_LABEL_CALLS:
+        return True
+    # 2. case …: return "X"
+    if re.search(r"\bcase\s+[\w.]+\s*:\s*return\s*$", seg):
+        return True
+    # 3. 纯字面量数组: 向左只允许逗号/空白, 跳过前面的字面量, 直到 '['
+    i, steps = pos - 1, 0
+    while i >= 0 and steps < 400:
+        c = text[i]
+        if c == "[":
+            return True
+        if c == "]":
+            return False
+        if c == '"':
+            j = i - 1
+            while j >= 0 and text[j] != '"':
+                if text[j] == "\\":
+                    j -= 1
+                j -= 1
+            if j < 0:
+                return False
+            steps += i - j
+            i = j - 1
+            continue
+        if c not in " \t\r\n,":
+            return False
+        i -= 1
+        steps += 1
+    # 4. 三元分支: 左侧有 '?' 且紧邻 ':' 之后
+    if "?" in seg and re.search(r":\s*$", seg):
+        return True
     return False
 
 
@@ -787,6 +1009,10 @@ SETTINGS_KEYS = {
     # 字段名一刀切 —— 有些模组在里面写的是一句真文案, 按字段名排除就整句漏翻。
     # v2.51.2 之前这里不收, 那正是「遮住真文本」的那一刀。
     "shortname": TYPE_NAME,
+    # ModSettings.displayValues.<枚举名> 的值是下拉选项文本（Off / Everywhere /
+    # Bonuses (%)）。键的最后一段是枚举名，倒数第二段才是 displayValues，
+    # 见 _extract_reds 里 @runtimeProperty 的解析。
+    "displayvalues": TYPE_OPT, "displayvalue": TYPE_OPT,
 }
 
 LIST_KEYS = {"labels", "options", "items", "choices", "entries", "values", "list"}
@@ -905,6 +1131,111 @@ KEY_CALLS = {
     "enumfromstring",
 }
 DEAD_CALLS |= KEY_CALLS
+
+# 回调注册函数: 括号里包的是**回调体**, 不是字符串参数。
+# `registerForEvent("onDraw", function() ... end)` 的 span 覆盖整个回调, callee_map
+# 于是把回调体里每一处「直接赋值给变量/表字段的字符串」都记成 registerForEvent
+# 的实参, 兜底段按 DEAD_CALLS 整片跳过 —— BountyContracts 的 6 条任务目标
+# (Go to the spot / Take down the target ...) 就是这么消失的, 而且走的是
+# `continue` 不是 drop(), noise 统计里完全静默, 报告上看不出任何异常。
+# 这几个只放行「回调体」这一种情形: 它们自己的事件名实参 (onDraw / onInit) 是
+# 单个词, 过不了 is_translatable, 不会因此被收进表。
+CALLBACK_CALLS = {"registerforevent", "observe", "override", "pcall"}
+
+# 宿主 (CET / 游戏) 提供的全局 API: 源码里只有调用、没有函数定义, 读不到形参名,
+# 只能人工登记签名。值是「可译文本所在的实参下标」(0 基)。
+# registerHotkey(hotkeyId, displayName, callback): 第 2 参是 CET 快捷键列表里显示
+# 给玩家的名字, 全是 2-3 个词 (Reset Weather / Toggle HDR Mode), 过不了兜底的 4 词
+# 门槛 —— WeatherSwitcher 11 个、LUTSwitcher 7 个、ESDE 5 个, 全库 29 条一直是英文。
+# 第 1 参是注册 id、第 3 参是回调体, 都不动。
+HOST_API_TEXT_ARGS = {
+    "registerhotkey": {1},
+}
+
+# `{ "SomeStyleId", "显示名", ... }` 这种一行一个条目的数组表: 首元素是 ASCII
+# 标识符 (注册 id / 内部名), 第 2 元素才是给玩家看的名字。
+# 判据必须落在「位置」上 —— 第 3 列常是查表 key (fogClouds / rain), 而 is_label_text
+# 对驼峰词是放行的, 靠名字猜会把 key 一起翻掉。
+ROW_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{2,}$")
+# 第 2 列里出现这些字符的一律不当文本: 路径、格式串、占位符、模板。
+ROW_TEXT_BAD_RE = re.compile(r"[/\\%{}<>|\r\n]")
+
+# ---- 2f) 模组自带 UI 封装函数的形参名判据 ----------------------------------
+# 这类函数没有统一签名, 判据只能落在「函数怎么写」上。下面三张表只服务于 2f,
+# 不影响其它分支 —— 尤其不能并进 DEAD_CALLS: setstatus 是界面状态栏、notify 是
+# CET 弹窗通知, 两者都该翻; debugprint/log 的日志则早就被别的分支译过一轮了。
+# 日志 / 错误包装: 实参是日志标签或异常说明, 翻了只会让用户排查时更难读。
+# 名单不是拍脑袋写的: 扫了全部 793 个 .lua, 判据是「函数体 <=400 字符, 且该形参
+# 与日志调用出现在同一行」—— 这样 addSwitch(path, label, desc, ...) 这类 UI 注册
+# 函数不会因为函数体里另有日志而被误判 (它的 label 从不进日志行)。
+# 反向也确认过: setStatus / Notify 的实参会进 table.insert(消息队列) 或 ImGui 控件,
+# 属于界面文本, 因此不在名单里。
+LOG_CALLS = {
+    "safecall", "safeexec", "safepcall", "safecallback", "safely", "safewrap",
+    "try", "attempt", "guard", "wrap", "protect", "execsafe", "watch",
+    "log", "logwarn", "logwarnonce", "loginfo", "logerror", "logerroronce",
+    "logdebug", "logtrace", "lognotice", "logfatal", "logat", "logonce",
+    "loggameplay", "spdlog", "print", "printf", "printmsg", "debugprint",
+    "debuglog", "logprint", "trace", "dump", "dumpvar", "dumpdebug",
+    "warn", "info", "debug",
+    "clearfailure", "npvreport", "npvfailure", "withnpvlog", "afterdelay",
+    "delayreport", "reporterror", "recorderror", "notifyerror", "callarpnative",
+    "raiseerror", "fail", "raise", "throw", "assert", "error",
+}
+# 形参名命中这些词 -> 这一位是给人看的文本。
+# 中文注释: 名字里带 name 的多数是显示名 (displayName / labelName), 但 fileName /
+# keyName 这类技术名要先被下面的黑名单拦掉。
+PARAM_TEXT_WORDS = (
+    "displayname", "labeltext", "labelname", "tabname", "titletext",
+    "label", "title", "text", "caption", "description", "desc", "message",
+    "msg", "tooltip", "tip", "hint", "hinttext", "placeholder", "prompt",
+    "subtitle", "content", "body", "headline", "wording",
+)
+# 形参名命中这些词 -> 这一位是键/路径/枚举, 绝不翻。
+PARAM_TECH_WORDS = (
+    "id", "key", "path", "file", "dir", "ext", "tag", "event", "eventname",
+    "cmd", "command", "type", "kind", "mode", "class", "cls", "record",
+    "uid", "uuid", "url", "uri", "fmt", "txtformat", "format", "code",
+    "flag", "opts", "options", "data", "db", "config", "cfg", "callback",
+    "handler", "regex", "pattern", "token", "func", "slot", "icon",
+    "color", "colour", "sound", "sfx", "result", "value", "val", "num",
+    "count", "idx", "index", "state", "status", "enabled", "visible",
+)
+
+
+def _param_kind(p):
+    """按形参名判定该位能不能收: 'text' 收, 'tech' 拒, '' 不确定(也不收)"""
+    q = (p or "").strip().lower()
+    if not q or q == "...":
+        return ""
+    for w in PARAM_TECH_WORDS:
+        if q == w or q.endswith(w) or q.startswith(w):
+            return "tech"
+    for w in PARAM_TEXT_WORDS:
+        if q == w or q.endswith(w) or q.startswith(w):
+            return "text"
+    return ""
+
+
+_RE_LUA_FUNC_PARAMS = (
+    re.compile(r"(?:local\s+)?function\s+([A-Za-z_][\w.:]*)\s*\(([^)\r\n]*)\)"),
+    re.compile(r"([A-Za-z_][\w.:]*)\s*=\s*function\s*\(([^)\r\n]*)\)"),
+)
+
+
+def _lua_func_params(text):
+    """扫本文件里的函数定义, 返回 {小写短名: [形参名, ...]}。
+    只认本文件: 跨文件猜签名会把 `Utils.safeCall(fn, label)` 这类日志包装
+    误当成 UI 函数 (实测 safecall 有 93 条日志标签会被翻成中文)。"""
+    out = {}
+    for rx in _RE_LUA_FUNC_PARAMS:
+        for m in rx.finditer(text):
+            short = m.group(1).split(".")[-1].split(":")[-1].lower()
+            if not short or short in out:
+                continue
+            ps = [x.strip() for x in m.group(2).split(",")]
+            out[short] = [x for x in ps if x and x != "..."]
+    return out
 
 
 def _callee_name(toks, i):
@@ -1044,6 +1375,43 @@ def codeware_text_calls(toks, lits, lang=""):
             if val_lit is not None and val_lit.quote in ("\"", "'"):
                 values[val_lit.start] = key_lit.inner if key_lit is not None else ""
     return values, key_starts
+
+
+# 字符串比较调用：Equals(x, "码") / NotEquals("码", x) / StrEqual / StrCmp。
+# 故意不含 Contains / StrBeginsWith —— 有些模组拿它们判断界面文本里有没有某个词，
+# 把那种字面量也拉黑会平白漏翻。
+_COMPARE_CALLS = {"equals", "notequals", "strequal", "strnotequal", "strcmp"}
+
+
+def comparison_literals(toks, lits):
+    """收集被用来做字符串比较的字面量（`Equals(x, "码")` 的两侧）。
+
+    同一个串常常既是「匹配码」又是「显示文本」：SenSen AIO 的击杀死因码，
+    Blame() 返回 "a car V blew up"，KillWhat()/ReasonCode() 再用 Equals
+    匹配它，ReasonText() 又把它当日志文案返回。翻掉匹配端，if 分支永远
+    不成立，横幅退化成兜底文案；而且两端是按行独立翻的，没有任何机制
+    保证译成同一个串。所以与 n"…" / KEY_CALLS 一致：**整串不翻**。
+    """
+    by_start = {l.start: l for l in lits}
+    spans = {}
+    for name, oi, close in call_spans(toks):
+        cur = spans.get(oi)
+        if cur is None or len(name) > len(cur[0]):
+            spans[oi] = (name, close)
+    out = set()
+    for oi, (name, close) in spans.items():
+        if str(name or "").split(".")[-1].lower() not in _COMPARE_CALLS:
+            continue
+        args = _split_args(toks, oi, close)
+        if len(args) != 2:
+            continue
+        for a, b in args:
+            if a != b or toks[a].kind != "str":
+                continue
+            lit = by_start.get(toks[a].start)
+            if lit is not None and lit.quote in ("\"", "'"):
+                out.add(lit.inner)
+    return out
 
 
 def callee_map(toks, spans):
@@ -1497,6 +1865,17 @@ _GETTER_RE = re.compile(
     r"\bget(label|actionlabel|name|title|description|desc|tooltip)\s*=\s*"
     r"function\s*\([^)]*\)\s*return\s*$", re.I)
 
+# `{ group = '/graphics/advanced', name = 'Anisotropy' }` —— 游戏设置系统的变量表。
+# group 是 `/graphics/advanced` 这种组路径，name 是
+# `Game.GetSettingsSystem():GetVar()` 的键。它和「显示名字段」长得一模一样
+# （`name = "..."`），但翻掉之后查表失败：Ultra+ 的「Snapshot Game Menu」按钮会
+# 直接 assert 崩在 inGameConfigGroup.cpp(76)
+# (`Could not find in-game config var '' in group '/graphics/advanced'`)。
+# 判据只认 group 的值以 `/` 开头，避免误伤 AppearanceMenuMod 那种
+# `{ name = '…', path = '…' }` 道具模板表（那里的 name 是真显示名）。
+_SETTINGS_GROUP_RE = re.compile(
+    r"\bgroup\s*=\s*[\"']\s*/[^\"'\n]*[\"']")
+
 
 def _brace_end(text, open_pos):
     """从 '{' 的位置出发, 返回与之配对的 '}' 之后的位置。
@@ -1536,6 +1915,13 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
     starts = [t.start for t in toks]
     # 名字位置（call 的方法名 / 插槽名 / CName）与查表键位置的字面量, 一律不进表
     name_starts = name_position_starts(toks, spans, by_start)
+    # 本文件里出现在 == / ~= 两侧的字符串一律视为标识符, 不进表 (见 _COMPARE_LIT_RE)。
+    # 赋值侧和比较侧必须保持同一个值, 否则读的时候永远对不上。
+    cmp_literals = set()
+    for _m in _COMPARE_LIT_RE.finditer(text):
+        _v = _m.group(1) or _m.group(2) or _m.group(3) or _m.group(4)
+        if _v:
+            cmp_literals.add(_v)
     wrappers = _wrapper_rules(text)
     aliases = _callee_aliases(text)
     # 模组自带的「英文 → 中文」数据表: 左边是查表 key, 翻它会把表打坏
@@ -1550,7 +1936,8 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
     # 语靠字符区分不出来，以前会被整段当成待翻文本，一个文件就多出几十条外语。
     sections = []
     for m in NOISE._LUA_LANG_KEY_RE.finditer(text):
-        code = (m.group(1) or "").lower()
+        # group(1)/group(2) 是带引号的 ["en-us"] 写法; group(3) 是无引号的 en = {
+        code = (m.group(1) or m.group(3) or "").lower()
         region = (m.group(2) or "").lower()
         lang = code + "-" + region if region else code
         open_pos = text.rfind("{", m.start(), m.end())
@@ -1590,6 +1977,11 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
             # 位置证据: 这是方法名/插槽名/CName/查表键, 不是文案。
             # 写进去功能会静默失效, 而界面上一点异常都看不出来。
             drop(NOISE.FAMILY_POSITION)
+            return
+        if lit.inner in cmp_literals:
+            # 这个字符串在本文件里还出现在 == / ~= 比较位上: 它是标识符。
+            # 翻掉赋值侧, 读的那一侧还是原值, 比较恒假, 功能静默失效。
+            drop(NOISE.FAMILY_IDENT)
             return
         if NOISE.is_data_row(lit.inner):
             # a|b|c|20 这种 id 表: 翻掉任一段, 语音池/fact 名就失配
@@ -1675,6 +2067,19 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
         typ = SETTINGS_KEYS.get(key)
         if not typ:
             continue
+        # `{ group = '/graphics/advanced', name = 'Anisotropy' }`：name 是
+        # GetVar 的键，不是显示名。只认「同一个 {} 条目里、group 值以 / 开头」
+        # 这一种形状 —— `{ name = 'Enable Mod', description = '...' }` 照常收。
+        if key == "name":
+            _open = text.rfind("{", 0, lit.start)
+            if _open >= 0 and "}" not in text[_open:lit.start]:
+                _item = text[_open:_brace_end(text, _open)]
+                if _SETTINGS_GROUP_RE.search(_item):
+                    drop(NOISE.FAMILY_IDENT)
+                    # 记进「位置证据」集合：后面的兜底段按赋值目标名还会再收一次
+                    # (text_evidence -> display)，不在这里挡住就白 drop。
+                    name_starts.add(lit.start)
+                    continue
         ok = (is_translatable(lit.inner) if typ in (TYPE_DESC, TYPE_MOD)
               else is_label_text(lit.inner))
         if ok:
@@ -1741,6 +2146,103 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
             continue
         take(lit, TYPE_DESC if is_desc else TYPE_NAME, key + " ={...}")
 
+    # ---- 2d) 一行一个条目的数组表: { "注册id", "显示名", 其它列... }
+    # CET 的快捷键/动作映射惯用这种形状 (WeatherSwitcher 的 toggleMap): 首元素是
+    # ASCII 标识符, 第 2 元素是玩家看到的名字。这些名字多为 2-3 个词 (Toggle All
+    # Fog / Toggle Clouds), 兜底的 4 词门槛收不到; 表名 toggleMap 又不在 LIST_KEYS
+    # 也不匹配 TEXT_TABLE_NAME_RE, 2a 不收; 它不是 `key = {...}` 也不是 2c 的成对
+    # 表 —— 19 行的表因此只译出了词数恰好够 4 的 5 行, 界面上一半中文一半英文。
+    # 只认第 2 列: 第 3 列是查表 key, 绝不能靠 is_label_text 猜。
+    # 但纯字符串表是**枚举/名字池**不是条目表: AutoreloaderSelectorList =
+    # {"Handgun","Rifle"}、TweakDB 的 visualTags {"Animals","Big","Lvl1"}、
+    # FLOOR_GROUPS {"Static","Terrain"}、名字池 {"Kenji","Hiro"} —— 这些翻一个就
+    # 废一个, 而条目表一行里必然混着非字符串元素 (toggleMap 的 isGroup 布尔、
+    # RainOverhaul 的默认值数字)。所以再加一道闸: 整表必须出现非字符串元素。
+    for i in range(len(toks) - 3):
+        if not (toks[i].kind == "op" and toks[i].val == "{"):
+            continue
+        if not (toks[i + 1].kind == "str" and toks[i + 2].kind == "op"
+                and toks[i + 2].val == "," and toks[i + 3].kind == "str"):
+            continue
+        ident = toks[i + 1].val
+        if not ROW_ID_RE.match(ident):
+            continue
+        lit = by_start.get(toks[i + 3].start)
+        if lit is None or lit.start in taken:
+            continue
+        if ROW_TEXT_BAD_RE.search(lit.inner):
+            continue
+        # 第 2 列必须是「短语」, 不能是单个标识符。RainOverhaul 的设置行是
+        # {section, key, label, min, max, default, kind}: 第 2 列 'Enabled' 是写进
+        # RainOverhaul_settings.ini 的键名, 真正的 label 在第 3 列 —— 收第 2 列会把
+        # ini 键名翻成中文, 插件读不到, 整组设置静默失效。toggleMap 这类的第 2 列
+        # 则是短语 (Toggle All Fog) 或已是中文, 两者靠「有没有空格/中文」区分。
+        if " " not in lit.inner and not CJK_RE.search(lit.inner):
+            continue
+        # 同层扫一遍: 有没有 str 以外的值 (数字 / true / 标识符 / 内嵌表)
+        depth, mixed, j = 0, False, i
+        while j < len(toks):
+            tk = toks[j]
+            if tk.kind == "op":
+                if tk.val in ("(", "{", "["):
+                    depth += 1
+                elif tk.val in (")", "}", "]"):
+                    depth -= 1
+                    if depth == 0:
+                        break
+            elif depth == 1 and tk.kind != "str":
+                mixed = True
+            j += 1
+        if not mixed:
+            continue
+        if is_label_text(lit.inner):
+            take(lit, TYPE_NAME, ident + " ={...}")
+
+    # ---- 2e) 宿主内置 API 的文本实参 (签名见 HOST_API_TEXT_ARGS)
+    for name, oi, close in spans:
+        idxs = HOST_API_TEXT_ARGS.get(name.split(".")[-1].lower())
+        if not idxs:
+            continue
+        args = _split_args(toks, oi, close)
+        for idx in idxs:
+            if idx >= len(args):
+                continue
+            for ti in _arg_strings(toks, args[idx]):
+                lit = by_start.get(toks[ti].start)
+                if lit is not None and is_label_text(lit.inner):
+                    take(lit, TYPE_NAME, name)
+
+    # ---- 2f) 模组自带的 UI 封装函数: 按形参名决定哪一位是文案
+    # 很多模组把 ImGui 包一层 (text / mutedText / section / tooltip / smallButton),
+    # 名字和签名各写各的, 唯一共同的证据是形参名: input(text) / button(text) /
+    # recordCombo(id, labelText, ...) / textColored(r, g, b, a, text)。
+    # 这些实参多是 2-3 个词 (Switch to / Apply to / Deselect All / Modder Tag),
+    # 兜底的 4 词门槛一律收不到, 界面上一整片英文。
+    # 三道闸: 函数名不在 LOG_CALLS; 本文件里能找到定义; 该位形参名判为文本。
+    # 四道闸是 _param_kind: 形参名叫 id/key/path/tag/color 的一位都不收。
+    _fparams = _lua_func_params(text)
+    if _fparams:
+        for name, oi, close in spans:
+            short = name.split(".")[-1].lower()
+            if short in LOG_CALLS or short in DEAD_CALLS or short in HOST_API_TEXT_ARGS:
+                continue
+            # 注: DEAD_CALLS 里的 print / spdlog / getText / json 等同样不该翻,
+            # 2f 自己也要守这道闸 —— AMM 把 `function error(msg)` 转发给 spdlog,
+            # 不查 DEAD_CALLS 就会把它的 3 条日志正文当界面文本收进表。
+            params = _fparams.get(short)
+            if not params:
+                continue
+            args = _split_args(toks, oi, close)
+            for idx, arg_span in enumerate(args):
+                if idx >= len(params):
+                    break
+                if _param_kind(params[idx]) != "text":
+                    continue
+                for ti in _arg_strings(toks, arg_span):
+                    lit = by_start.get(toks[ti].start)
+                    if lit is not None and is_label_text(lit.inner):
+                        take(lit, TYPE_UI, name)
+
     # ---- 3b) 通知缓冲区 / message 变量 / string.format 提示文本
     for name, oi, close in spans:
         last = name.split(".")[-1].lower()
@@ -1781,6 +2283,26 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
             continue
         take(lit, TYPE_NAME, "return …opts")
 
+    # ---- 3d) 语言段表: local TEXT = { en = { tab = "...", basic = "Basic", ... } }
+    # 一张表就是该模组的全部文案, 值常是 1-3 个词的标签 (Main Controls / Basic /
+    # Off / Classic)。这些键名 (control / basic / copies / sound / dashMode ...)
+    # 一个都不在 SETTINGS_KEYS 里, 走不到按位置收的分支; 词数又不够兜底的 4 词
+    # 门槛 —— ESDE 的二十多条标签就这么全漏, 界面上只有描述句是中文。
+    # 段归属由 keep_starts 决定: 只收源语言段 (en), 其它语言段的内容一律不进。
+    if keep_starts:
+        for lit in lits:
+            if lit.start in taken or lit.quote not in ("\"", "'"):
+                continue
+            if not any(start <= lit.start < end for start, end, _lg in sections):
+                continue
+            if not kept_section(lit.start):
+                continue
+            txt = lit.inner
+            if txt.startswith("##") or txt.startswith("###"):
+                continue
+            if is_label_text(txt):
+                take(lit, TYPE_OPT, "langtable")
+
     # ---- 4) 宽松兜底: 长句字面量
     if loose:
         for lit in lits:
@@ -1810,7 +2332,8 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
                 continue
             callee = lit_callee(cmap, toks, starts, lit.start) or ""
             last = callee.split(".")[-1].lower()
-            if last in DEAD_CALLS or callee.split(".")[0].lower() in DEAD_CALLS:
+            if (last in DEAD_CALLS or callee.split(".")[0].lower() in DEAD_CALLS) \
+                    and last not in CALLBACK_CALLS:
                 continue
             # 两段式查表键 (`GR-HudMore`) 在没有查表调用、或调用本身是查表函数时不收。
             # 这里要求「键形状」，所以 `this.Text("MBC-Key", "真文案")` 的 value 不受影响。
@@ -1906,18 +2429,40 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
         if (lit_callee(cmap, toks, starts, lit.start) or ""
                 ).split(".")[-1].lower() in KEY_CALLS:
             ident_texts.add(lit.inner)
+    if ext != ".xml":
+        # 比较位（Equals(x, "码")）也是「同一串两处语义不同」的一类：
+        # 翻了让 if 分支永远不成立（SenSen 的 "6thStreet_ow" 与 12 个击杀死因码）。
+        ident_texts |= comparison_literals(toks, lits)
 
     rp_re = re.compile(r"@runtimeProperty\(\s*\"([^\"]*)\"\s*,\s*\"((?:[^\"\\]|\\.)*)\"\s*\)")
     rp_types = {}
     rp_keys = set()          # 第二个参数是查表键的 (行, 值)
+    rp_mod_starts = set()    # ModSettings.mod 的页名 (行, 值)：一律不翻
+    rp_soft = set()          # displayName / displayValues 的值：用 _rp_value_ok 放宽
     if ext != ".xml":
         for m in rp_re.finditer(text):
-            key = m.group(1).split(".")[-1]
+            parts = m.group(1).split(".")
+            key = parts[-1]
+            if len(parts) >= 2 and parts[-2].lower() in ("displayvalues", "displayvalue"):
+                key = parts[-2]          # displayValues.<枚举名>：值才是选项文本
             typ = SETTINGS_KEYS.get(key.lower())
             if not typ:
                 continue
             line = text.count("\n", 0, m.start(2)) + 1
             rp_types[(line, m.group(2))] = (typ, "@runtimeProperty(" + m.group(1) + ")")
+            # category 是查表键 / CName（ModSettings 用 GetLocalizedTextByKey，
+            # mod 自己还会 GetVars(n"分类名")），不能放宽；description 已经都是
+            # 长句，也不需要。只给纯显示的两类开口子。
+            if key.lower() in ("displayname", "display_name", "displayvalues", "displayvalue"):
+                rp_soft.add((line, m.group(2)))
+            # 页名（ModSettings.mod）是 MCM 的页签 ID：注册处写 "X"，读取处多半
+            # 是 ModSettings.GetVars(n"X", …) 或 SenSenTune.I(…, n"X", …)。
+            # 只翻注册处、不翻 n"X"，两边就脱钩 —— 页签裂成两个（一个中文空壳、
+            # 一个英文原页），设置项读不到存的值而回退默认，界面上却看不出异常。
+            # 光靠下面的 ident_texts 守卫救不了：它要求同一个串在别处以 n"…"
+            # 出现过；读取逻辑在 Lua 里、或用变量传页名时就抓不到。这里主动记下来。
+            if key.lower() == "mod":
+                rp_mod_starts.add((line, m.group(2)))
             # "ModSettings.mod", "Nearby Auto Loot" 这种带空格的是真名字，
             # 保持可翻；无空格的连字符串才是查表键。
             if is_prop_loc_key(m.group(2)):
@@ -1934,6 +2479,11 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
         if lit.prefix:                       # 未知前缀：同样不当文本
             continue
         if lit.quote not in ("\"", ""):
+            continue
+        if is_markup_only(lit.inner) or is_diag_label(lit.inner):
+            # 纯标记属性壳 / 界面技术铺底: 翻掉会把标签削成残骸 (Monowire E3 的
+            # `<Input …>` 就是这么坏的), 或只是把来源注释换成更怪的中文。
+            drop(NOISE.FAMILY_TECH)
             continue
         if lit.start in chosen_locale:
             if not lit.inner.strip() or not is_translatable(lit.inner):
@@ -1987,24 +2537,55 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
                 ).split(".")[-1].lower() in KEY_CALLS:
             continue                          # StringToName("...") 之类的记录名/枚举名
         if not kept_section(lit.start):       # 同一文件里的其它语言段
-            drop(NOISE.FAMILY_LANG)
-            continue
+            # @runtimeProperty 的值位例外：它就是界面文本本身，只是同一个
+            # 文件里还并存着别的语言的段（SenSen 的语言包就是这么写的）。
+            is_rp_value = False
+            if rp_types and (lit.line, lit.inner) in rp_types:
+                is_rp_value = True
+            if not is_rp_value:
+                drop(NOISE.FAMILY_LANG)
+                continue
         key = (lit.line, lit.inner)
+        if key in rp_mod_starts:
+            # MCM 页名：注册处的 "X" 与读取处的 n"X" 必须逐字一致，
+            # 翻了注册处就只剩一个空壳页签（见上面 rp_mod_starts 的说明）。
+            drop(NOISE.FAMILY_IDENT)
+            continue
         if lit.start in codeware_values:      # this.Text("key", "value") -> 只收 value
             if not lit.inner.strip():
+                continue
+            if not is_label_text(lit.inner):
+                # `this.Text(root, "1", …)` 这种初始值不是标签 (Requisition 的
+                # 数量栏初始 "1")。is_translatable 对单数字返回 False, 但原来
+                # 这个分支没检查, 数字/单个标点也会被收进表。
                 continue
             typ = TYPE_UI
             ck = codeware_values[lit.start]
             ctx = 'this.Text("%s")' % ck if ck else "this.Text(...)"
         elif key in rp_types:
             typ, ctx = rp_types[key]
-            if not is_translatable(lit.inner):
+            if key in rp_soft:
+                if not _rp_value_ok(lit.inner):
+                    continue
+            elif not is_translatable(lit.inner):
                 continue
         else:
             # 没有 @runtimeProperty / this.Text / StrReplaceAll 这类机构性证据时，
             # 按「赋值目标名 + 调用者」判断这个字面量到底是不是界面文本。
             # 以前这里无条件当界面文本收下，逻辑重的模组会混进几千条内部状态字符串。
             if not is_translatable(lit.inner):
+                # 单大写词 UI 标签: is_translatable 要求 ≥2 个字母词, 这类
+                # 永远进不来 —— Requisition 的 12 个品质名 + 4 个筛选页签
+                # 就是这么漏的。只有位置证据齐全才放行。
+                if not (_is_ui_word(lit.inner)
+                        and _ui_label_position(text, lit.start)):
+                    continue
+                if lit.start in seen:
+                    continue
+                seen.add(lit.start)
+                _ctx_s = (lit_callee(cmap, toks, starts, lit.start)
+                          or _ctx(text, lit.start))
+                out.append((lit.line, TYPE_UI, _ctx_s, lit.inner))
                 continue
             call = lit_callee(cmap, toks, starts, lit.start) or ""
             tier, why = text_evidence(text, lit.start, call)
@@ -2105,6 +2686,243 @@ def _extract_yaml(text):
     return out
 
 
+# ---------------------------------------------------------------- 数据表 JSON
+# CET / Red4ext 模组把文案放在 `r6\storages\*` 或自己目录下的 .json 里。
+# 引擎以前完全不读 json，BountyContracts 三份表（casefiles 4570 / contracts
+# 1815 / bountypack 1458 = 7843 条）从来没进过待翻表 —— 玩家在游戏里看到的
+# 赏金目标姓名、委托简报、成功/失败台词全是英文。
+#
+# 难点不在「怎么翻」，在「哪些字段是给人看的」。同一个 `name`：
+#   {name, crime, briefing}         -> 赏金目标的姓名，要翻
+#   {name, pos, yaw, movementType}  -> AMM 场景里的路径点名，翻了 AMM 找不到节点
+#   {name, bands}                   -> AudioXL 均衡器预设名
+#   {type, key, holdModifier}       -> CustomQuickslots 快捷键，翻了一个键都按不出来
+# 光看字段名或值形状都会一刀切错：`Node 1` 和 `Neon Sky Rooftop Bar` 形状一样，
+# 前者是节点名、后者是酒吧名。
+#
+# 判据分三层，第一层是整份文件的开关：
+#   1. 文件级：整份 json 里没有任何强文案字段 -> 整份不收。这一条自动挡掉了
+#      itemfacts.json(faction=NUSA)、slots_2.0.json(key=IK_5)、
+#      Judy and Nibbles(Node 1/Walk)、Vehicle.*.json(车灯分区) 等全部高风险文件。
+#   2. 记录级：强字段自己就能收；name/title/category/section/group 只在
+#      **同一条记录**里已经出现强字段时才收。
+#   3. 值级：路径/颜色/查表键/全大写标识符/已是中文/太短，一律不收。
+JSON_STRONG_KEYS = frozenset({
+    # 赏金 / 委托 / 案件（bountypack / casefiles / contracts 实测）
+    "briefing", "crime", "dispatch", "tip", "package",
+    "success", "success_nonlethal", "success_lethal", "failed",
+    "stakeout", "spotted", "twist", "twist_followup",
+    "bribe_offer", "bribe_taken", "lifted", "grabbed", "blown",
+    # 通用
+    "desc", "description", "text", "body", "content", "message",
+    "summary", "subtitle", "tooltip", "hint", "prompt", "note",
+    "comment", "biography", "journal", "journalentry", "questtext",
+    "dialogtext", "speech", "narrative", "caption", "detail",
+    "details", "explanation", "warning", "error", "reason",
+    # AudioXL 音效静音表 `{key, label, group, section}`: key 是匹配键，
+    # 另外三个显示在 Redscript Config Framework 界面上。label 必须放强档，
+    # 否则整份文件没有别的强字段，开不了门（361 条会全部漏掉）。
+    "label",
+})
+JSON_COND_KEYS = frozenset({
+    "name", "title", "category", "section", "group",
+    "heading", "header", "tagline",
+})
+JSON_DENY_KEYS = frozenset({
+    "key", "id", "uid", "type", "kind", "file", "path", "modulepath",
+    "image", "icon", "recordid", "gang", "faction", "contract_type",
+    "twist_type", "classname", "class", "instance", "guid", "index",
+    "audio", "sound", "event", "events", "coords", "pos", "posx",
+    "posy", "posz", "yaw", "pitch", "roll", "nodes", "movementtype",
+    "sequencetype", "uniquename", "holsterranged", "armorvalue",
+    "maxvoices", "stream", "gain", "bands", "holdduration", "startapp",
+    "endapp", "holdmodifier", "button", "hide", "tags", "author",
+    "authorname", "modder", "version", "style", "font", "color",
+    "colour", "material", "texture", "mesh", "model", "setting_name",
+    "setting_value",
+})
+# 按字段名给个显示类型，前端标签用；没列到的一律当描述。
+JSON_TYPE_BY_KEY = {
+    "name": TYPE_NAME, "title": TYPE_NAME, "package": TYPE_NAME,
+    "category": TYPE_CAT, "section": TYPE_CAT, "group": TYPE_CAT,
+    "label": TYPE_UI, "hint": TYPE_UI, "tooltip": TYPE_UI,
+}
+# 全小写 + 下划线 = 内部枚举；全大写 = 内部标识符。两者都不是文案。
+_JSON_ENUM_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+_JSON_UPPER_RE = re.compile(r"^[A-Z0-9_]{3,}$")
+
+
+def _json_key_sets(obj, ptr, out):
+    """收集每个对象的键集合，按 JSON Pointer 存。"""
+    if isinstance(obj, dict):
+        out[ptr] = frozenset(str(k) for k in obj)
+        for k, v in obj.items():
+            _json_key_sets(v, ptr + "/" + str(k), out)
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            _json_key_sets(v, "%s/%d" % (ptr, i), out)
+
+
+def _json_tokens(text):
+    """产出 (kind, start, end)。kind 是 "s"(字符串) 或单字符标点。
+
+    只做定位，不理解语义：字符串里的 `{}[],:` 会被正确跳过，
+    `\\"` 也不会被当成字符串结束。
+    """
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            j = i + 1
+            while j < n:
+                ch = text[j]
+                if ch == "\\":
+                    j += 2          # 跳过被转义的字符
+                    continue
+                if ch == '"':
+                    break
+                j += 1
+            yield ("s", i, j + 1)
+            i = j + 1
+        elif c in "{}[],:":
+            yield (c, i, i + 1)
+            i += 1
+        else:
+            i += 1
+
+
+def _json_ptr(segs):
+    return "".join("/" + str(s).replace("~", "~0").replace("/", "~1")
+                   for s in segs)
+
+
+# 运行时状态 / 用户配置 / 工具元数据。这些 json 里也有像文案的字符串，但它们
+# 是「上次运行留下的东西」：翻了要么下一轮被覆盖，要么让模组读不到自己写的状态。
+# 实测踩到的两个：ModConfigurationMenu/config.json（2 条）、ModConfigurationMenuAPI/
+# data/dynamic_snapshots.json（`/mods/cet:luxe_glen/modes/values/setting` 3 条）。
+JSON_SKIP_BASENAMES = frozenset({
+    "config.json", "settings.json", "setting.json", "state.json",
+    "user.json", "user-old.json", "presets.json", "loot.json",
+    "phonelog.json", "spots.json", "gangspots.json", "gangtypes.json",
+    "scan_results.json", "mod_user_settings.json", "dynamic_snapshots.json",
+    "untracked_saves_cache.json", "collection.json",
+})
+JSON_SKIP_NAME_RE = re.compile(
+    r"(?:\.card\.json|\.json\.json|_cache\.json|-cache\.json|"
+    r"^settings-.+\.json)$", re.I)
+
+
+def is_json_skipped(fn):
+    """这个 json 文件名要不要整份跳过（只收 basename，不看到目录）。"""
+    low = fn.lower()
+    return low in JSON_SKIP_BASENAMES or bool(JSON_SKIP_NAME_RE.search(low))
+
+
+def _json_value_ok(s):
+    """值层面还有没有资格进待翻表。"""
+    t = (s or "").strip()
+    if len(t) < 2:
+        return False
+    if t in ("true", "false", "null"):
+        return False
+    if CJK_RE.search(t):
+        return False                 # 已经是中文
+    if _looks_like_path(t):
+        return False
+    if is_loc_key(t):
+        return False                 # UI-Labels-Resume 这种查表键
+    if _JSON_ENUM_RE.match(t) and len(t) < 40:
+        return False                 # 全小写标识符
+    if _JSON_UPPER_RE.match(t):
+        return False                 # 全大写内部名
+    return True
+
+
+def _extract_json(text):
+    """数据表 JSON 的提取。返回 [(行号, 类型, JSON Pointer, 原文), ...]
+
+    第三项放 JSON Pointer（`/gangs/valentino/0/name`）而不是行号：写回时按
+    pointer 定位，文件重新序列化之后行号会变，pointer 不会。
+    """
+    try:
+        root = json.loads(text)
+    except Exception:
+        return []
+    keys_at = {}
+    _json_key_sets(root, "", keys_at)
+    # 文件级开关：整份没有任何强文案字段，就整份不收。
+    if not any(k & JSON_STRONG_KEYS for k in keys_at.values()):
+        return []
+    # 行号要按偏移算；逐条 text.count("\n") 在 500 KB 的表上是平方复杂度，
+    # 先把所有换行位置取出来二分。
+    newlines = []
+    pos = text.find("\n")
+    while pos >= 0:
+        newlines.append(pos)
+        pos = text.find("\n", pos + 1)
+    out = []
+    stack = []                       # [[kind, key_or_index], ...]
+    toks = list(_json_tokens(text))
+    for idx, (kind, start, end) in enumerate(toks):
+        if kind == "{":
+            stack.append(["obj", None])
+        elif kind == "[":
+            stack.append(["arr", 0])
+        elif kind in ("}", "]"):
+            if stack:
+                stack.pop()
+        elif kind == ",":
+            if stack and stack[-1][0] == "arr":
+                stack[-1][1] += 1
+        elif kind == "s":
+            raw = text[start:end]
+            nxt = toks[idx + 1][0] if idx + 1 < len(toks) else ""
+            if nxt == ":":
+                if stack and stack[-1][0] == "obj":
+                    stack[-1][1] = raw      # 键的原文，值到达后才用得上
+                continue
+            if not stack:
+                continue
+            segs, ok = [], True
+            for skind, sval in stack:
+                if skind == "obj":
+                    if sval is None:        # 根对象 / 刚进对象就遇到值
+                        ok = False
+                        break
+                    try:
+                        segs.append(json.loads(sval))
+                    except Exception:
+                        ok = False
+                        break
+                else:
+                    segs.append(str(sval))
+            if not ok or not segs:
+                continue
+            key = segs[-1]
+            kl = str(key).lower()
+            if kl in JSON_DENY_KEYS:
+                continue
+            if kl in JSON_STRONG_KEYS:
+                pass
+            elif kl in JSON_COND_KEYS:
+                # 只在同一条记录里已经有强文案字段时才算文案
+                if not (keys_at.get(_json_ptr(segs[:-1]), frozenset())
+                        & JSON_STRONG_KEYS):
+                    continue
+            else:
+                continue
+            try:
+                val = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(val, str) or not _json_value_ok(val):
+                continue
+            line_no = bisect.bisect_right(newlines, start) + 1
+            out.append((line_no, JSON_TYPE_BY_KEY.get(kl, TYPE_DESC),
+                        _json_ptr(segs), val))
+    return out
+
+
 # ---------------------------------------------------------------- 对外接口
 def lang_of(path):
     """返回 scan_source 需要的语言名: lua / xml / reds / yaml。
@@ -2142,6 +2960,8 @@ def extract_from_file(path, target_locale="", loose=True, trace=False, errors=No
             return _extract_lua(text, loose=loose, trace=trace)
         if ext in (".yaml", ".yml"):
             return _extract_yaml(text)
+        if ext == ".json":
+            return _extract_json(text)
         return _extract_reds(text, ext, target_locale=target_locale,
                              loose=loose, trace=trace)
     except Exception as ex:
@@ -2155,22 +2975,33 @@ def iter_source_files(root, include_lua=True, include_locale_lua=False):
         dirnames[:] = [d for d in dirnames if d.lower() not in SKIP_DIRS]
         for fn in filenames:
             ext = os.path.splitext(fn)[1].lower()
+            full = os.path.join(dirpath, fn)
             if ext == ".lua":
                 if not include_lua:
                     continue
-                if not include_locale_lua and is_locale_file(fn):
+                if not include_locale_lua and is_locale_file(full):
                     continue
-                yield os.path.join(dirpath, fn)
+                yield full
             elif ext in (".reds", ".xml", ".yaml", ".yml"):
-                if not include_locale_lua and is_locale_file(fn):
+                if not include_locale_lua and is_locale_file(full):
                     continue
-                yield os.path.join(dirpath, fn)
+                yield full
+            elif ext == ".json":
+                # 数据表 json（BountyContracts/casefiles.json 这类）。语言包的
+                # json 不在这里收：`en-us.json` / `zh-cn-sms.json` 里的值是
+                # 「同一个 key 在某种语言里的译文」，提取逻辑与数据表完全不同，
+                # 混进来就等于把英文原文包当待翻文本再翻一遍。注意这一条不受
+                # include_locale_lua 影响 —— 那个开关是给 .lua/.reds 的。
+                if is_locale_file(full) or is_json_skipped(fn):
+                    continue
+                yield full
 
 
 def _count_locale_json(root):
     n = 0
     for dirpath, dirnames, filenames in os.walk(root):
-        if os.path.basename(dirpath).lower() in ("locales", "locale", "localization", "i18n", "lang"):
+        if os.path.basename(dirpath).lower() in ("locales", "locale", "localization",
+                                                 "i18n", "lang", "languages"):
             n += sum(1 for f in filenames if f.lower().endswith(".json"))
     return n
 
@@ -2192,7 +3023,7 @@ def extract_root_ex(root, include_lua=True, loose=True, include_locale_lua=False
     """
     data = {}
     meta = {"files": 0, "lua_files": 0, "reds_files": 0, "yaml_files": 0,
-            "types": {},
+            "json_files": 0, "types": {},
             "locale_json": _count_locale_json(root),
             "locale_lua": _count_locale_lua(root), "skipped_target": 0,
             "locale_pairs": 0, "locale_pairs_used": 0, "noise": {},
@@ -2222,6 +3053,9 @@ def extract_root_ex(root, include_lua=True, loose=True, include_locale_lua=False
             elif ext in (".yaml", ".yml"):
                 items = _extract_yaml(text)
                 meta["yaml_files"] += 1
+            elif ext == ".json":
+                items = _extract_json(text)
+                meta["json_files"] += 1
             else:
                 reds_stats = {}
                 items = _extract_reds(text, ext, target_locale=target_locale,
@@ -2336,8 +3170,17 @@ def escape_for(text, quote, yaml=False):
 #   - `s += ", 已计入" + IntToString(n)` 是 redscript 拼 UI 文本的惯用写法;
 #   - `"… (the mod folder is not writable …); the previous settings file is kept"`
 #     是屏幕上的说明文字, 只是句子里正好出现了「);」。
-# 真正要防的插值断裂一定会命中 \\\( 或 \)\), 这两支保留就够了。
-_CODEY_FRAGMENT_RE = re.compile(r"\\\(|\)\)|^\s*[\)\]]")
+# 插值断裂一定会命中 \\\( 或 \)\), 这两支是没有争议的。
+_CODEY_FRAGMENT_RE = re.compile(r"\\\(|\)\)")
+
+# 但「以 ) ] 开头」这一支不能一刀切。SenSen 的 UI 文案大量用 + 拼接,
+# 提取时字符串字面量会被拆开, 尾巴就成了以右括号开头的半句:
+#   "…(StealthRunner" + StateName(sr.state) + "): not held against V"
+#   kind + " by " + Name(action) + ") after the retry"
+# 这些都是要翻的正文。真正的代码碎片去掉那个右括号后会露出运算符或括号
+# 配对的残渣（`) + 1`、`) = 5`、`) -> foo`）。
+_LEAD_CLOSE_RE = re.compile(r"^[\)\]]")
+_CODE_SYMBOLS_RE = re.compile(r"[=<>{}|&\[\]()]|->|::")
 
 
 def looks_like_code_fragment(t):
@@ -2356,7 +3199,18 @@ def looks_like_code_fragment(t):
         return False
     if CJK_RE.search(s):
         return False
-    return bool(_CODEY_FRAGMENT_RE.search(s))
+    if _CODEY_FRAGMENT_RE.search(s):
+        return True
+    if not _LEAD_CLOSE_RE.match(s):
+        return False
+    rest = s[1:].strip()
+    # 去掉开头那个右括号以后：以运算符开头、或带等号/箭头/花括号/方括号/
+    # 圆括号这类配对小符号的，是代码；否则是两个词以上的自然语言尾巴，该翻。
+    if rest[:1] in "+-*/%=<>!&|":
+        return True
+    if _CODE_SYMBOLS_RE.search(rest):
+        return True
+    return len(rest.split()) < 2
 
 
 # 译文必须把原文的标记和占位符带回来。
@@ -2372,6 +3226,12 @@ def looks_like_code_fragment(t):
 _MARKUP_TAG_RE = re.compile(r"<[^<>\n]{1,400}>")
 _PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][^{}\n]{0,40}\}")
 _PCT_SPEC_RE = re.compile(r"%(?:\d+\$)?[-+0-9.]*[sdifqxX%]")
+
+# 模型偶尔把占位符的右花括号写成 `]`（输出 JSON 数组的惯性）：
+# `You bought {name}.` → 「你购买了{name]。」。四个存档里实测四条都是这个
+# 形状。只差一个字符、意图明确，能修就修 —— 否则会被「占位符丢失」拦下，
+# 整条等人工重翻。
+_BRACE_TYPO_RE = re.compile(r"\{([A-Za-z_][^{}\n]{0,40})[\]\)）】｝]")
 
 
 def _count(seq):
@@ -2439,6 +3299,17 @@ def repair_markup(orig, trans):
     if trail and trail == lead:
         trail = ""                      # 只有一个自闭合标签, 不是包裹
     fixed = trans
+    # 占位符右花括号写成 ] / ）/ 】/ ｝ 的先纠回来，再数「丢没丢」。只纠正
+    # 修正后确实命中原文占位符的那些，避免动到正文里本来就有的方括号。
+    want_names = _PLACEHOLDER_RE.findall(orig)
+    if want_names:
+        want_set = set(want_names)
+
+        def _untypo(m):
+            cand = "{" + m.group(1) + "}"
+            return cand if cand in want_set else m.group(0)
+
+        fixed = _BRACE_TYPO_RE.sub(_untypo, fixed)
     plain = _plain_escapes(fixed)
     if lead and _plain_escapes(lead) not in plain:
         fixed = lead + fixed
@@ -2514,6 +3385,35 @@ def swapped_spec_order(orig, trans):
     # 原因写成固定一句: 失败列表里本来就带原文和译文两列, 动态拼串反而没法进
     # locales（界面语言切英文时这句会裸露成中文）。
     return "soft", "占位符顺序变了, string.format 按位置取参数会崩"
+
+
+def pct_spec_type_guard(orig, trans):
+    """译文把占位符的**类型**换掉时返回 ``(级别, 原因)``; 没换返回 ``("", "")``。
+
+    补 swapped_spec_order 的盲区: 那个函数要求「个数 ≥ 2 且顺序不同」才报,
+    于是下面两种写法它一律放过 ——
+
+        "Deals %d damage"  →  "造成 %s 伤害"     (%d → %s, 只有一个占位符)
+        "Deals %d of %d"   →  "造成 %s / %s"     (个数对上, 类型全换)
+
+    写回后 ``string.format`` 第 1 个参数要 ``%d`` 却拿到字符串, 直接
+    ``bad argument #1 to 'format' (number expected, got string)`` ——
+    和顺序错是同一个崩法, 只是不经过 swapped 那条判断。
+
+    个数对不上(多一个/少一个)不在这里管: 那是「丢失」检查的活, 否则同一条
+    会被报两遍、原因还互相矛盾。级别给 soft, 与 swapped_spec_order 一致:
+    原文那个位置本来就传数字的写法(``"%s items", #list``)用户还能单条放行。
+    """
+    a = _pct_specs(orig)
+    b = _pct_specs(trans)
+    if a == b:
+        return "", ""
+    if len(a) != len(b):
+        # 条数不同: 交给占位符「丢失 / 凭空多出」的检查, 不在这里抢着报。
+        return "", ""
+    # 条数相同但内容不同 —— 顺序问题 swapped_spec_order 已先判过, 走到这里
+    # 的就是类型替换(%d↔%s↔%f)。
+    return "soft", "占位符类型被换掉了, string.format 会报参数类型错"
 
 
 # 模型偶尔会「跑飞」：同一段话连写几十遍。翻译记忆里实测两条 ——
@@ -2675,6 +3575,34 @@ def _edge_spaces(text, lit, orig, trans):
     return pre + trans + post
 
 
+_CJK_TAIL_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]$")
+
+
+def _polish_trans(orig, trans):
+    """把译文的「首尾壳」对齐原文 —— 只动空壳, 不动正文。
+
+    UI 文案常被拆成片段再拼 (`"ADD THE " + name + " SET ("`), 片段单独翻译
+    时模型会把尾部空格和括号吃掉, 拼回去就成了 `添加XX SET (3)`、
+    `全部添加（12)` —— 括号中英混用、词与词直接粘连 (2026-11-14 Requisition
+    实测)。句末标点也顺手归一: 中文句子里挂一个英文句号 (`解锁单线套索.`)
+    是最显眼的那种半成品痕迹。
+    """
+    if not orig or not trans:
+        return trans
+    t = trans
+    if orig.endswith(" ") and not t.endswith((" ", "\u3000")):
+        t = t.rstrip() + " "
+    if orig.startswith(" ") and not t.startswith((" ", "\u3000")):
+        t = " " + t.lstrip()
+    if orig.rstrip().endswith("(") and not t.rstrip().endswith(("(", "（")):
+        t = t.rstrip() + "（"
+    if orig.rstrip().endswith(".") and t.rstrip().endswith("."):
+        body = t.rstrip()[:-1]
+        if _CJK_TAIL_RE.search(body):
+            t = body + "。" + t[len(t.rstrip()):]
+    return t
+
+
 def _render_replacements(text, repls):
     """把 [(lit, 原文, 译文, 索引)] 一次性套到 text 上(从后往前, 偏移不互相影响)。"""
     out = text
@@ -2708,6 +3636,125 @@ def _shape_offenders(base, repls, lang, budget=40):
     return bad, rest
 
 
+def _parse_json_ptr(ptr):
+    """`/gangs/valentino/0/name` -> ["gangs", "valentino", "0", "name"]。"""
+    p = (ptr or "").strip()
+    if not p or not p.startswith("/"):
+        return None
+    return [raw.replace("~1", "/").replace("~0", "~")
+            for raw in p[1:].split("/")]
+
+
+def _json_set(obj, segs, expect, value):
+    """按路径改值。当前值和 expect 不一致就不改，返回 False。
+
+    这一条是防「pointer 错位」的：提取时的原文和写回时的当前值必须一模一样，
+    否则说明文件在两次操作之间被改过（换过模组版本 / 用户手改过），
+    这时按路径硬写就会把 A 的译文写进 B 的字段。
+    """
+    cur = obj
+    try:
+        for s in segs[:-1]:
+            cur = cur[int(s)] if isinstance(cur, list) else cur[s]
+        last = segs[-1]
+        if isinstance(cur, list):
+            i = int(last)
+            if cur[i] != expect:
+                return False
+            cur[i] = value
+        else:
+            if cur.get(last) != expect:
+                return False
+            cur[last] = value
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+    return True
+
+
+def apply_json_ex(path, pairs):
+    """数据表 JSON 的回填：pairs = [(JSON Pointer, 原文, 译文)]。
+
+    不按字符位置替换，而是 ``json.loads`` → 改值 → ``json.dumps`` 整份重写，
+    并且**写之前先证明这份文件能原样重建**：用原对象序列化一次，必须和磁盘上
+    的字节完全一致，否则拒绝整份写回。
+
+    这条前置校验是整个方案的安全底线。最坏情况是「不写」，不存在把格式写坏、
+    把没翻的字段重排、或者把中文转义成 ``\\uXXXX`` 的路径 —— 因为只要重建
+    结果和原文差一个字节，我们就停手。
+
+    返回 (成功条数, [(索引, 行号, 原文, 译文, 原因, 级别)])。
+    """
+    pairs = list(pairs)
+
+    def fail(reason):
+        return 0, [(i, 0, p[1], p[2], reason, "hard")
+                   for i, p in enumerate(pairs)]
+
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            raw = f.read()
+    except Exception as ex:
+        return fail("读取文件失败: %s" % ex)
+    try:
+        obj = json.loads(raw)
+    except Exception as ex:
+        return fail("这不是合法 JSON，已拒绝写回: %s" % ex)
+
+    if raw.endswith("\r\n"):
+        ending = "\r\n"
+    elif raw.endswith("\n"):
+        ending = "\n"
+    else:
+        ending = ""
+    body = raw[:len(raw) - len(ending)] if ending else raw
+
+    # 探测排版：缩进（1/2/4/制表符/紧凑）× ASCII 转义开关。
+    style = None
+    for ind in (1, 2, 4, "\t", None):
+        for ea in (False, True):
+            try:
+                if json.dumps(obj, indent=ind, ensure_ascii=ea) == body:
+                    style = (ind, ea)
+                    break
+            except Exception:
+                continue
+        if style:
+            break
+    if not style:
+        return fail("这份 JSON 的排版无法原样重建（缩进/转义/键序与标准序列化不一致），"
+                    "为避免改坏整份文件，已拒绝写回")
+    ind, ea = style
+
+    changed, fails = 0, []
+    for idx, (ptr, orig, trans) in enumerate(pairs):
+        if str(trans) == str(orig):
+            continue
+        segs = _parse_json_ptr(ptr)
+        if not segs:
+            fails.append((idx, 0, orig, trans, "定位路径无效，未写入", "hard"))
+            continue
+        if not _json_set(obj, segs, orig, trans):
+            fails.append((idx, 0, orig, trans,
+                          "这条路径上的当前值与原文不一致（文件可能已被改过），未写入",
+                          "hard"))
+            continue
+        changed += 1
+    if not changed:
+        return 0, fails
+
+    out = json.dumps(obj, indent=ind, ensure_ascii=ea) + ending
+    try:
+        json.loads(out)
+    except Exception:
+        return fail("写回前自检失败：重新序列化后不是合法 JSON，已放弃")
+    try:
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(out)
+    except Exception as ex:
+        return fail("写入文件失败: %s" % ex)
+    return changed, fails
+
+
 def apply_many_ex(path, pairs, allow_soft=False):
     """一次读改写: pairs = [(行号, 原文, 译文)]。
 
@@ -2719,6 +3766,16 @@ def apply_many_ex(path, pairs, allow_soft=False):
                 只有单条覆盖(apply_one)才会传 True; 批量永远不传。
     """
     pairs = list(pairs)
+    # JSON 走不了这条路：scan_source 的 reds 词法会把 `"键": "值"` 当成两个
+    # 字面量，same_code_shape 立刻判定「代码骨架不一致」，用户看到的是一句
+    # 莫名其妙的话。数据表的写回要按 JSON Pointer 改值再整体序列化（并先做
+    # round-trip 校验），那是单独一轮的事；在那之前明确拒绝，别让它半懂不懂
+    # 地写进去。
+    if os.path.splitext(path)[1].lower() == ".json":
+        return 0, [(i, p[0], p[1], p[2],
+                    "数据表 JSON 必须走 apply_json_ex（按 JSON Pointer 改值），"
+                    "不能在这里按字面量替换", "hard")
+                   for i, p in enumerate(pairs)]
     try:
         with open(path, "r", encoding="utf-8", newline="") as f:
             text = f.read()
@@ -2770,6 +3827,9 @@ def apply_many_ex(path, pairs, allow_soft=False):
         # 既不算成功也不算失败: 文件没变, 统计里不该出现。
         if str(trans) == str(orig):
             continue
+        # 片段拼接的空壳对齐 + 中文句末标点归一, 必须在 guard 之前做:
+        # 补齐的括号/空格也是骨架的一部分, 让守卫看到最终要写下去的那份。
+        trans = _polish_trans(orig, trans)
         level, why = guard_level(path, orig, trans)
         if level == "hard" or (level == "soft" and not allow_soft):
             failures.append((idx, line, orig, trans, why, level))

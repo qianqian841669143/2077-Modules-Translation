@@ -18,6 +18,7 @@
   --success: #12B76A;
   --shadow: 0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.06);
   --radius: 8px;
+  --on-primary: #FFFFFF;  /* 主色按钮/图标上的文字色。主色很亮（比如夜之城黄）的主题要改成深色 */
   --ctl-h: 26px;          /* 控件统一高度, 越紧凑表格能多显示几行 */
 }
 [data-theme="dark"] {
@@ -62,7 +63,7 @@ body {
 .tb-left { display: flex; align-items: center; gap: 6px; height: 100%; }
 .logo {
   width: 16px; height: 16px; border-radius: 4px;
-  background: var(--primary); color: #fff;
+  background: var(--primary); color: var(--on-primary);
   font-size: 10px; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
 }
@@ -131,7 +132,7 @@ textarea.input { height: auto; min-height: var(--ctl-h); max-height: 76px; paddi
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn.primary {
-  background: var(--primary); border-color: var(--primary); color: #fff;
+  background: var(--primary); border-color: var(--primary); color: var(--on-primary);
 }
 .btn.primary:hover { background: var(--primary-h); border-color: var(--primary-h); }
 .btn.icon { width: 28px; padding: 0; font-size: 13px; }

@@ -1,0 +1,44 @@
+/* @name 夜之城
+   @author 内置
+   @description 夜之城黄 + 青，浅色偏米黄、深色近纯黑，切角感强 */
+
+:root {
+  --bg: #FAFAF2;
+  --card: #FFFFFF;
+  --border: #E6E3C8;
+  --text: #1A1A12;
+  --muted: #6E6C56;
+  --primary: #E8D400;
+  --primary-h: #D4C200;
+  --primary-a: #BFAF00;
+  --primary-soft: #FFFCE0;
+  --on-primary: #14140F;
+  --row-alt: #FCFCF4;
+  --row-filled: #F4FAEA;
+  --hover: #F7F6EC;
+  --select: #FFF9B8;
+  --select-fg: #6B5D00;
+  --danger: #D32F2F;
+  --success: #2E7D32;
+}
+
+[data-theme="dark"] {
+  --bg: #0D0E0A;
+  --card: #16170F;
+  --border: #2B2D1C;
+  --text: #F2F0DC;
+  --muted: #9A9877;
+  --primary: #FCEE0A;
+  --primary-h: #FFF34D;
+  --primary-a: #E0D400;
+  --primary-soft: #2A2A10;
+  --on-primary: #0D0E0A;
+  --row-alt: #12130C;
+  --row-filled: #1A2010;
+  --hover: #22240F;
+  --select: #3A3A12;
+  --select-fg: #FCEE0A;
+  --danger: #FF5A5A;
+  --success: #3DFF9E;
+  --shadow: none;
+}
