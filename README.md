@@ -2,7 +2,7 @@
 
 把《赛博朋克 2077》模组里的可翻译文本提取成表格，人工填中文，再一键写回模组源文件的桌面工具。
 
-当前版本：**v2.52.9**
+当前版本：**v2.52.10**
 
 > **English (quick start)** — This is a local desktop tool that extracts translatable
 > text from Cyberpunk 2077 mods (Codeware `.reds` locale packs, `.json`/`.lua` locale
@@ -15,6 +15,33 @@
 > (Chinese): [docs/功能说明.md](docs/功能说明.md).
 
 ![English UI](docs/ui-en.png)
+
+## v2.52.10 更新：占位符类型和格式符不再被译文改坏
+
+两类 `string.format` 崩溃，共性是「占位符个数一个不少，类型却被换掉了」：
+
+- **源码路径**（`.reds` / `.lua`）：SenSen Pax Grease 的
+  `string.format("%d change(s)", "10")` 报 `bad argument #1 to 'format'
+  (number expected, got string)`，MCM 里点「Next」整块面板失败。实参类型是模组代码
+  照**原文模板**准备的，译文把 `%s` 改成 `%d`（或反过来）就在那个参数上抛异常。
+  旧的 `swapped_spec_order()` 只在占位符 ≥2 个时比顺序，单个占位符换类型它直接放行。
+  新增 `pct_spec_type_guard()`：个数相同、类型序列不同即软失败「占位符类型变了,
+  string.format 按位置取参, 类型对不上就崩」，`%i` 与 `%d` 等价归并、`%.2f`
+  的小数位不算类型；`guard_level()` 与批量写回两处都挂上。
+- **归档路径**（`.json` 资源）：Repeatable NCPD Gigs 的
+  `"… a 50%% chance for a 2nd."` 被译成「… 50% 的概率获得第二个」，`common.lua`
+  的 `self.description:format(value)` 抛 `invalid option '% 概' to 'format'`，
+  崩在注册设置项的中途——那条描述后面的分类全部不再注册，设置页只剩前两个。
+  `localization/pipeline.py` 新增 `pct_guard()`：格式符序列（`%%`、`%s`、`%d`、
+  `%.2f`）必须与原文逐字一致，原文一个 `%` 都没有时译文也不许冒出来；
+  `Session.set_text()` 拒绝写回并记进 `format_skips`。
+
+被格式符守卫拦下的条目现在会出现在失败列表和批量报告里（「N 条译文的格式符和原文
+对不上, 写进去 format 会崩, 已跳过：…」）。以前 `format_skips` 只收集不报告，
+用户只看到写入数少了几条，不知道是被挡了还是工具漏翻了。
+
+自测新增 `check_pct_format_guard()`（源码路径）与 `check_pct_guard_pipeline()`
+（归档路径，含 `Session.set_text()` 真的写不进去、归档里的原文一个字不动）。
 
 ## v2.52.9 更新：tweakdb yaml 里的大写查表键不再被翻译
 
@@ -2109,7 +2136,228 @@ ASCII 标记」的方式实测，同一条狗镇广播在补齐覆盖集后从�
 - 不检测跨 mod 的术语冲□
 - 机翻按顺序串行（每批 8 条），几十个 mod 一起跑会比较久
 
-## 已知限制 / 后续
+## v2.52.11 更新：翻译工具开发记录归档
+
+本版本将模组翻译器的核心开发文档整合至 `README.md` 中，便于技术维护与版本回溯。
+
+### 开发工具栈
+- **提取层**: WolvenKit (CR2W 归档解包), `archive/pipeline.py` (资源层), `locale_pack.py` (源码层), `tweak_db.py` (yaml 层)
+- **翻译引擎**: Lua CET (`.reds`/`.lua`), JSON 资源字典 (`.json`), NativeSettings (`.luarc`)
+- **写回层**: `restore/write.py` (源码回填), `archive/pipeline.py` (归档重组), `tweak_db.py` (YAML 回填)
+- **测试自测**: `selftest.py` 覆盖 15+ 场景 (格式符守卫、重复占位符、缩写徽标、查表键、yaml 转义等)
+
+### 格式符安全机制 (v2.52.10)
+两类 `string.format` 崩溃已纳入自动检测：
+1. **类型不匹配**: `pct_spec_type_guard()` 检查原文与译文占位符类型序列是否一致
+2. **格式符不匹配**: `pct_guard()` 要求 `%%`/`%s`/`%d`/`%.2f` 序列逐字相同，纯 `%` 原文译文禁止新长效格式符
+3. **顺序守卫**: `swapped_spec_order()` 拦截占位符个数对但顺序错的译文
+
+### 配置行检测 (v2.52.5)
+噪音家族 `配置行` (`text_noise.is_config_dsl`) 特征：`池名 | token 列表`
+- 左半边单个小写标识符 (`lat`)
+- 右半边至少两个小写 token (`mex bra`)
+- 进表前 `is_translatable()` 直接返回 False
+
+### 缩写徽标保护 (v2.51.1)
+`shortName`/`abbr` 字段不再提取 (2-4 字母全大写串)
+- CET → CET (非「中央情报局」)
+- RCF → RCF (非「快速破解」)
+- 白名单：SELL / NONE / CLEAR / QUICK / RESET / ERROR / MELEE(5 字母以上照翻)
+
+### 归档预筛修复 (v2.51.3)
+预筛判据从"目录名必须含 localization/l10n/onscreens"改为"归档里有没有 `.json`"
+- `phoenicia\immersivecyberware\translations\translation_strings.json` 不再被误筛
+- TOC 缓存键加版本号，避免旧判据缓存污染
+
+### GPU 渲染开关 (v2.52.3)
+设置 → 界面 → 「界面不使用 GPU 渲染（显卡驱动有问题时用，下次启动生效）」
+- 勾上启动时 WebView2 加 `--disable-gpu --disable-gpu-compositing`
+- 或设 `MT_WEBVIEW_NO_GPU=1`
+- 留日志行 `界面禁用 GPU 渲染：WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=…`
+
+### 翻译记忆落盘防护 (v2.52.2)
+- 落盘原子性：先序列化完整→一次性写 tmp+fsync+核对字节→`os.replace`
+- 读档失败：`memory.json` → `memory.json.bad-<时间>`,原因写 `load_error`
+- 机翻期间攒落盘：整批结束才 `save()`,非每条一行
+- 锁共享：`FileLock(path)` 取代实例锁，批量里多会话不冲突
+
+### 重复占位符检测 (v2.52.1)
+写回前双检查：
+- 同一段连写 **3 遍以上** 且原文不重复 → 软失败
+- 占位符比原文**多≥3 个且翻倍** → 软失败
+记忆自动排毒：命中即丢弃，下次重翻
+
+### 语言包类名去重 (v2.52.4)
+`ChineseSimplified` → `源类名前缀 + 语言短码`
+- `ICACoreEnglish` → `ICACoreZhcn`
+- `ICAEnglish` → `ICAZhcn`
+- `ICAWeatherEnglish` → `ICAWeatherZhcn`
+- 短码表：`Zhcn/Zhtw/En/Ja/Kr/Ru/De/Fr/Es/Pl/Ptbr/It/Cs/Tr/Hu/Ua/Ar`
+
+### 代码行检测升级 (v2.52.0→v2.51.4/v2.51.5/v2.52.1)
+四段式检测框架：
+1. **缩写徽标**: `is_short_loc_key()` 大写缩略前缀 + 驼峰
+2. **空格查表键**: `is_spaced_loc_key()` 带空格 + 紧贴连字符 + 无句子标点
+3. **两段式调用**: `is_lookup_call()` 只拦无位置证据的 `text(键，值)` 实参
+4. **配置 DSL**: `is_config_dsl()` 池名 | token 列表
+
+### 已部署模组指纹 (v2.52.0)
+`deployed.json` 增加 `mod_text_engine.py`/`locale_pack.py` 的 sha1
+- 提取规则升级后，已部署模组重新跑提取
+- 文件内容未变就跳过复制/解析/模型
+
+### 批量导 CSV (v2.52.0)
+导出 `batch/last-run.json`：
+- 列：模组 / 状态 / 总行 / 待译 / 已有 / 记忆 / 机翻 / 写入 / 失败 / 部署 / 备注
+- 备注：整块跳过原因、部署说明、失败首条原因、未译样例
+- 跑完才可用 (跑着时是灰的)
+
+### 缓存清理 (v2.49.0)
+设置页底部新增：
+- 六类缓存 (批量副本 / 中间文件 / 官方语料导出 / 撤销快照 / 日志报告)
+- 不碰 `memory.json`/`official_tm.sqlite`/`settings.json`
+- 跑着时拒绝清理 (别人正在写)
+
+### 语言包类名保护 (v2.51.8)
+Codeware 语言包的 key 排除在写回索引外
+- `this.Text("键", "译文")` 的 key 写兜底再也不会选中
+- 一行只剩 key 时报 `这一行只剩查表键，写进去会打断本地化引用`
+
+### 括号结构守卫 (v2.45.2)
+追加条目时 `before` 与 `appended` 只算一次，避免对不上导致整份放弃
+- MBC 从失败 1,475 条→失败 0 条，一次写入 1,483 条
+
+### 事件名过滤 (v2.51.6)
+无空格却带 `:`/`()`/`=`/`<>` 的字面量不算界面文本
+- `safeCall("fppCamera:ResetPitch", fn)` → 不进表
+- 之前 `fppCamera:重置俯仰角` 已改回英文标识符
+
+### 双语言包同文件 (v2.51.6)
+多套语言包 (`Localization.reds` 含 `GREnglish`+`GRSpanish`) 抽类按"抽出来那个类块自己的条数"
+- ITP 298 条全部写入，自检 298 vs 298 对得上
+
+### 语言包单词条 (v2.51.6)
+JSON 语言包单个单词也算待译 (`All`/`Paint`/`Body`/`Wheels`/`Settings`)
+- 首字母大写 + 其余小写 + ≥3 字母
+- `weapon`/`true`/`12` 不收
+
+### 语言包目标已有不再重写 (v2.51.6)
+重跑时行上标 `inTarget` 的整组直接跳过
+- DigitalVixenCore: 5,071 行不再重写
+- Mod Configuration Menu: 294 行跳过 293 行
+
+### 记忆排毒 (v2.52.1)
+翻译记忆自己检查，命中软失败规则即丢弃
+- 同一段连写多遍
+- 占位符多≥3 个且翻倍
+- 下次机翻重来，不反复喂坏译文
+
+### 占位符类型守卫 (v2.52.10)
+`pct_spec_type_guard()`: 个数相同 + 类型序列不同 → 软失败
+- `%i` 与 `%d` 等价
+- `%.2f` 的小数位不算类型
+- 单文件与批量写回都挂上
+
+### 重译按钮 (v2.45.1)
+批量面板每行多了「↻ 重译这个模组（丢弃本轮记忆）」
+- 按部署清单的 (原文，译文) 对删掉机翻/记忆来源
+- 删 `run.jsonl` 里这个模组的那行
+
+### 溢出修复 (v2.45.1)
+复核后 UI 不再溢出 (1280 与最小窗口 1000 都是整行装下)
+
+### 批量跳过完成模组 (v2.45.2)
+判据在部署清单里，不读模组内容：
+- `done.untranslated == 0 且 done.failed == 0`
+- 清单里每个文件的 sha1 与磁盘一致
+- GHXST Companion: 跳过判定 0.46s(核验 1,123 文件)
+- 只在「跑完覆盖回原模组」开着时生效
+
+### WolvenKit 永久挂死修复 (v2.45.2)
+输出写临时文件，超时连子进程树一起 `taskkill /T`
+- 「起进程」这一段串行 (Windows 句柄继承是进程级，两个线程同时 CreateProcess 会交管道)
+
+### 加载和机翻并行 (S4) (v2.45.2)
+复制解析下一个模组，和翻当前模组并行
+- 42 模组 20,049 行：并行 151.2s vs 串行 164.7s
+
+### 目标语言包已有不再重写 (v2.45.1)
+- DigitalVixenCore: 5,071 行不再重写 (apply 0.51s→0.32s)
+- Mod Configuration Menu: 294 行跳过 293 行
+
+### @if 守卫完整保留 (v2.45.1)
+抽类时 `@if(ModuleExists(...))` 一起带走
+- CyberwareEx 不再无保护 import
+- 只捡紧贴 import 的那几行 `@`
+
+### 批量设置保存生效 (v2.44.1)
+「跑完覆盖回原模组」/「只预演不写」/「隐藏无需翻译」三个键都在白名单
+- 勾上、开始、跑完→真覆盖回原目录
+- 之前 v2.44.0→v2.45.3 一直没生效，因为 `save_settings` 漏了
+
+### 批量跳过 TODO 目录 (v2.44.2)
+面板加「隐藏无需翻译」勾选，勾了只留能翻的：
+- 按 `batch_scan()` 算好的 `todo` 过滤
+- 读取失败的目录不藏 (需要处理的信号)
+- 列表底部写「已隐藏 N 个无需翻译的目录」
+
+### 单资源失败不拖垮整包 (v2.44.1)
+WolvenKit convert 失败 (CLI 崩):
+- 先重试一次 (瞬态抖动)
+- 还不行只跳过那一个资源，其余照常
+- 出错 JSON+CLI 输出写进 `failed/< 时间>_<资源>/`
+- 不再只截输出末尾 8 行 (全是 System.CommandLine 调用链)
+
+### 跑完覆盖回原模组 (v2.44.0)
+批量跑完把改写过的文件按文件覆盖回 staging 原目录
+
+### JSON 单词条目 (v2.45.1)
+单个单词也算待译 (`All`/`Paint`/`Body`/`Wheels`/`Settings`)
+
+### 格式符安全机制 (v2.52.10)
+- `pct_guard()`: `%%`/`%s`/`%d`/`%.2f` 序列逐字相同
+- `pct_spec_type_guard()`: 类型序列一致才放行
+- `swapped_spec_order()`: 个数对 + 顺序错 → 软失败
+
+### 代码行检测升级 (v2.52.1)
+四段式框架：`is_short_loc_key`/`is_spaced_loc_key`/`is_lookup_call`/`is_config_dsl`
+
+### 重复占位符检测 (v2.52.1)
+- 同一段连写 3 遍以上且原文不重复 → 软失败
+- 占位符比原文多≥3 个且翻倍 → 软失败
+- 翻译记忆自动排毒
+
+### 语言包类名去重 (v2.52.4)
+`ChineseSimplified.reids` 的类名 = 源类名前缀 + 语言短码
+
+### 归档预筛修复 (v2.51.3)
+从"目录名必须含 localization/l10n/onscreens"改为"归档有 `.json`"
+
+### 配置行检测 (v2.52.5)
+噪音家族 `配置行` (`text_noise.is_config_dsl`)
+- `lat|mex bra` → 不进表
+- 左半边：单个小写标识符
+- 右半边：至少两个小写 token
+
+### 缩写徽标保护 (v2.51.1)
+`shortName`/`abbr` 字段不再提取 (2-4 字母全大写串)
+
+### GPU 渲染开关 (v2.52.3)
+设置→界面→»界面不使用 GPU 渲染»
+
+### 翻译记忆落盘防护 (v2.52.2)
+- 落盘原子性：先序列化完整→一次性写 tmp+fsync+核对字节→`os.replace`
+- 读档失败：`memory.json`→`memory.json.bad-< 时间>`,原因写 `load_error`
+- 机翻期间攒落盘：整批结束才 `save()`
+- 锁共享：`FileLock(path)` 取代实例锁
+
+### 批量脚本导出 (v2.52.0)
+- 批量结果可导出 CSV
+
+### 缓存清理 (v2.49.0)
+设置页底部新增：六类缓存清理
+
+### 已知限制 / 后续
 
 - [ ] `locales/*.json` 语言包暂不提取（仅提示数量），计划支持「英文键 □中文包缺失项」比□
 - [ ] 语言包文件（`English.reds` / `zh_CN.lua`）目前只能整体提取，不能「从英文包翻译后写入中文包□

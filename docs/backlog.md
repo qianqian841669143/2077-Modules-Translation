@@ -16,7 +16,7 @@ v2.47.0（英文界面 100% + 功能说明）、v2.48.0（注册器别名 + 引�
 v2.48.1（`<Rich …>` 标记补两遍 / 不闭合）、v2.49.0（设置页缓存清理）、
 v2.50.0（批量结果导出）、v2.51.0（占位符顺序不再被换掉）、v2.51.1（缩写徽标不再被翻）、
 v2.51.2（代号按值判断，shortName 真文案照收）、v2.51.3（归档预筛认 .json）、
-v2.51.4（带空格的查表键不收）、v2.51.5（两段式查表键不收 + 跳过勾选持久化）、v2.51.6（多语言包文件写回不再被自检拒）、v2.51.7（tweakdb yaml 的内联说明进表）、v2.51.8（语言包 key 不再被译文物顶掉）、v2.51.9（模型跑飞的译文不写回 + 记忆排毒）、v2.52.0（归档产物复用 + 引擎指纹带版本 + 关窗问要不要停模型）、v2.52.1（批量阶段日志 + 事件通道长连接）、v2.52.2（记忆原子落盘 + 坏档留证 + 每批落盘）、v2.52.3（界面可关 GPU 渲染，用来区分驱动与程序）、v2.52.4（语言包类名带前缀短码，不再 SYM_REDEFINITION）、v2.52.5（`池名|配置行` 不进翻译表——翻了竖线消失、StrSplit 后越界崩）、v2.52.6（CET 的 `ui.text(文字)` 不再被当查表键 + XML 注释不进翻译表）、v2.52.7（`/mods/模组名/` 路径串不进表——翻了 `StrBeginsWith` 永远 false）、v2.52.8（空格分隔的 token 组不进表——翻了 `Pick()` 按位置取字段全失配，NPC 静默失声）、v2.52.9（tweakdb yaml 的大写查表键不进表——翻了游戏查不到 key，说明整段消失）
+v2.51.4（带空格的查表键不收）、v2.51.5（两段式查表键不收 + 跳过勾选持久化）、v2.51.6（多语言包文件写回不再被自检拒）、v2.51.7（tweakdb yaml 的内联说明进表）、v2.51.8（语言包 key 不再被译文物顶掉）、v2.51.9（模型跑飞的译文不写回 + 记忆排毒）、v2.52.0（归档产物复用 + 引擎指纹带版本 + 关窗问要不要停模型）、v2.52.1（批量阶段日志 + 事件通道长连接）、v2.52.2（记忆原子落盘 + 坏档留证 + 每批落盘）、v2.52.3（界面可关 GPU 渲染，用来区分驱动与程序）、v2.52.4（语言包类名带前缀短码，不再 SYM_REDEFINITION）、v2.52.5（`池名|配置行` 不进翻译表——翻了竖线消失、StrSplit 后越界崩）、v2.52.6（CET 的 `ui.text(文字)` 不再被当查表键 + XML 注释不进翻译表）、v2.52.7（`/mods/模组名/` 路径串不进表——翻了 `StrBeginsWith` 永远 false）、v2.52.8（空格分隔的 token 组不进表——翻了 `Pick()` 按位置取字段全失配，NPC 静默失声）、v2.52.9（tweakdb yaml 的大写查表键不进表——翻了游戏查不到 key，说明整段消失）、v2.52.10（占位符类型与格式符守卫——`%s`/`%d` 换了类型、`%%` 被吃掉都不写回）
 都已发布，见下「已修」。真实部署一轮已经在 v2.48.0 之前跑过（`deploy-20261102-090450.csv`）。
 
 ## 待办（v2.48.0 起）
@@ -33,6 +33,34 @@ v2.51.4（带空格的查表键不收）、v2.51.5（两段式查表键不收 + 
    `add` 与 `safeCall` 形状完全一样，区别只在函数体把 label 存进选项表还是只写日志，
    要靠函数体区分，收益（每条菜单省一次英文）不如风险大，暂时不做。
 
+3. **JSON 数据表里的文本完全没进提取范围**：`BountyContracts` 的
+   `bountypack.json`(119 KB) / `casefiles.json`(563 KB) / `contracts.json`(212 KB)
+   是**纯单语言**的赏金数据表（`gangs.<帮派>[].name/crime/briefing` 等），玩家在短信
+   与 NCPD 日志里看到的就是它们；工具只认 `.reds/.xml/.lua/.yaml`，于是这个模组翻完
+   是「界面中文、赏金内容英文」。实测 `tools\scan_json_text.py`：全库 147 个 json 里
+   97 个是语言包、23 个是运行时状态，真正需翻的只有 BountyContracts 三个文件
+   （6,178 句 + 1,665 个人名短语）。要点：①`LOCALE_FILE_RE` 先补洞——认不出
+   `en-us-sms.json`，而 MissingPersons / PacificaTyphoon 自带 19 种语言（含
+   `zh-cn-sms.json`），不排除会被当原文再翻一遍；②文件名黑名单（`config.json`
+   `phonelog.json` `gangspots.json` `gangtypes.json` `mod_user_settings.json`
+   `settings-*.json` `*_cache.json` `gpu-survey-result.json` `scene-diagnostic.json`）；
+   ③字段白名单 `name/crime/briefing/title/dispatch/tip/success/failed/spotted/
+   stakeout/twist/bribe_*/package/grabbed/lifted/blown/label/desc`，黑名单 `key/type/
+   kind/id/recordID/gang/faction/modulePath/dataType/icon/uid/modder/$comment/$type/
+   contract_type/twist_type`；④写回已验证：`json.dumps(indent=1, ensure_ascii=False)`
+   对这三份文件**逐字节还原**，不会重排格式；⑤`RULES_VERSION` 要 +1，否则已部署模组
+   不会按新规则重跑。
+
+4. **不要用本地模型判断「这串是文案还是标识符」**（2026-11-10 实测，结论存档）：
+   27 条历史错例（Ultra+ 的 13 个设置键、CET/RCF 缩写、IK_5 按键、NUSA 枚举、
+   以及 `Enable Mod` / `Auto Drive` 这类真文案），Qwen3.5-9B-Q4_K_M 的成绩是
+   不带上下文 **67%**、给源码片段 **67%**、few-shot 后 **78%**，且仍把
+   `Vignette` / `Resolution` / `Sieja` / `Overheads` / `Cinematic` / `Tutorials`
+   判成 TEXT（正是会被翻坏的 6 条）。它没在利用片段里的 `group = '/…'` 位置，
+   只是在匹配词的形状——而这是规则已经做得更好的部分。位置判据
+   （`_SETTINGS_GROUP_RE`、`name_starts`、缩写识别）**100% 可靠**，继续用规则。
+   探针脚本 `tools\probe_local_label.py`，换模型/换提示词后可复测。
+
 **不做**：`run.jsonl` 部署后打 `deployed` 标记（原 B9）。部署过的模组在同一套参数下
 重跑会被当成「已完成」整行跳过，得先「清空输出」；复原流程只要走清空就没问题，
 「只想重跑这一个」现在有面板上的「↻ 重译」按钮（v2.45.1），按模组作废整行记录
@@ -41,6 +69,14 @@ v2.51.4（带空格的查表键不收）、v2.51.5（两段式查表键不收 + 
 **不做**：`copy_mod` 逐文件记 `mtime_ns` 指纹判「跑完后原件被改过」（原 B5）。
 还原就是被允许的动作，改了也照覆盖，记一份指纹只是给清单加一列备注，不值当。
 「原件已含中文」已经在部署清单里按文件标出来了。
+
+## 已修（v2.52.10）
+
+| 条目 | 做法 |
+|---|---|
+| `string.format("%d change(s)", "10")` 报 `bad argument #1 to 'format' (number expected, got string)`，MCM 点「Next」整块面板失败（SenSen Pax Grease） | 实参类型是模组代码照**原文模板**准备的，译文把 `%s` 改成 `%d`（或反过来）就在那个参数上抛异常。旧的 `swapped_spec_order()` 只在占位符 ≥2 个时比顺序，单个占位符换类型直接放行。新增 `mod_text_engine.pct_spec_type_guard()`：个数相同、类型序列不同即软失败「占位符类型变了, string.format 按位置取参, 类型对不上就崩」；`%i` 与 `%d` 等价归并、`%.2f` 的小数位不算类型。`guard_level()` 与 `web_app` 批量写回两处都挂上。自测 `check_pct_format_guard()` |
+| `string.format` 抛 `invalid option '% 概' to 'format'`，崩在注册设置项中途，设置页只剩前两个分类（Repeatable NCPD Gigs，v2.52.9 实测） | 归档文案里的转义 `%%` 被译成裸 `%`。`localization/pipeline.py` 新增 `pct_guard()`：格式符序列（`%%` / `%s` / `%d` / `%.2f`）必须与原文逐字一致，原文一个 `%` 都没有时译文也不许冒出来；`Session.set_text()` 拒绝写回并记进 `format_skips`。`SessionGroup.format_skips` 跨归档合并。自测 `check_pct_guard_pipeline()`（含 `set_text()` 真写不进去、归档里的原文一个字不动） |
+| 被格式符守卫拦下的条目只体现在「写入条数少了几条」里，用户分不清是被挡了还是工具漏翻了 | `web_app.Api._fmt_skip_errors()` 把 `format_skips` 翻成人话塞进失败列表（「N 条译文的格式符和原文对不上, 写进去 format 会崩, 已跳过：…」）：`没有可提交的译文` / `unchanged` / `reused` 三个早退分支和正常结尾的 `problems` 都报，`fail` 计数把被拦条目算进失败。文案同步进 `locales/en-US.json`（`check_i18n_coverage()` 钉住占位符个数一致） |
 
 ## 已修（v2.52.4）
 

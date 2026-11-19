@@ -5347,6 +5347,124 @@ def check_spec_order():
     assert lvl == "soft" and "占位符" in why, (lvl, why)
 
 
+def check_pct_format_guard():
+    """string.format 的 %d/%f 占位符类型必须和实参对上，换了类型就不许写回。
+
+    实测（SenSen Pax Grease，2026-10-23）：
+      * ``string.format("%d change(s)", "10")`` → ``bad argument #1 to 'format'
+        (number expected, got string)``
+      * ``string.format("%s changes", 1)`` → ``bad argument #1 to 'format'
+        (string expected, got number)``
+
+    实参是模组代码按**原文模板**准备的：原文 ``%s`` 传字符串，译文改成 ``%d``
+    运行时就在那个参数上抛异常，MCM 里点「Next」整块面板失败。老的
+    ``swapped_spec_order()`` 只在占位符 ≥2 个时比顺序，单个占位符换类型它
+    直接放行，所以这条单独钉住。
+
+    个数不同不归这里管（那是 ``repair_markup`` 的「丢失」检查），原文自己没
+    占位符也不比（Ghost Protocol 那种 id 当原文的模组）。
+    """
+    import mod_text_engine as M
+
+    # 原文 %s → 译文 %d：实参是字符串，%d 当场报 number expected, got string
+    lvl, why = M.pct_spec_type_guard("Removed %s", "移除了 %d")
+    assert lvl == "soft" and "占位符类型变了" in why, (lvl, why)
+
+    # 反向也拦：原文 %d 传数字，译文 %s 多数时候能跑，但模板要保持一致
+    lvl, _ = M.pct_spec_type_guard("Applied %d change(s)", "已应用 %s 项更改")
+    assert lvl == "soft", lvl
+
+    # 类型没动的照常放行；%i 与 %d 等价、%.2f 里的小数位不是类型、%% 不算占位符
+    assert M.pct_spec_type_guard("Applied %d change(s)", "已应用 %d 项更改") == ("", "")
+    assert M.pct_spec_type_guard("%i items", "%d 项") == ("", "")
+    assert M.pct_spec_type_guard("%.2f damage", "%.2f 伤害") == ("", "")
+    assert M.pct_spec_type_guard("%d%% done", "%d%% 完成") == ("", "")
+    assert M.pct_spec_type_guard("100% done", "完成 100%") == ("", "")
+
+    # 精度改了、类型也改了：照样是类型对不上
+    assert M.pct_spec_type_guard("%.2f damage", "%d 伤害")[0] == "soft"
+
+    # 个数不同交给「丢失」那条检查，这里不重复报
+    assert M.pct_spec_type_guard("%d of %s", "共 %d 项") == ("", "")
+    # 原文没有占位符时拿译文去比会误伤（id 当原文的模组）
+    assert M.pct_spec_type_guard("g:ghxst_heat_02", "%s 过热") == ("", "")
+
+    # 写回路径（单文件 .lua / 语言包 .reds）都要拦住，并且留在可以单条覆盖的软失败里
+    lvl, why = M.guard_level("a.lua", "Removed %s", "移除了 %d")
+    assert lvl == "soft" and "占位符类型变了" in why, (lvl, why)
+    lvl, _ = M.guard_level("a.reds", "%.2f damage", "%d 伤害")
+    assert lvl == "soft", lvl
+
+
+def check_pct_guard_pipeline():
+    """归档路径的格式符守卫：%s/%d/%% 序列一字不差才许写回。
+
+    回归（v2.52.9，Repeatable NCPD Gigs）：原文 ``"… a 50%% chance for a 2nd."``
+    被译成「… 50% 的概率获得第二个」，``common.lua`` 的
+    ``self.description:format(value)`` 直接抛 ``invalid option '% 概' to 'format'``。
+    崩在注册设置项的中途——那条描述后面的分类全部不再注册，设置页只剩前两个。
+    游戏不报错，只是「设置少了几项」，最难查。
+    """
+    from localization import cr2w
+    from localization import pipeline as P
+
+    # 转义 %% 被吃掉：format 当场抛 invalid option
+    ok, why = P.pct_guard("a 50%% chance for a 2nd", "50% 的概率获得第二个")
+    assert not ok and "格式符不一致" in why, (ok, why)
+
+    # 原文一个百分号都没有、译文自己冒出来一个裸 %：也拦（走的是另一个分支）
+    ok, why = P.pct_guard("Plain text", "纯文本 100% 完成")
+    assert not ok and "百分号" in why, (ok, why)
+
+    # 序列一致就放行：文字怎么改都行，格式符必须原样
+    assert P.pct_guard("Applied %d change(s)", "已应用 %d 项更改") == (True, "")
+    assert P.pct_guard("a 50%% chance", "50%% 的概率") == (True, "")
+    assert P.pct_guard("%.2f m away", "距离 %.2f 米") == (True, "")
+    assert P.pct_guard("No spec", "没有格式符") == (True, "")
+
+    # 类型 / 顺序 / 个数，任何一样变了都不行（归档路径要求逐字一致）
+    assert not P.pct_guard("Applied %d change(s)", "已应用 %s 项更改")[0]
+    assert not P.pct_guard("%d of %s", "%s 共 %d 项")[0]
+    assert not P.pct_guard("%d of %s", "共 %d 项")[0]
+    assert not P.pct_guard("%d done", "%d 完成 %d")[0]
+
+    # 取格式符按出现顺序，%% 也算一个（补回去时靠它对齐）
+    assert P.pct_specs("50%% + %d + %.2f") == ("%%", "%d", "%.2f")
+
+    # set_text 真挂上了守卫：坏条目写不进去、归档里的原文一个字不动、
+    # 并留下 format_skips 记录（批量报告读的是它）
+    entries = [
+        {"$type": "onscreen", "primaryKey": "1", "secondaryKey": "UI-A",
+         "femaleVariant": "a 50%% chance for a 2nd", "maleVariant": ""},
+        {"$type": "onscreen", "primaryKey": "2", "secondaryKey": "UI-B",
+         "femaleVariant": "Applied %d change(s)", "maleVariant": ""},
+    ]
+    doc = {"Data": {"RootChunk": {"root": {"Data": {"entries": entries}}}}}
+    tmp = tempfile.mkdtemp(prefix="mt-pctguard-")
+    try:
+        sess = P.Session(None, cli="", workdir=tmp)
+        sess.docs["a.json"] = doc
+
+        assert sess.set_text("a.json", "1", "50% 的概率获得第二个") is False
+        assert len(sess.format_skips) == 1, sess.format_skips
+        rel0, eid0, _orig0, _trans0, why0 = sess.format_skips[0]
+        assert (rel0, eid0) == ("a.json", "1"), sess.format_skips[0]
+        assert why0 == "格式符不一致", sess.format_skips[0]
+        assert cr2w.get_text(entries[0]) == "a 50%% chance for a 2nd"
+
+        assert sess.set_text("a.json", "2", "已应用 %d 项更改") is True
+        assert cr2w.get_text(entries[1]) == "已应用 %d 项更改"
+        assert len(sess.format_skips) == 1, sess.format_skips
+        assert sess.changed() == {"a.json": ["2"]}, sess.changed()
+
+        # 组会话（多归档）把各会话的跳过记录合并，批量报告读的是它
+        grp = P.SessionGroup.__new__(P.SessionGroup)
+        grp.sessions = [sess]
+        assert grp.format_skips == sess.format_skips
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_acronym_guard():
     """代号不翻, 但字段名不背锅。
 
@@ -5861,6 +5979,10 @@ def main():
     print("   OK: 批量结果导出 (取消的不导出 / 状态与部署列对得上)")
     check_spec_order()
     print("   OK: 占位符顺序变了不写回 (MCM core.lua 那类 format 崩)")
+    check_pct_format_guard()
+    print("   OK: 占位符类型 (%d/%s) 对不上不写回 (Pax Grease 那类 format 崩)")
+    check_pct_guard_pipeline()
+    print("   OK: 归档路径的格式符 (%s/%d/%%) 序列不一致不写回 (NCPD Gigs 那类 format 崩)")
     check_acronym_guard()
     print("   OK: 代号不翻 (CET/ENC), 但 shortName 里的真文案照收")
     check_archive_prefilter()
