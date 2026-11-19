@@ -325,8 +325,8 @@ function renderMods() {
         <span class="mn${todo ? " todo" : ""}">${showFilled
           ? f.toLocaleString() : (unknown ? esc(T("未知")) : "")}</span>
         <span class="mt">` +
-        `<b>${unknown ? "?" : (e ? e.toLocaleString() : "—")}</b>` +
         (e ? `<span class="minibar"><i style="width:${pct}%"></i></span>` : "") +
+        `<b>${unknown ? "?" : (e ? e.toLocaleString() : "—")}</b>` +
         `</span>
       </div>`);
     if (open) {

@@ -44,12 +44,15 @@ function exitBatchMask() {
   state.busy = false;
 }
 
-/* 遮罩上的「显示面板」：先收起遮罩再看列表。面板本身是全屏 .mask，收起期间
- * 依旧挡得住主界面；面板关掉时再把遮罩放回去。 */
+/* 遮罩上的「显示面板」：面板现在是模组列表页里常显的一条，不用再开弹窗——
+ * 收起遮罩、解掉 inert（面板在 main 里面，锁着就点不动），再切到那一页。 */
 function showBatchPanel() {
   const ov = $("overlay");
   if (ov) ov.classList.remove("on");
-  openModal("modal-queue");
+  const app = document.querySelector("main.app");
+  if (app) app.inert = false;
+  switchPage("manage");
+  if (typeof syncModsBar === "function") syncModsBar();
 }
 
 async function pickMbOutDir() {

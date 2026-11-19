@@ -15,6 +15,8 @@ function bind() {
     };
   }
 
+  initSplitters();   // 翻译页左右两栏可拖宽（双击复位）
+
   $("btn-browse").onclick = async () => {
     const p = await pywebview.api.pick_folder();
     // 只在输入框里放路径；state.modPath 等加载成功后由 onLoaded 写（P4）。
@@ -263,6 +265,7 @@ function bind() {
     };
   }
   // ---- 批量面板就地嵌入模组列表页（不再走弹窗，DOM 只搬一次，id 全保留）----
+  // 现在整个设置条直接平铺在页面上，没有折叠开关，所以不再有 btn-queue。
   const mbHost = $("mb-host"), qMask = $("modal-queue");
   if (mbHost && qMask) {
     const card = qMask.querySelector(".modal");
@@ -274,13 +277,7 @@ function bind() {
       qMask.classList.remove("on");
     }
   }
-  $("btn-queue").onclick = () => {
-    const host = $("mb-host");
-    if (!host) { openQueue(); return; }
-    host.hidden = !host.hidden;
-  };
   $("btn-q-pick").onclick = () => pickMbDir();
-  $("btn-q-scan").onclick = () => scanQueue();
   $("btn-q-start").onclick = () => startQueue();
   $("btn-q-cancel").onclick = async () => {
     $("btn-q-cancel").style.display = "none";
@@ -527,6 +524,66 @@ function bind() {
     state.glossary = await pywebview.api.glossary_get();
     renderGlossary(); openModal("modal-glossary");
   };
+}
+
+/* 翻译页左右两栏可拖动改宽度（双击复位）。
+   默认 240 / 220 —— 中间那张表格才是主角，侧栏给个够用就行。
+   宽度存 localStorage，下次开机照旧；不写进 settings，免得每拖一下就落盘。 */
+function initSplitters() {
+  const root = document.documentElement;
+  const vkey = (k) => "--" + k + "-w";
+  const load = () => {
+    try { return JSON.parse(localStorage.getItem("ui.splits") || "{}"); }
+    catch (_) { return {}; }
+  };
+  const save = (k, w) => {
+    try {
+      const s = load();
+      if (w) s[k] = w; else delete s[k];
+      localStorage.setItem("ui.splits", JSON.stringify(s));
+    } catch (_) {}
+  };
+  const got = load();
+  ["side", "detail"].forEach((k) => {
+    if (got[k]) root.style.setProperty(vkey(k), got[k] + "px");
+  });
+  const work = document.querySelector(".work");
+  if (!work) return;
+  work.querySelectorAll(".sp").forEach((sp) => {
+    const k = sp.getAttribute("data-sp");
+    if (!k) return;
+    const col = () => work.querySelector(k === "side" ? ".side" : ".detail");
+    sp.addEventListener("dblclick", () => {
+      root.style.removeProperty(vkey(k));
+      save(k, 0);
+    });
+    sp.addEventListener("pointerdown", (e) => {
+      const el = col();
+      if (!el || !e.isPrimary) return;
+      e.preventDefault();
+      sp.classList.add("on");
+      try { sp.setPointerCapture(e.pointerId); } catch (_) {}
+      const x0 = e.clientX;
+      const w0 = el.getBoundingClientRect().width;
+      const move = (ev) => {
+        const dx = (k === "side") ? ev.clientX - x0 : x0 - ev.clientX;
+        const w = Math.max(150, Math.min(640, Math.round(w0 + dx)));
+        root.style.setProperty(vkey(k), w + "px");
+      };
+      const up = () => {
+        sp.classList.remove("on");
+        sp.removeEventListener("pointermove", move);
+        sp.removeEventListener("pointerup", up);
+        sp.removeEventListener("pointercancel", up);
+        sp.removeEventListener("lostpointercapture", up);
+        save(k, Math.round(el.getBoundingClientRect().width));
+      };
+      sp.addEventListener("pointermove", move);
+      sp.addEventListener("pointerup", up);
+      sp.addEventListener("pointercancel", up);
+      sp.addEventListener("lostpointercapture", up);
+    });
+  });
 }
 
 /* ---------------- 数据 ---------------- */

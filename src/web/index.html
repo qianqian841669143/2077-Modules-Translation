@@ -102,6 +102,8 @@
       <div class="sfoot" id="side-foot"></div>
     </aside>
 
+    <div class="sp" data-sp="side" title="拖动调宽，双击复位"></div>
+
     <div class="center">
 
   <!-- ============ 筛选栏 ============ -->
@@ -157,6 +159,8 @@
 
     </div><!-- /center -->
 
+    <div class="sp" data-sp="detail" title="拖动调宽，双击复位"></div>
+
     <aside class="detail">
       <div class="dtitle" data-i18n="详情">详情</div>
       <div class="dbody">
@@ -197,7 +201,7 @@
       <div class="mright" id="mods-summary"></div>
       <button class="btn" id="btn-mods-refresh" data-i18n="刷新">刷新</button>
     </div>
-    <!-- 批量条：勾选即开跑。⚙ 展开安装缓存 / 输出目录等设置（面板见下） -->
+    <!-- 批量条：勾选即开跑。下面的设置全部平铺，不留二级菜单 -->
     <div class="mbar">
       <label class="mcheck">
         <input type="checkbox" id="mods-check-all"><span data-i18n="全选">全选</span>
@@ -205,18 +209,19 @@
       <span class="mseln" id="mods-sel-n"></span>
       <button class="btn primary" id="btn-mods-start" data-i18n="开始批量翻译">开始批量翻译</button>
       <span class="mpath mono" id="mods-path"></span>
-      <button class="btn icon" id="btn-queue" title="批量设置">⚙</button>
     </div>
-    <!-- 批量翻译面板：运行时从 #modal-queue 里搬进来（见 inlineQueuePanel） -->
-    <div id="mb-host" hidden></div>
-    <div class="mhead">
-      <span></span>
-      <span data-i18n="模组">模组</span>
-      <span data-i18n="状态">状态</span>
-      <span data-i18n="已填">已填</span>
-      <span data-i18n="总条数">总条数</span>
+    <!-- 批量翻译的设置：运行时从 #modal-queue 里搬进来（见 inlineQueuePanel） -->
+    <div id="mb-host"></div>
+    <div class="mscroll">
+      <div class="mhead">
+        <span></span>
+        <span data-i18n="模组">模组</span>
+        <span data-i18n="状态">状态</span>
+        <span data-i18n="已填">已填</span>
+        <span data-i18n="总条数">总条数</span>
+      </div>
+      <div class="groups" id="mods-list"></div>
     </div>
-    <div class="groups" id="mods-list"></div>
   </section>
 
   <!-- ============ 汉化包页 ============ -->
@@ -252,26 +257,22 @@
       <div class="row gap">
         <input class="input grow" id="q-staging" data-i18n-ph="Vortex 安装缓存目录">
         <button class="btn" id="btn-q-pick" data-i18n="选择目录">选择目录</button>
-        <button class="btn" id="btn-q-scan" data-i18n="扫描">扫描</button>
-      </div>
-      <div class="row gap">
         <input class="input grow" id="q-out"
                data-i18n-ph="批量输出目录（留空则不进行翻译）">
         <button class="btn" id="btn-q-out-pick" data-i18n="选择目录">选择目录</button>
         <button class="btn" id="btn-q-out-open" data-i18n="打开">打开</button>
       </div>
       <div class="row gap">
-        <label class="chk" style="display:none"><input type="checkbox" id="q-deploy"><span data-i18n="跑完覆盖回原模组">跑完覆盖回原模组</span></label>
-        <label class="chk" style="display:none"><input type="checkbox" id="q-deploy-dry"><span data-i18n="只算不写（预演）">只算不写（预演）</span></label>
-        <div class="spacer"></div>
-      </div>
-      <div class="row gap">
-        <button class="btn primary" id="btn-q-start" data-i18n="开始批量翻译">开始批量翻译</button>
-        <button class="btn" id="btn-q-cancel" data-i18n="取消" style="display:none">取消</button>
-        <div class="spacer"></div>
         <label class="chk"><input type="checkbox" id="q-archive"><span data-i18n="包含归档层（慢）">包含归档层（慢）</span></label>
         <label class="chk"><input type="checkbox" id="q-assets"><span data-i18n="连同贴图/音频">连同贴图/音频</span></label>
         <label class="chk" style="display:none"><input type="checkbox" id="q-hide-todo"><span data-i18n="隐藏无需翻译">隐藏无需翻译</span></label>
+        <label class="chk" style="display:none"><input type="checkbox" id="q-deploy"><span data-i18n="跑完覆盖回原模组">跑完覆盖回原模组</span></label>
+        <label class="chk" style="display:none"><input type="checkbox" id="q-deploy-dry"><span data-i18n="只算不写（预演）">只算不写（预演）</span></label>
+        <div class="spacer"></div>
+        <button class="btn primary" id="btn-q-start" data-i18n="开始批量翻译">开始批量翻译</button>
+        <button class="btn" id="btn-q-cancel" data-i18n="取消" style="display:none">取消</button>
+        <button class="btn" id="btn-q-export" data-i18n="导出结果">导出结果</button>
+        <button class="btn" id="btn-q-clear" data-i18n="清空输出">清空输出</button>
       </div>
       <div class="progress" id="q-progress"><div class="bar" id="q-bar"></div></div>
       <div class="row gap" style="padding:6px 0 2px">
@@ -286,8 +287,6 @@
       <p class="hint stall" id="q-stall" style="display:none"></p>
     </div>
     <div class="modal-foot">
-      <button class="btn" id="btn-q-export" data-i18n="导出结果">导出结果</button>
-      <button class="btn" id="btn-q-clear" data-i18n="清空输出">清空输出</button>
       <div class="spacer"></div>
       <button class="btn" data-close data-i18n="关闭">关闭</button>
     </div>

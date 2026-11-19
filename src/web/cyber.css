@@ -44,6 +44,12 @@ html, html[data-theme="light"], html[data-theme="dark"] {
   --dim2:          #63656f;
   --amber:         #f0b429;
   --cyan:          #4cc9f0;
+
+  /* 外壳尺寸：顶栏只留一条，导航行才是功能入口 */
+  --head-h:        44px;
+  --nav-h:         48px;
+  --pad:           20px;   /* 页面左右内容线的基准，所有横条/表头/行都对齐到它 */
+  --sbw:           8px;    /* 列表滚动条宽度，右侧留白要算上它 */
 }
 
 html, body { background: var(--bg); color: var(--text); }
@@ -56,11 +62,12 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .winbtn:hover { background: #232530; color: #cfd1de; }
 .winbtn.close:hover { background: #c0392b; color: #fff; }
 
-/* 顶栏：只管整个窗口（名字 + 窗口按钮） */
+/* 顶栏：只管整个窗口（名字 + 窗口按钮）。原来 64px 里一半是空的，
+   功能都在下面那条导航行上，这里压到 44px 只留名字和窗口按钮。 */
 .head {
-  height: 64px; flex: none;
+  height: var(--head-h); flex: none;
   display: flex; align-items: center;
-  padding: 0 24px 0 22px;
+  padding: 0 10px 0 var(--pad);
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
@@ -71,7 +78,7 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
   font-size: 16px; font-weight: 800; letter-spacing: -.5px;
   display: flex; align-items: center; justify-content: center;
 }
-.brand .htitle { font-size: 21px; font-weight: 700; letter-spacing: -.2px; }
+.brand .htitle { font-size: 16px; font-weight: 700; letter-spacing: -.2px; }
 .brand .hsub {
   font-size: 13px; color: var(--muted); margin-top: 3px;
   max-width: 560px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -80,8 +87,8 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 
 /* 导航行：三个页面 + 设置 + 更多 */
 .navrow {
-  height: 48px; flex: none; display: flex; align-items: stretch;
-  padding: 0 24px; border-bottom: 1px solid var(--border);
+  height: var(--nav-h); flex: none; display: flex; align-items: stretch;
+  padding: 0 var(--pad); border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
 .navrow .tabs { margin-left: 0; }
@@ -105,22 +112,34 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .head-right .btn { height: 34px; }
 
 /* --------------------------------------------------------------- 外壳 */
-.app { height: calc(100% - 64px - 48px); display: flex; flex-direction: row; }
+.app { height: calc(100% - var(--head-h) - var(--nav-h));
+       display: flex; flex-direction: row; }
 .main-col { flex: 1; min-width: 0; display: flex; flex-direction: column;
             gap: 0; padding: 0; }
 
-/* 翻译页：工具条 + 三栏 */
+/* 翻译页：工具条 + 三栏（左右两栏可拖宽，中间表格永远是主角） */
 .work { flex: 1; display: flex; min-height: 0; }
 .center { flex: 1; min-width: 0; display: flex; flex-direction: column;
-          gap: 6px; padding: 0 12px 0 14px; }
+          gap: 6px; padding: 0 10px; }
 .side {
-  width: 336px; flex: 0 0 336px; display: flex; flex-direction: column;
-  padding: 18px 18px 12px; border-right: 1px solid var(--border);
-  overflow: hidden;
+  width: var(--side-w, 240px); flex: 0 0 auto; display: flex; flex-direction: column;
+  padding: 14px 14px 12px; overflow: hidden;
 }
 .detail {
-  width: 296px; flex: 0 0 296px; padding: 18px 20px 12px;
-  border-left: 1px solid var(--border); overflow: auto;
+  width: var(--detail-w, 220px); flex: 0 0 auto; padding: 14px 16px 12px;
+  overflow: auto;
+}
+/* 拖拽条：拖动改宽度，双击复位（宽度存 localStorage） */
+.sp {
+  flex: 0 0 5px; width: 5px; cursor: col-resize; position: relative;
+  background: transparent; touch-action: none;
+}
+.sp::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px;
+  background: var(--border);
+}
+.sp:hover::after, .sp.on::after {
+  left: 1px; width: 3px; background: var(--primary);
 }
 
 /* 侧栏：当前模组名（原来挂在顶栏副标题上） */
@@ -273,9 +292,35 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .dot.c { background: var(--cyan); }  .dot.g { background: var(--success); }
 .dot.a { background: var(--amber); } .dot.d { background: #4a4c58; }
 
-.groups { flex: 1; min-height: 0; overflow: auto; }
+/* --------------------------------------------------------- 模组列表页
+   对齐规则：工具条 / 批量条 / 设置条 / 列头 / 每一行，内容左边界一律
+   var(--pad)=20px；右侧多留 --sbw=8px 给列表滚动条，否则滚动条一出现，
+   表格就比上面的功能栏窄一截。 */
+.mtools { display: flex; align-items: center; gap: 8px;
+          padding: 12px calc(var(--pad) + var(--sbw)) 0 var(--pad);
+          overflow: hidden; }
+.mtools .input { height: 34px; }
+.mtools .chip { height: 30px; flex: none; }
+.mright { margin-left: auto; display: flex; align-items: center; gap: 14px;
+          font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.mright b { color: var(--text); }
+.minibar { width: 140px; height: 6px; border-radius: 3px; background: #232430;
+           overflow: hidden; }
+.minibar i { display: block; height: 6px; background: var(--success); }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.dot.c { background: var(--cyan); }  .dot.g { background: var(--success); }
+.dot.a { background: var(--amber); } .dot.d { background: #4a4c58; }
+
+/* 列表滚动容器：列头粘在顶上，和行共享同一份宽度 */
+.mscroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+           padding: 0 var(--pad); scrollbar-gutter: stable; }
+.mscroll::-webkit-scrollbar { width: var(--sbw); }
+.mscroll::-webkit-scrollbar-track { background: transparent; }
+.mscroll::-webkit-scrollbar-thumb { background: #2b2d38; border-radius: 4px; }
+.mscroll::-webkit-scrollbar-thumb:hover { background: #3d3f4d; }
+.groups { min-height: 0; }
 .grp { height: 44px; display: flex; align-items: center; gap: 12px;
-       padding: 0 20px; background: #0e0f14;
+       padding: 0; background: #0e0f14;
        border-bottom: 1px solid #1b1c23; cursor: pointer; }
 .grp:hover { background: #12131a; }
 .grp .ar { color: #6f7183; font-size: 11px; width: 12px; }
@@ -285,12 +330,9 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .grp .gd { font-size: 12.5px; color: var(--success); }
 .grp .go { font-size: 12.5px; color: var(--danger); }
 
-/* 批量条：一行说完「勾了什么、跑几个、输出到哪」。
-   以前这里是一整块批量面板（路径 + 开关 + 一张跟页面重复的列表），
-   高度 290px，一屏只看得到 7 个模组；开关和输出目录收进 ⚙。 */
-.mbar { display: flex; align-items: center; gap: 12px; height: 44px;
-        margin: 10px 20px 0; padding: 0 14px; border: 1px solid var(--border);
-        border-radius: 9px; background: #12131a; }
+/* 批量条：一行说完「勾了什么、跑几个、输出到哪」。 */
+.mbar { display: flex; align-items: center; gap: 12px; height: 40px;
+        margin: 8px calc(var(--pad) + var(--sbw)) 0 var(--pad); padding: 0; }
 .mbar .mcheck { display: flex; align-items: center; gap: 7px; font-size: 13px;
                 color: #9a9cb0; cursor: pointer; white-space: nowrap; }
 .mbar .mcheck input { accent-color: var(--primary); cursor: pointer; }
@@ -302,13 +344,13 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .mbar .mpath { margin-left: auto; font-size: 11.5px; color: #5b5d6b;
                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
                max-width: 46%; }
-.mbar .btn.icon { flex: none; }
 
-/* 列头：模组 / 状态 / 已填 / 总条数 */
-.mhead { display: grid;
+/* 列头：模组 / 状态 / 已填 / 总条数（跟着列表一起滚，粘顶） */
+.mhead { position: sticky; top: 0; z-index: 2; display: grid;
          grid-template-columns: 26px minmax(0, 1fr) 86px 66px 152px;
-         gap: 12px; align-items: center; height: 30px; margin: 10px 20px 0;
+         gap: 12px; align-items: center; height: 30px;
          font-size: 11.5px; letter-spacing: .04em; color: #6f7183;
+         background: var(--bg);
          border-bottom: 1px solid var(--border); }
 .mhead > span:nth-child(2) { padding-left: 18px; }   /* 对齐行里的名字（跳过 ▸） */
 .mhead > span:nth-child(3) { text-align: center; }
@@ -318,7 +360,7 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .mgrp { border-bottom: 1px solid #17181f; }
 .grp.mod { display: grid;
            grid-template-columns: 26px minmax(0, 1fr) 86px 66px 152px;
-           gap: 12px; height: 40px; padding: 0 20px;
+           gap: 12px; height: 40px; padding: 0;
            border-bottom: 0; background: transparent; }
 .mgrp:nth-child(odd) > .grp.mod { background: #0f1016; }
 .grp.mod:hover { background: var(--hover); }
@@ -341,10 +383,11 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .grp.mod .mn.todo { color: var(--amber); }
 .grp.mod .mt { display: flex; align-items: center; justify-content: flex-end;
                gap: 9px; }
-.grp.mod .mt b { font-size: 12.5px; font-weight: 500; color: #9a9cb0;
+.grp.mod .mt b { min-width: 52px; text-align: right;
+                 font-size: 12.5px; font-weight: 500; color: #9a9cb0;
                  font-variant-numeric: tabular-nums; }
 .grp.mod .mt .minibar { width: 62px; flex: none; }
-.mfiles { background: #0a0b0f; padding: 5px 20px 9px 78px; }
+.mfiles { background: #0a0b0f; padding: 5px 0 9px 58px; }
 .mfile { display: flex; align-items: center; gap: 12px; height: 26px;
          font-size: 12.5px; }
 .mfile .fpath {
@@ -428,18 +471,23 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .setgroup { display: none; }
 .setgroup.on { display: block; }
 
-/* 批量翻译面板：从弹窗搬进模组列表页后的样子 */
+/* 批量翻译的设置：从弹窗搬进页面后完全平铺（不再折叠、不再有二级菜单），
+   左边和上面的功能栏对齐，右边同样避开滚动条。 */
 .mbpanel, .mbpanel.wide {
   position: static; width: auto; max-width: none; max-height: none;
-  margin: 0 20px 10px; border: 1px solid var(--border); border-radius: 9px;
-  background: var(--panel); box-shadow: none;
+  margin: 2px calc(var(--pad) + var(--sbw)) 0 var(--pad);
+  border: 0; border-radius: 0; background: transparent; box-shadow: none;
 }
-.mbpanel .modal-body { overflow: auto; max-height: 300px; }
-.mbpanel .modal-foot .btn[data-close],
-.mbpanel .modal-head .winbtn { display: none; }
-/* ⚙ 里只留「设置」：勾选和开始都在上面那条批量条上，
-   面板里这一整套（预扫按钮、重复的开始、跟页面重复的列表）全部让位。 */
-.mbpanel #btn-q-scan, .mbpanel #btn-q-start, .mbpanel #btn-q-cancel,
+.mbpanel .modal-head { display: none; }
+.mbpanel .modal-body { overflow: visible; max-height: none; padding: 0; }
+.mbpanel .modal-body > .hint:first-child { display: none; }   /* 那段说明留到设置里 */
+.mbpanel .modal-body .row { padding: 4px 0 0; }
+.mbpanel .modal-body .row.gap { gap: 8px; }
+.mbpanel .modal-foot { display: none; }
+/* 全选 / 全不选 / 反选 那一整行也没用了（勾选在列表上），连行带空隙一起去掉 */
+.mbpanel .modal-body > .row:has(#q-sel-count) { display: none; }
+/* 勾选和开始都在上面那条批量条上，这里不再重复 */
+.mbpanel #btn-q-start, .mbpanel #btn-q-cancel, .mbpanel #btn-q-scan,
 .mbpanel #q-progress, .mbpanel #btn-q-all, .mbpanel #btn-q-none,
 .mbpanel #btn-q-invert, .mbpanel #q-sel-count, .mbpanel #q-list,
 .mbpanel #q-summary { display: none; }
