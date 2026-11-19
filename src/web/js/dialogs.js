@@ -195,13 +195,32 @@ async function refreshThemes() {
 /* ---------------- 模组清单 ---------------- */
 let _modsData = null;
 let _modsFilter = "all";
+let _modsHideOrphan = false;
+const _modsCollapsed = new Set();   // 折叠起来的首字母分组
 
 function syncModsChips() {
-  ["all", "done", "todo"].forEach((k) => {
+  ["all", "done", "todo", "empty", "orphan"].forEach((k) => {
     const b = $("mods-filter-" + k);
     if (b) b.classList.toggle("on", _modsFilter === k);
   });
+  const ho = $("mods-hide-orphan");
+  if (ho) ho.classList.toggle("on", _modsHideOrphan);
 }
+
+/* 四种状态：已汉化 / 待翻译 / 无文本 / 孤立。
+   后端给了 status 就用它，老账本没这个字段时按老规则退化。 */
+function modStatus(m) {
+  if (m.status) return m.status;
+  if (m.orphan) return "orphan";
+  return (m.entries || 0) > 0 ? "done" : "empty";
+}
+
+const MOD_STATE = {
+  done: { cls: "d", txt: "已汉化" },
+  todo: { cls: "t", txt: "待翻译" },
+  empty: { cls: "s", txt: "无文本" },
+  orphan: { cls: "o", txt: "孤立" },
+};
 
 async function openMods() {
   $("mods-search").value = "";
@@ -226,34 +245,80 @@ async function refreshMods() {
 function renderMods() {
   const d = _modsData || { mods: [], summary: {} };
   const q = ($("mods-search").value || "").trim().toLowerCase();
-  const rows = (d.mods || []).filter((m) => {
-    const done = (m.entries || 0) > 0;
-    if (_modsFilter === "done" && !done) return false;
-    if (_modsFilter === "todo" && done) return false;
-    if (q && !String(m.name || "").toLowerCase().includes(q)) return false;
+  const all = d.mods || [];
+  const cnt = { all: all.length, done: 0, todo: 0, empty: 0, orphan: 0 };
+  all.forEach((m) => { cnt[modStatus(m)] += 1; });
+  ["all", "done", "todo", "empty", "orphan"].forEach((k) => {
+    const el = $("mc-" + k);
+    if (el) el.textContent = cnt[k];
+  });
+  const rows = all.filter((m) => {
+    const st = modStatus(m);
+    if (_modsFilter !== "all" && st !== _modsFilter) return false;
+    if (_modsHideOrphan && st === "orphan") return false;
+    if (q) {
+      const hay = ((m.name || "") + " " + (m.staging || m.folder || "")).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
     return true;
   });
+  // 按名字首字母分组 —— Vortex 安装缓存里没有 MO2 那种 separator，名字就是唯一的分类
+  const groups = new Map();
+  rows.forEach((m) => {
+    const n = String(m.name || "?").trim();
+    const ch = (n[0] || "#").toUpperCase();
+    const key = /[A-Z]/.test(ch) ? ch : "#";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(m);
+  });
   const box = $("mods-list");
-  if (!rows.length) {
-    box.innerHTML = `<p class="hint" style="padding:12px">${esc(T("没有匹配的模组。"))}</p>`;
-  } else {
-    box.innerHTML = rows.map((m) => {
-      const done = (m.entries || 0) > 0;
-      const cls = m.orphan ? "s-orphan" : (done ? "s-done" : "s-todo");
-      const st = m.orphan ? T("目录已不存在") : (done ? T("已汉化") : T("未汉化"));
-      return `<div class="m-row ${cls}" title="${esc(m.name || "")}">
-        <span class="m-name">${esc(m.name || "")}</span>
-        <span class="m-num">${done ? Number(m.entries).toLocaleString() : "-"}</span>
-        <span class="m-state">${esc(st)}</span>
-      </div>`;
-    }).join("");
+  const autoOpen = _modsFilter !== "all" || !!q;
+  const parts = [];
+  [...groups.keys()].sort().forEach((k) => {
+    const list = groups.get(k);
+    const g = { done: 0, todo: 0, empty: 0, orphan: 0 };
+    list.forEach((m) => { g[modStatus(m)] += 1; });
+    const open = autoOpen || !_modsCollapsed.has(k);
+    parts.push(`<div class="grp" data-g="${esc(k)}">
+      <span class="ar">${open ? "▾" : "▸"}</span>
+      <span class="gn">${esc(k)}</span>
+      <span class="gc">${list.length} ${esc(T("个模组"))}</span>` +
+      (g.todo ? `<span class="gt">${g.todo} ${esc(T("待翻译"))}</span>` : "") +
+      (g.done ? `<span class="gd">${g.done} ${esc(T("已汉化"))}</span>` : "") +
+      (g.orphan ? `<span class="go">${g.orphan} ${esc(T("孤立"))}</span>` : "") +
+      `</div>`);
+    if (!open) return;
+    list.forEach((m) => {
+      const st = modStatus(m);
+      const s = MOD_STATE[st] || MOD_STATE.empty;
+      const e = Number(m.entries || 0);
+      const f = Number(m.filled || 0);
+      const num = !e ? "—"
+        : (f >= e ? `${e.toLocaleString()}` : `${f} / ${e.toLocaleString()}`);
+      parts.push(`<div class="mrow" title="${esc(m.staging || m.folder || "")}">
+        <div class="mname">${esc(m.name || "")}` +
+        (st === "orphan" ? `<span class="o">${esc(T("目录已不在"))}</span>` : "") +
+        `</div>
+        <div class="mpath">${esc(m.staging || m.folder || "")}</div>
+        <div class="mnum">${num}</div>
+        <div><span class="pill ${s.cls}">${esc(T(s.txt))}</span></div>
+      </div>`);
+    });
+  });
+  box.innerHTML = parts.length ? parts.join("")
+    : `<p class="hint" style="padding:14px 20px">${esc(T("没有匹配的模组。"))}</p>`;
+
+  // 右上角：已汉化 N / 总数 + 进度条
+  const p = cnt.all ? Math.round((cnt.done * 100) / cnt.all) : 0;
+  const sum = $("mods-summary");
+  if (sum) {
+    sum.innerHTML = esc(T("已汉化")) + " <b>" + cnt.done + "</b> / " + cnt.all +
+      " " + esc(T("个模组")) +
+      `<span class="minibar"><i style="width:${p}%"></i></span>`;
   }
-  const s = d.summary || {};
-  $("mods-summary").textContent =
-    T("共 %d 个模组：已汉化 %d，未汉化 %d，目录缺失 %d；合计 %d 条")
-      .replace("%d", s.total || 0).replace("%d", s.done || 0)
-      .replace("%d", s.todo || 0).replace("%d", s.orphan || 0)
-      .replace("%d", Number(s.entries || 0).toLocaleString());
+  state.stagingCount = cnt.all;
+  const tabN = $("tab-mods-n");
+  if (tabN) tabN.textContent = cnt.all || "";
 }
 
 function openSettings() {

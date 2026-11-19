@@ -39,3 +39,6 @@ src/tmp_wa2.py
 !.vscode/tasks.json
 !.vscode/settings.json
 .idea/
+
+# 临时目录：截图 / 设计稿草样，不进仓库
+_tmp/

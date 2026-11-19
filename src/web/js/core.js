@@ -92,7 +92,8 @@ async function _boot() {
   bind();
   render();
   applyThemeCss();      // 按已存主题刷一次（build_html 已注入，这里只兜底）
-  refreshNavStatus();   // 侧边栏底部的包大小 / 模组数 / 条数
+  refreshNavStatus();   // 顶栏计数 + 左栏底部的包大小
+  updateAppSub();       // 顶栏副标题：当前模组 / 文件数 / 段数
   setStatus(T("就绪 | 提示: Vortex 用户应用后需在 Vortex 中重新 Deploy"));
   if (d.initialPath) {
     $("path").value = d.initialPath;
@@ -124,8 +125,8 @@ async function applyThemeCss() {
   el.textContent = css;
 }
 
-/* ---------------- 页面切换（左侧导航） ----------------
-   三个页面共用同一条状态栏和标题栏；[data-page] 标归属，[data-page-btn] 是导航项。
+/* ---------------- 页面切换（顶部 tab） ----------------
+   三个页面共用同一条状态栏和标题栏；[data-page] 标归属，[data-page-btn] 是 tab。
    用 hidden 属性切换而不是 display：各元素原本的 display（flex/block）保留，
    切回来时不用重新算布局。 */
 const PAGES = ["translate", "manage", "pack"];
@@ -145,18 +146,123 @@ function switchPage(name) {
   refreshNavStatus();
 }
 
-/* 侧边栏底部：包多大 / 几个模组 / 多少条，任何页面都看得到 */
+/* 顶栏 tab 上的计数 + 翻译页左栏底部的账本摘要。
+   任何页面都看得到，所以放在切页里统一刷。 */
 async function refreshNavStatus() {
-  const el = $("nav-status");
-  if (!el) return;
   let s = null;
   try { s = await pywebview.api.pack_status(); } catch (_) { s = null; }
-  if (!s) { el.textContent = ""; return; }
-  const lg = s.ledger || {};
-  el.innerHTML =
-    "<div>" + esc(T("包")) + " " + (s.exists ? fmtBytes(s.size) : "—") + "</div>" +
-    "<div>" + (lg.mods || 0) + " " + esc(T("模组")) + "</div>" +
-    "<div>" + Number(lg.entries || 0).toLocaleString() + " " + esc(T("条")) + "</div>";
+  const lg = (s && s.ledger) || {};
+  const nM = $("tab-mods-n"), nP = $("tab-pack-n"), foot = $("side-foot");
+  if (nM) nM.textContent = (state.stagingCount || 0) || "";
+  if (nP) nP.textContent = (lg.mods || 0) || "";
+  if (!foot) return;
+  foot.innerHTML =
+    '<span class="tag">' + esc(T("包")) + "</span>" +
+    (s && s.exists ? fmtBytes(s.size) : "—") + "<br>" +
+    '<span class="tag">' + esc(T("账本")) + "</span>" +
+    (lg.mods || 0) + " " + esc(T("模组")) + " · " +
+    Number(lg.entries || 0).toLocaleString() + " " + esc(T("条"));
+}
+
+/* ---------------- 翻译页左栏：进度 + 文件列表 ----------------
+   数据全部来自 state.rows，不需要后端再给一份。 */
+function renderSide() {
+  const rows = state.rows || [];
+  const box = $("file-list");
+  const pct = $("side-pct"), bar = $("side-bar"), note = $("side-note");
+  if (!box) return;
+  if (!rows.length) {
+    box.innerHTML = "";
+    if (pct) pct.textContent = "—";
+    if (bar) bar.style.width = "0";
+    if (note) note.textContent = T("没加载模组");
+    renderDetail();
+    return;
+  }
+  const filled = rows.filter((r) => r.trans).length;
+  const skipped = rows.filter((r) => r.skip).length;
+  const p = Math.round((filled * 100) / rows.length);
+  if (pct) pct.textContent = p + " %";
+  if (bar) bar.style.width = p + "%";
+  if (note) {
+    let s = T("共 %d 段 · 已填 %d · 未填 %d")
+      .replace("%d", rows.length).replace("%d", filled)
+      .replace("%d", rows.length - filled);
+    if (skipped) s += " · " + T("跳过 %d").replace("%d", skipped);
+    note.innerHTML = s;
+  }
+  const map = new Map();
+  rows.forEach((r) => {
+    const k = r.disp || r.file || "-";
+    let g = map.get(k);
+    if (!g) { g = { n: 0, f: 0, type: r.type || "" }; map.set(k, g); }
+    g.n += 1;
+    if (r.trans) g.f += 1;
+  });
+  const items = [
+    '<div class="fitem' + (state.onlyFile ? "" : " on") + '" data-file="">' +
+    '<div class="n">' + esc(T("全部文件")) + '<span class="cnt">' + rows.length +
+    "</span></div><div class=\"d\">" + map.size + " " + esc(T("个文件")) +
+    "</div></div>",
+  ];
+  [...map.entries()].sort((a, b) => b[1].n - a[1].n).forEach(([name, g]) => {
+    const on = state.onlyFile === name ? " on" : "";
+    const done = g.f === g.n;
+    items.push('<div class="fitem' + on + '" data-file="' + esc(name) + '">' +
+      '<div class="n">' + esc(name) + '<span class="cnt">' + g.n + "</span></div>" +
+      '<div class="d">' + esc(T(g.type || "")) + " · " +
+      '<span class="' + (done ? "g" : "") + '">' + g.f + "/" + g.n + "</span></div></div>");
+  });
+  box.innerHTML = items.join("");
+}
+
+/* ---------------- 翻译页右栏：当前行的出处 ---------------- */
+function renderDetail() {
+  const box = $("detail-body"), keys = $("detail-keys"), warn = $("detail-warn");
+  if (!box) return;
+  const r = (state.rows || []).find((x) => x._i === state.sel);
+  if (!r) {
+    box.textContent = T("点一行看这段文本从哪来。");
+    if (keys) keys.innerHTML = "";
+    if (warn) warn.innerHTML = "";
+    return;
+  }
+  const kv = (k, v) =>
+    '<div class="kv"><span>' + esc(k) + "</span><b>" + esc(String(v)) + "</b></div>";
+  const where = r.archive
+    ? r.archive + " > " + (r.disp || r.file || "")
+    : (r.disp || r.file || "-");
+  box.innerHTML =
+    kv(T("序号"), "#" + (state.sel + 1)) +
+    kv(T("类型"), T(r.type || "-")) +
+    kv(T("文件"), where) +
+    kv(T("行号"), r.line || r.entryId || "-") +
+    (r.count > 1 ? kv(T("同文件重复"), "×" + r.count) : "");
+  const tags = [];
+  if (r.already) tags.push(T("模组里本来就是这个语言的文本。改译文列即可覆盖。"));
+  if (warn) warn.innerHTML = tags.map((t) => esc(t)).join("<br>");
+  if (keys) keys.innerHTML = "";
+}
+
+/* 顶栏副标题：当前模组 · 文件数 · 段数。没打开模组时只写安装缓存统计。 */
+function updateAppSub() {
+  const el = $("app-sub");
+  if (!el) return;
+  const rows = (state.rows || []).length;
+  const name = state.meta && (state.meta.name || state.meta.mod);
+  const parts = [];
+  if (name) {
+    parts.push("<b>" + esc(name) + "</b>");
+    const files = new Set((state.rows || []).map((r) => r.disp || r.file));
+    parts.push(files.size + " " + esc(T("个文件含文本")));
+    parts.push(esc(T("已提取 %d 段").replace("%d", rows)));
+  } else {
+    parts.push(esc(T("没打开模组")));
+    if (state.stagingCount) {
+      parts.push(esc(T("安装缓存里 %d 个模组").replace("%d", state.stagingCount)));
+    }
+  }
+  el.innerHTML = parts.join(" · ");
 }
 
 function applyI18n() {

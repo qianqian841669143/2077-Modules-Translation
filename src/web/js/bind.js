@@ -115,17 +115,45 @@ function bind() {
     const p = await pywebview.api.pick_zip();
     if (p) { $("path").value = p; loadMod(); }
   };
-  // ---- 左侧导航：翻译 / 管理 / 打包 ----
+  // ---- 左侧导航：翻译 / 模组清单 / 汉化包 ----
   document.querySelectorAll("[data-page-btn]").forEach((b) => {
     b.onclick = () => switchPage(b.getAttribute("data-page-btn"));
   });
-  // ---- 管理页（模组清单）----
+  // ---- 翻译页左栏：点文件卡片只看这个文件，再点一次取消 ----
+  const flist = $("file-list");
+  if (flist) {
+    flist.onclick = (e) => {
+      const it = e.target.closest(".fitem");
+      if (!it) return;
+      const f = it.getAttribute("data-file") || "";
+      if (!f) { if (state.onlyFile) clearScope(); else renderSide(); return; }
+      if (state.onlyFile === f) clearScope(); else onlyFile(f);
+      renderSide();
+    };
+  }
+  // ---- 模组清单 ----
   $("btn-mods-refresh").onclick = () => refreshMods();
   $("mods-search").oninput = () => { if (_modsData) renderMods(); };
-  ["all", "done", "todo"].forEach((k) => {
+  ["all", "done", "todo", "empty", "orphan"].forEach((k) => {
     const b = $("mods-filter-" + k);
     if (b) b.onclick = () => { _modsFilter = k; syncModsChips(); renderMods(); };
   });
+  const ho = $("mods-hide-orphan");
+  if (ho) ho.onclick = () => { _modsHideOrphan = !_modsHideOrphan; syncModsChips(); renderMods(); };
+  const mlist = $("mods-list");
+  if (mlist) {
+    mlist.onclick = (e) => {
+      const g = e.target.closest(".grp");
+      if (g) {
+        const k = g.getAttribute("data-g");
+        if (_modsCollapsed.has(k)) _modsCollapsed.delete(k); else _modsCollapsed.add(k);
+        renderMods();
+        return;
+      }
+      const r = e.target.closest(".mrow");
+      if (r) toast(T("双击这一行可以打开那个模组"), "ok");
+    };
+  }
   $("btn-pack-sync").onclick = async () => {
     const b = $("btn-pack-sync");
     b.disabled = true;

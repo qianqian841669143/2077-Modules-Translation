@@ -410,7 +410,11 @@ def write(out_dir, mod_root, rows, staging_name="", target="简体中文",
 
     rec = {"file": "mods/" + folder + ".lua", "folder": folder,
            "mod": staging_name or folder, "staging": staging_name,
-           "entries": len(entries), "sourceIds": ids}
+           "entries": len(entries),
+           # 已填多少条：模组清单靠这个算「待翻译 / 已汉化」。
+           # 老索引没有这个字段，读的时候按 0 处理（会显示成待翻译，重跑一次提取就补齐）。
+           "filled": sum(1 for e in entries if str(e.get("z") or "").strip()),
+           "sourceIds": ids}
     _update_index(out_dir, rec)
     _rebuild_all(out_dir)
     return rec

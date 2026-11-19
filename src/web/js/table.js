@@ -120,6 +120,7 @@ function onLoaded(r) {
   applyModeUi();
   render();
   syncEditorEnabled();
+  updateAppSub();          // 顶栏副标题：模组名 · 文件数 · 段数
   $("empty").textContent = (!state.rows.length && r.skippedTarget)
     ? T("没有可提取的原文（已跳过 %d 条目标语言文本）").replace("%d", r.skippedTarget)
     : T("未加载 — 先选模组目录点「加载 / 提取」");
@@ -799,7 +800,8 @@ function render() {
     if (r.skip) cls.push("skipped");
     if (r.already) cls.push("already");
     if (r._i === state.sel) cls.push("sel");
-    const tcls = r.type === "长句文本" ? "td type t-long" : "td type";
+    const tcls = r.type === "长句文本" ? "ftype t-long" : "ftype t-n";
+    const tline = r.line || r.entryId || "-";
     parts.push(
       `<div class="${cls.join(" ")}" data-i="${r._i}">` +
       `<div class="td num" data-col="num">${idx + 1}` +
@@ -809,18 +811,18 @@ function render() {
       `${r.skip ? " checked" : ""} title="${esc(T("跳过此行翻译"))}"></div>` +
       `<div class="td file" data-col="file" title="${esc(
         r.archive ? r.archive + " > " + r.file : fullPathOf(r))}">` +
-      `<span class="open-dir" data-file="${esc(r.file)}" title="${esc(
+      `<div class="frow"><span class="open-dir" data-file="${esc(r.file)}" title="${esc(
         r.archive ? T("打开归档所在目录") : T("打开文件所在目录"))}">` +
       `<svg viewBox="0 0 16 16"><path d="M1.5 4.5h4l1.2 1.6h7.8v6.4a1 1 0 0 1-1 1H2.5a1 1 0 0 1-1-1z"/>` +
       `<path d="M1.5 4.5V3.4a1 1 0 0 1 1-1h3.2l1.3 1.7"/></svg></span>` +
       `<span class="fname">${esc(r.disp || r.file)}</span></div>` +
-      `<div class="td line" data-col="line">${r.line || esc(r.entryId || "") || "-"}</div>` +
-      `<div class="${tcls}" data-col="type">${esc(T(r.type))}</div>` +
-      `<div class="td ctx" data-col="ctx">${esc(r.ctx)}</div>` +
-      `<div class="td orig" data-col="orig" title="${esc(r.orig)}">` +
+      `<div class="fsub"><span class="fline">${esc(String(tline))}</span>` +
+      `<span class="${tcls}">${esc(T(r.type))}</span></div></div>` +
+      `<div class="td orig" data-col="orig" title="${esc(r.ctx ? r.ctx + "\n" + r.orig : r.orig)}">` +
       (r.already ? `<span class="already-tag" title="${esc(
         T("模组里本来就是这个语言的文本。改译文列即可覆盖。"))}">${esc(T("已译"))}</span>` : "") +
-      `${esc(r.orig)}</div>` +
+      `<span class="otext">${esc(r.orig)}</span>` +
+      (r.ctx ? `<div class="osub">${esc(r.ctx)}</div>` : "") + `</div>` +
       `<div class="${transCls(r)}" data-col="trans" title="${esc(transTitle(r))}">${esc(r.trans)}</div>` +
       `</div>`);
   });
@@ -828,6 +830,8 @@ function render() {
   $("empty").style.display = (state.rows.length && list.length) ? "none" : "flex";
   if (state.rows.length && !list.length) $("empty").textContent = T("没有匹配的行");
   updateStats(list);
+  renderSide();            // 左栏：进度 + 文件列表
+  renderDetail();          // 右栏：当前行的出处
   syncSelection(list);
   // 每次重画后校正一次编辑条：没选中行就不该能打字。
   syncEditorEnabled();
@@ -945,6 +949,7 @@ function selectRow(i) {
   syncEditorEnabled();
   $("trans").focus();
   scrollToSel();
+  renderDetail();          // 右栏「详情」跟着走
 }
 
 // 把某一行拉回视野：先确认它还没被筛掉，再翻到它所在的页、滚到中间。

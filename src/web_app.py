@@ -148,6 +148,14 @@ def build_html(theme="light", theme_name=""):
         css = f.read()
     html = html.replace('<link rel="stylesheet" href="style.css">',
                         "<style>\n%s\n</style>" % css)
+    # 深色外套：紧跟在 style.css 之后，靠覆盖变量换皮，不改 style.css 本体
+    try:
+        with open(os.path.join(d, "cyber.css"), "r", encoding="utf-8-sig") as f:
+            cyber = f.read()
+    except OSError:
+        cyber = "/* missing cyber.css */"
+    html = html.replace('<link rel="stylesheet" href="cyber.css">',
+                        "<style>\n%s\n</style>" % cyber)
     # 前端按功能拆成 8 个文件，逐个内联。缺文件时塞一句注释而不是崩掉：
     # 至少还能看到界面，日志里也能看出少了哪一块。
     for name in JS_FILES:
@@ -3929,20 +3937,26 @@ class Api(object):
         return out
 
     def list_mods(self):
-        """模组清单：staging 里每个目录 + 它有没有账本、多少条。
+        """模组清单：staging 里每个目录，以及它现在处于哪种状态。
+
+        四种状态（对齐 CMT 的 Modlist 语义）：
+          done    已汉化 —— 有账本，已填 == 总条数，且目录在账本之后没被改过
+          todo    待翻译 —— 没账本（新装的），或已填 < 总条数，或目录比账本新（模组更新了）
+          empty   无文本 —— 提取过，一个可翻的字符串都没有
+          orphan  孤立   —— 账本里有、目录已经不在了（Vortex 里卸了或改了名）
 
         只读。账本信息取自 ``userdata\\pack\\ledger\\index.json``，目录取自
-        设置里的安装缓存根。两边对不上的也要列出来——「装过但没汉化」和
-        「汉化过但目录没了」正是要靠这张表看出来的。
+        设置里的安装缓存根。
         """
         def _clean(v):
             return str(v or "").strip().strip('"').strip("'")
 
         staging = _clean(self.settings.get("staging_dir"))
 
-        # 账本索引：staging 目录名 -> {folder, entries}
+        # 账本索引：staging 目录名 -> {folder, entries, filled, mtime}
         led = {}
-        idx_path = os.path.join(self._ledger_dir() or "", "index.json")
+        ldir = self._ledger_dir() or ""
+        idx_path = os.path.join(ldir, "index.json")
         try:
             with open(idx_path, "r", encoding="utf-8") as f:
                 idx = json.load(f)
@@ -3952,9 +3966,22 @@ class Api(object):
             if not isinstance(m, dict):
                 continue
             key = str(m.get("staging") or m.get("folder") or "")
-            if key:
-                led[key] = {"folder": str(m.get("folder") or ""),
-                            "entries": int(m.get("entries") or 0)}
+            if not key:
+                continue
+            # 账本文件自己的时间戳：目录比它新就说明模组被更新过
+            mt = 0.0
+            rel = str(m.get("file") or "")
+            if rel:
+                try:
+                    mt = os.path.getmtime(os.path.join(ldir, rel.replace("/", os.sep)))
+                except OSError:
+                    mt = 0.0
+            led[key] = {"folder": str(m.get("folder") or ""),
+                        "entries": int(m.get("entries") or 0),
+                        # 老索引没有 filled：用 -1 表示「不知道」，按老规矩算已汉化，
+                        # 免得升级后所有模组一下子全变成待翻译。
+                        "filled": int(m["filled"]) if "filled" in m else -1,
+                        "mtime": mt}
 
         rows = []
         seen = set()
@@ -3964,30 +3991,55 @@ class Api(object):
             except OSError:
                 names = []
             for name in names:
-                if not os.path.isdir(os.path.join(staging, name)):
+                full = os.path.join(staging, name)
+                if not os.path.isdir(full):
                     continue
                 seen.add(name)
-                hit = led.get(name) or {}
-                rows.append({"name": name,
-                             "folder": hit.get("folder") or "",
-                             "entries": int(hit.get("entries") or 0),
-                             "hasLedger": bool(hit),
-                             "orphan": False})
+                hit = led.get(name)
+                if not hit:
+                    # 没账本 = 新装的、还没提取过
+                    rows.append({"name": name, "folder": "", "entries": 0,
+                                 "filled": 0, "hasLedger": False,
+                                 "orphan": False, "status": "todo"})
+                    continue
+                entries = int(hit["entries"] or 0)
+                filled = int(hit["filled"])
+                if filled < 0:
+                    filled = entries          # 老索引：当作已填满
+                try:
+                    dir_mt = os.path.getmtime(full)
+                except OSError:
+                    dir_mt = 0.0
+                updated = bool(hit["mtime"]) and dir_mt > hit["mtime"] + 1
+                if entries <= 0:
+                    status = "empty"
+                elif updated or filled < entries:
+                    status = "todo"
+                else:
+                    status = "done"
+                rows.append({"name": name, "folder": hit["folder"],
+                             "entries": entries, "filled": filled,
+                             "hasLedger": True, "orphan": False,
+                             "updated": updated, "status": status})
         # 账本里有、staging 里没有：目录被删掉或改名了（Vortex 里卸了？）
         for key, v in led.items():
             if key in seen:
                 continue
             rows.append({"name": key, "folder": v["folder"],
-                         "entries": v["entries"], "hasLedger": True,
-                         "orphan": True})
+                         "entries": int(v["entries"] or 0),
+                         "filled": (int(v["entries"] or 0)
+                                    if int(v["filled"]) < 0 else int(v["filled"])),
+                         "hasLedger": True, "orphan": True,
+                         "status": "orphan"})
         rows.sort(key=lambda r: (-int(r.get("entries") or 0),
                                  str(r.get("name") or "").lower()))
-        done = [r for r in rows if int(r.get("entries") or 0) > 0]
-        orphan = [r for r in rows if r.get("orphan")]
+        cnt = {"done": 0, "todo": 0, "empty": 0, "orphan": 0}
+        for r in rows:
+            cnt[r.get("status") or "todo"] = cnt.get(r.get("status") or "todo", 0) + 1
         return {"ok": True, "staging": staging, "mods": rows,
-                "summary": {"total": len(rows), "done": len(done),
-                            "todo": len(rows) - len(done),
-                            "orphan": len(orphan),
+                "summary": {"total": len(rows), "done": cnt["done"],
+                            "todo": cnt["todo"], "empty": cnt["empty"],
+                            "orphan": cnt["orphan"],
                             "entries": sum(int(r.get("entries") or 0)
                                            for r in rows)}}
 
