@@ -56,27 +56,38 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .winbtn:hover { background: #232530; color: #cfd1de; }
 .winbtn.close:hover { background: #c0392b; color: #fff; }
 
-/* 顶栏：logo + 标题 + tab + 设置 */
+/* 顶栏：只管整个窗口（名字 + 窗口按钮） */
 .head {
-  height: 88px; flex: none;
-  display: flex; align-items: stretch;
-  padding: 0 24px 0 26px;
+  height: 64px; flex: none;
+  display: flex; align-items: center;
+  padding: 0 24px 0 22px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
-.brand { display: flex; align-items: center; gap: 16px; align-self: center; }
+.brand { display: flex; align-items: center; gap: 14px; }
 .brand .badge {
-  width: 54px; height: 54px; flex: none; border-radius: 7px;
+  width: 44px; height: 44px; flex: none; border-radius: 6px;
   background: var(--primary); color: var(--on-primary);
-  font-size: 19px; font-weight: 800; letter-spacing: -.5px;
+  font-size: 16px; font-weight: 800; letter-spacing: -.5px;
   display: flex; align-items: center; justify-content: center;
 }
-.brand .htitle { font-size: 25px; font-weight: 700; letter-spacing: -.2px; }
+.brand .htitle { font-size: 21px; font-weight: 700; letter-spacing: -.2px; }
 .brand .hsub {
   font-size: 13px; color: var(--muted); margin-top: 3px;
   max-width: 560px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .brand .hsub b { color: #c8cad8; font-weight: 600; }
+
+/* 导航行：三个页面 + 设置 + 更多 */
+.navrow {
+  height: 48px; flex: none; display: flex; align-items: stretch;
+  padding: 0 24px; border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.navrow .tabs { margin-left: 0; }
+.navrow .tab { font-size: 14.5px; padding: 0 16px; }
+.navrow .head-right { margin-left: auto; align-self: center; }
+.navrow .head-right .btn { height: 32px; }
 
 .tabs { display: flex; align-items: stretch; gap: 4px; margin-left: 34px; }
 .tab {
@@ -94,7 +105,7 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .head-right .btn { height: 34px; }
 
 /* --------------------------------------------------------------- 外壳 */
-.app { height: calc(100% - 88px); display: flex; flex-direction: row; }
+.app { height: calc(100% - 64px - 48px); display: flex; flex-direction: row; }
 .main-col { flex: 1; min-width: 0; display: flex; flex-direction: column;
             gap: 0; padding: 0; }
 
@@ -111,6 +122,13 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
   width: 296px; flex: 0 0 296px; padding: 18px 20px 12px;
   border-left: 1px solid var(--border); overflow: auto;
 }
+
+/* 侧栏：当前模组名（原来挂在顶栏副标题上） */
+.side .modname {
+  font-size: 13px; color: var(--muted); line-height: 1.45;
+  margin-bottom: 16px; word-break: break-word;
+}
+.side .modname b { color: var(--text); font-weight: 600; }
 
 /* 侧栏：进度 */
 .side .plabel {
@@ -336,6 +354,29 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .menu { background: var(--panel2); border-color: var(--line2); }
 .menu .btn { color: #dfe0ea; }
 .menu .btn:hover { background: #23242e; }
+
+/* ------------------------------------------------------- 设置：分类导航 */
+.modal.settings { width: 780px; }
+.modal-body.setwrap { display: flex; padding: 0; overflow: hidden; min-height: 420px; }
+.setnav {
+  width: 148px; flex: none; display: flex; flex-direction: column;
+  gap: 2px; padding: 12px 8px; border-right: 1px solid var(--border);
+}
+.setnav button {
+  text-align: left; padding: 8px 11px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted); font: inherit;
+  font-size: 13px; cursor: pointer;
+}
+.setnav button:hover { background: var(--hover); color: var(--text); }
+.setnav button.on {
+  background: var(--primary-soft); color: var(--primary); font-weight: 600;
+}
+.setpane { flex: 1; min-width: 0; overflow: auto; padding: 12px 18px 4px; }
+.setpane .setsec {
+  font-size: 12px; letter-spacing: 1.4px; font-weight: 700;
+  color: var(--primary); margin: 18px 0 8px; scroll-margin-top: 8px;
+}
+.setpane .setsec:first-child { margin-top: 2px; }
 
 /* ------------------------------------------------- 表格：5 列窄版布局 */
 /* 三栏之后中间只剩 600 出头，8 列挤不下（原来的 974px 要横向滚动）。

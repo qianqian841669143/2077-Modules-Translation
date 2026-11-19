@@ -223,6 +223,17 @@ function bind() {
   };
   $("loc-src").onchange = () => renderLocaleList();
   $("btn-settings").onclick = () => openSettings();
+  // 设置面板左侧分类：点了滚到对应小节，顺便把高亮挪过去
+  const setnav = $("set-nav");
+  if (setnav) {
+    setnav.onclick = (e) => {
+      const b = e.target.closest("button[data-sec]");
+      if (!b) return;
+      setnav.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+      const target = $(b.getAttribute("data-sec"));
+      if (target) target.scrollIntoView({ block: "start" });
+    };
+  }
   $("btn-queue").onclick = () => openQueue();
   $("btn-q-pick").onclick = () => pickMbDir();
   $("btn-q-scan").onclick = () => scanQueue();

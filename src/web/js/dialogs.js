@@ -387,6 +387,11 @@ function openSettings() {
   $("cfg-path").textContent = (state.configFile || "") ? (T("配置文件: %s").replace("%s", state.configFile)) : "";
   refreshMemoryInfo();
   refreshCacheInfo();
+  // 每次打开都回到第一个分类，别停在上次滚到的位置
+  const pane = $("set-pane");
+  if (pane) pane.scrollTop = 0;
+  const nav = $("set-nav");
+  if (nav) nav.querySelectorAll("button").forEach((x, i) => x.classList.toggle("on", i === 0));
   openModal("modal-settings");
 }
 
