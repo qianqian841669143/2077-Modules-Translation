@@ -196,7 +196,31 @@ async function refreshThemes() {
 let _modsData = null;
 let _modsFilter = "all";
 let _modsHideOrphan = false;
-const _modsCollapsed = new Set();   // 折叠起来的首字母分组
+const _modsOpen = new Set();     // 展开着的模组（按目录名记）
+
+/* Viewer 目录名带着版本和哈希：Appearance Menu Mod 790 2.15.1 2026-10-25T12-38Z ebPkbzzu3
+   清单里没必要显示这些，能剥就剥，剥不出来就原样显示。 */
+function prettyName(n) {
+  const s = String(n || "");
+  let m = s.match(/-\d{3,}(?:-\d+)+$/);                       // Name-26359-1-0-1766387572
+  if (m) return s.slice(0, m.index).replace(/[.\s]+$/, "");
+  m = s.match(/\s+\d[\d.]*\s+\d{3,}\s/);                      // Name 1.0.7 36443 1.0.7 2026-…Z hash
+  if (m) return s.slice(0, m.index).trim();
+  m = s.match(/\s+\d{3,}\s+[\d.]+\s+\d{4}-\d\d-\d\d/);        // Name 790 2.15.1 2026-10-25T…
+  if (m) return s.slice(0, m.index).trim();
+  return s;
+}
+
+/* 账本里的文件是相对游戏根目录的（../../../../bin/x64/…），列出来只取尾巴 */
+function shortPath(p) {
+  const s = String(p || "").replace(/^(\.\.\/)+/, "");
+  const parts = s.split("/");
+  let out = parts[parts.length - 1] || s;
+  for (let i = parts.length - 2; i >= 0 && out.length < 30; i--) {
+    out = parts[i] + "/" + out;
+  }
+  return out.length < s.length ? "…/" + out : out;
+}
 
 function syncModsChips() {
   ["all", "done", "todo", "empty", "orphan"].forEach((k) => {
@@ -262,48 +286,57 @@ function renderMods() {
     }
     return true;
   });
-  // 按名字首字母分组 —— Vortex 安装缓存里没有 MO2 那种 separator，名字就是唯一的分类
-  const groups = new Map();
-  rows.forEach((m) => {
-    const n = String(m.name || "?").trim();
-    const ch = (n[0] || "#").toUpperCase();
-    const key = /[A-Z]/.test(ch) ? ch : "#";
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(m);
-  });
+  // 一个模组一块：折叠时只占一行，展开后列出「这个模组里还要翻哪些文件」
   const box = $("mods-list");
   const autoOpen = _modsFilter !== "all" || !!q;
   const parts = [];
-  [...groups.keys()].sort().forEach((k) => {
-    const list = groups.get(k);
-    const g = { done: 0, todo: 0, empty: 0, orphan: 0 };
-    list.forEach((m) => { g[modStatus(m)] += 1; });
-    const open = autoOpen || !_modsCollapsed.has(k);
-    parts.push(`<div class="grp" data-g="${esc(k)}">
-      <span class="ar">${open ? "▾" : "▸"}</span>
-      <span class="gn">${esc(k)}</span>
-      <span class="gc">${list.length} ${esc(T("个模组"))}</span>` +
-      (g.todo ? `<span class="gt">${g.todo} ${esc(T("待翻译"))}</span>` : "") +
-      (g.done ? `<span class="gd">${g.done} ${esc(T("已汉化"))}</span>` : "") +
-      (g.orphan ? `<span class="go">${g.orphan} ${esc(T("孤立"))}</span>` : "") +
-      `</div>`);
-    if (!open) return;
-    list.forEach((m) => {
-      const st = modStatus(m);
-      const s = MOD_STATE[st] || MOD_STATE.empty;
-      const e = Number(m.entries || 0);
-      const f = Number(m.filled || 0);
-      const num = !e ? "—"
-        : (f >= e ? `${e.toLocaleString()}` : `${f} / ${e.toLocaleString()}`);
-      parts.push(`<div class="mrow" title="${esc(m.staging || m.folder || "")}">
-        <div class="mname">${esc(m.name || "")}` +
+  rows.forEach((m, idx) => {
+    const st = modStatus(m);
+    const s = MOD_STATE[st] || MOD_STATE.empty;
+    const e = Number(m.entries || 0);
+    const f = Number(m.filled || 0);
+    const todo = Math.max(0, e - f);
+    const num = !e ? "—" : `${f.toLocaleString()} / ${e.toLocaleString()}`;
+    // 只有「有账本」的模组才知道具体文件；没提取过的给一句提示
+    const files = Array.isArray(m.files) ? m.files : [];
+    const open = autoOpen || _modsOpen.has(m.name);
+    parts.push(`<div class="mgrp">
+      <div class="grp mod" data-i="${idx}">
+        <span class="ar">${open ? "▾" : "▸"}</span>
+        <span class="gn">${esc(prettyName(m.name))}` +
         (st === "orphan" ? `<span class="o">${esc(T("目录已不在"))}</span>` : "") +
-        `</div>
-        <div class="mpath">${esc(m.staging || m.folder || "")}</div>
-        <div class="mnum">${num}</div>
-        <div><span class="pill ${s.cls}">${esc(T(s.txt))}</span></div>
+        `</span>
+        <span class="gc">${e ? e.toLocaleString() + " " + esc(T("条")) : ""}</span>` +
+        (todo ? `<span class="gt">${todo} ${esc(T("待翻译"))}</span>` : "") +
+        `<span class="mn">${num}</span>
+        <span class="pill ${s.cls}">${esc(T(s.txt))}</span>
       </div>`);
-    });
+    if (open) {
+      if (!files.length) {
+        parts.push(`<div class="mfiles"><div class="mfile empty">${
+          esc(T(e ? "没有未填的条目" : "还没提取过，不知道有哪些文件"))}</div></div>`);
+      } else {
+        // 要翻的排在前面；已经全填的文件折成一行「另外 N 个文件已翻完」
+        const need = files.filter((x) => Number(x.todo) > 0);
+        const doneN = files.length - need.length;
+        const list = (need.length ? need : files).slice(0, 30);
+        parts.push(`<div class="mfiles">` + list.map((x) => {
+          const td = Number(x.todo || 0);
+          const tt = Number(x.total || 0);
+          return `<div class="mfile" title="${esc(x.file || "")}">
+            <span class="fpath mono">${esc(shortPath(x.file))}</span>
+            <span class="fnum ${td ? "need" : ""}">${
+              td ? td + " " + esc(T("待翻译")) : esc(T("已翻完"))} / ${tt}</span>
+          </div>`;
+        }).join("") +
+        (need.length && doneN ? `<div class="mfile empty">${esc(
+          T("另外 %d 个文件已翻完").replace("%d", doneN))}</div>` : "") +
+        (list.length < need.length ? `<div class="mfile empty">${esc(
+          T("还有 %d 个文件没展开").replace("%d", need.length - list.length))}</div>` : "") +
+        `</div>`);
+      }
+    }
+    parts.push(`</div>`);
   });
   box.innerHTML = parts.length ? parts.join("")
     : `<p class="hint" style="padding:14px 20px">${esc(T("没有匹配的模组。"))}</p>`;
@@ -380,7 +413,8 @@ async function saveSettings(opts) {
     use_official_tm: $("set-official-tm").checked,
     official_weak: $("set-official-weak").checked,
     local_model_enabled: $("set-local").checked,
-    ask_unload_model: $("set-ask-unload").checked
+    ask_unload_model: $("set-ask-unload").checked,
+    extract_opts: state.opts
   };
   const r = await pywebview.api.save_settings(cfg);
   if (!r.ok) { toast(r.error, "err"); return false; }

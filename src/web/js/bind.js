@@ -6,10 +6,14 @@ function bind() {
   $("win-min").onclick = () => pywebview.api.win_min();
   $("win-max").onclick = () => pywebview.api.win_max();
   $("win-close").onclick = () => pywebview.api.win_close();
-  document.querySelector(".titlebar").ondblclick = (e) => {
-    if (e.target.closest(".winbtn")) return;
-    pywebview.api.win_max();
-  };
+  // 顶栏空白处双击 = 最大化（原来挂在 34px 的系统标题条上，那条已经去掉了）
+  const tb = document.querySelector(".head");
+  if (tb) {
+    tb.ondblclick = (e) => {
+      if (e.target.closest(".winbtn, .btn, .tab, input")) return;
+      pywebview.api.win_max();
+    };
+  }
 
   $("btn-browse").onclick = async () => {
     const p = await pywebview.api.pick_folder();
@@ -144,14 +148,13 @@ function bind() {
   if (mlist) {
     mlist.onclick = (e) => {
       const g = e.target.closest(".grp");
-      if (g) {
-        const k = g.getAttribute("data-g");
-        if (_modsCollapsed.has(k)) _modsCollapsed.delete(k); else _modsCollapsed.add(k);
-        renderMods();
-        return;
-      }
-      const r = e.target.closest(".mrow");
-      if (r) toast(T("双击这一行可以打开那个模组"), "ok");
+      if (!g) return;
+      const i = parseInt(g.getAttribute("data-i"), 10);
+      const m = (_modsData && _modsData.mods || [])[i];
+      if (!m) return;
+      if (_modsOpen.has(m.name)) _modsOpen.delete(m.name);
+      else _modsOpen.add(m.name);
+      renderMods();
     };
   }
   $("btn-pack-sync").onclick = async () => {

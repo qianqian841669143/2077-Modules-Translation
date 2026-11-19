@@ -80,6 +80,8 @@ setInterval(function () { if (!_booted) boot(); }, 800);
 async function _boot() {
   const d = await pywebview.api.boot();
   state.settings = d.settings || {};
+  // 提取范围现在存进配置了：老配置里没有这一项就用默认值，别把开关清成 false
+  state.opts = Object.assign({}, state.opts, (state.settings.extract_opts || {}));
   state.catalog = d.catalog || {};
   state.lang = d.lang;
   state.version = d.version;
@@ -88,6 +90,7 @@ async function _boot() {
   $("app-ver").textContent = d.version;
   applyTheme();
   applyI18n();
+  syncOptChips();       // 把配置里的提取范围套回 chip 的 on/off
   fillSelects(d);
   bind();
   render();
@@ -263,6 +266,13 @@ function updateAppSub() {
     }
   }
   el.innerHTML = parts.join(" · ");
+}
+
+/* 提取范围那几个 chip（现在在设置面板里）：按 state.opts 同步 on/off */
+function syncOptChips() {
+  document.querySelectorAll("[data-opt]").forEach((el) => {
+    el.classList.toggle("on", !!state.opts[el.dataset.opt]);
+  });
 }
 
 function applyI18n() {

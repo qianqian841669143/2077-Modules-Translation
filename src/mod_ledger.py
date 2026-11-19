@@ -427,6 +427,33 @@ _LEDGER_MOD = re.compile(r"^  mod = '((?:[^'\\]|\\.)*)'", re.M)
 _LEDGER_IDS = re.compile(r"^  sourceIds = \{ (.*?) \}", re.M)
 
 
+def file_stats(path):
+    """按文件统计一个模组账本：每个文件共几条、还差几条没填。
+
+    模组清单要显示「这个模组还有哪些文件要翻」，数据就在账本条目里
+    （每条带 f = 文件）。只读，解析失败就返回空表，不影响清单。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return []
+    agg = {}
+    for m in _LEDGER_ENTRY.finditer(text):
+        _t, _o, z, f = m.groups()
+        # f 是「相对路径:行号」，统计到文件就得把行号去掉
+        key = re.sub(r":\d+$", "", _unesc(f)) or "-"
+        d = agg.get(key)
+        if d is None:
+            d = agg[key] = {"file": key, "total": 0, "todo": 0}
+        d["total"] += 1
+        if not _unesc(z).strip():
+            d["todo"] += 1
+    out = list(agg.values())
+    out.sort(key=lambda d: (-d["todo"], -d["total"], d["file"]))
+    return out
+
+
 def _rebuild_all(out_dir):
     """把 mods/*.lua 合并成一份 all.lua，给运行时 mod 一次读完。
 

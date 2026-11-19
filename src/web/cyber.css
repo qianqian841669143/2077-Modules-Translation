@@ -50,18 +50,9 @@ html, body { background: var(--bg); color: var(--text); }
 body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 
 /* ------------------------------------------------------- 标题条 / 顶栏 */
-.titlebar {
-  height: 34px; padding: 0 10px;
-  background: #08090b; border-bottom: 1px solid #1b1c23;
-}
-.titlebar .logo {
-  width: 11px; height: 11px; border-radius: 3px;
-  background: var(--primary); color: transparent; font-size: 0;
-  display: block; flex: none;
-}
-.tb-title { font-size: 12px; color: #6d6f7c; font-weight: 400; }
-.tb-ver { display: none; }      /* 版本号移到顶栏副标题末尾 */
-.winbtn { color: #5a5c6a; }
+/* 原来那条 34px 的系统标题条已经去掉（窗口按钮并进顶栏右端） */
+.titlebar { display: none; }
+.winbtn { color: #5a5c6a; width: 34px; height: 28px; border-radius: 6px; }
 .winbtn:hover { background: #232530; color: #cfd1de; }
 .winbtn.close:hover { background: #c0392b; color: #fff; }
 
@@ -103,7 +94,7 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .head-right .btn { height: 34px; }
 
 /* --------------------------------------------------------------- 外壳 */
-.app { height: calc(100% - 34px - 88px); display: flex; flex-direction: row; }
+.app { height: calc(100% - 88px); display: flex; flex-direction: row; }
 .main-col { flex: 1; min-width: 0; display: flex; flex-direction: column;
             gap: 0; padding: 0; }
 
@@ -276,6 +267,29 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .grp .gt { font-size: 12.5px; color: var(--amber); }
 .grp .gd { font-size: 12.5px; color: var(--success); }
 .grp .go { font-size: 12.5px; color: var(--danger); }
+
+/* 模组清单：一行一个模组，展开后列出这个模组里还要翻的文件 */
+.mgrp { border-bottom: 1px solid #17181f; }
+.grp.mod { height: 50px; border-bottom: 0; background: transparent; }
+.mgrp:nth-child(odd) > .grp.mod { background: #0f1016; }
+.grp.mod:hover { background: var(--hover); }
+.grp.mod .gn { font-size: 14.5px; font-weight: 500; color: #e6e8f2;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grp.mod .gn .o { color: var(--amber); font-size: 11.5px; margin-left: 8px; }
+.grp.mod .mn { margin-left: auto; font-size: 13px; color: #9a9cb0;
+               font-variant-numeric: tabular-nums; }
+.mfiles { background: #0a0b0f; padding: 5px 20px 9px 46px; }
+.mfile { display: flex; align-items: center; gap: 12px; height: 26px;
+         font-size: 12.5px; }
+.mfile .fpath {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: #8d90a0;
+}
+.mfile .fpath.mono { font-family: Consolas, "Cascadia Mono", monospace;
+                     font-size: 12px; }
+.mfile .fnum { color: var(--dim2); white-space: nowrap; }
+.mfile .fnum.need { color: var(--amber); }
+.mfile.empty { color: #5a5c6a; font-size: 12px; height: 22px; }
 
 .mrow { height: 50px; display: grid;
         grid-template-columns: 1fr 1.5fr 116px 108px; gap: 16px;

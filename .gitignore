@@ -42,3 +42,4 @@ src/tmp_wa2.py
 
 # 临时目录：截图 / 设计稿草样，不进仓库
 _tmp/
+src/web/__fake.js

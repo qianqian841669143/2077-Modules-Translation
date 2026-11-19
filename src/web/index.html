@@ -9,34 +9,15 @@
 </head>
 <body>
 
-<!-- ============ 标题栏 ============ -->
-<header class="titlebar pywebview-drag-region">
-  <div class="tb-left pywebview-drag-region">
-    <div class="logo">M</div>
-    <div class="tb-title" data-i18n="赛博朋克 2077 模组翻译器">赛博朋克 2077 模组翻译器</div>
-    <span class="tb-ver" id="app-ver">v2.0</span>
-  </div>
-  <div class="tb-right">
-    <button class="winbtn" id="win-min" title="最小化">
-      <svg viewBox="0 0 12 12"><path d="M2 6h8"/></svg>
-    </button>
-    <button class="winbtn" id="win-max" title="最大化">
-      <svg viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" rx="1"/></svg>
-    </button>
-    <button class="winbtn close" id="win-close" title="关闭">
-      <svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg>
-    </button>
-  </div>
-</header>
-
-<!-- ============ 顶栏：logo + 标题 + tab ============ -->
+<!-- ============ 顶栏：logo + 标题 + tab + 窗口按钮 ============ -->
 <div class="head">
-  <div class="brand">
+  <div class="brand pywebview-drag-region" title="按住这里可以拖动窗口">
     <div class="badge">CMT</div>
     <div>
       <div class="htitle" id="app-title">赛博朋克 2077 模组翻译器</div>
       <div class="hsub" id="app-sub">没打开模组</div>
     </div>
+    <span id="app-ver" style="display:none">v2.0</span>
   </div>
   <div class="tabs">
     <button class="tab on" data-page-btn="translate">
@@ -48,6 +29,15 @@
   </div>
   <div class="head-right">
     <button class="btn" id="btn-settings" data-i18n="设置">设置</button>
+    <button class="winbtn" id="win-min" title="最小化">
+      <svg viewBox="0 0 12 12"><path d="M2 6h8"/></svg>
+    </button>
+    <button class="winbtn" id="win-max" title="最大化">
+      <svg viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" rx="1"/></svg>
+    </button>
+    <button class="winbtn close" id="win-close" title="关闭">
+      <svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg>
+    </button>
   </div>
 </div>
 
@@ -56,18 +46,20 @@
   <div class="main-col">
 
   <!-- ============ 工具条 ============ -->
-  <section class="card" data-page="translate">
+  <section class="card toolbar" data-page="translate">
     <div class="row">
-      <span class="label" data-i18n="模组目录">模组目录</span>
-      <input class="input grow" id="path" placeholder="E:\Vortex Mods\cyberpunk2077\...">
+      <input class="input grow" id="path" placeholder="E:\Vortex Mods\cyberpunk2077\..."
+             data-i18n-ph="模组目录">
       <button class="btn" id="btn-browse" data-i18n="浏览">浏览</button>
       <button class="btn primary" id="btn-load" data-i18n="加载 / 提取">加载 / 提取</button>
       <button class="btn primary" id="btn-apply" data-i18n="应用">应用</button>
-      <button class="btn" id="btn-undo" data-i18n="撤销上次应用">撤销上次应用</button>
       <button class="btn" id="btn-queue" data-i18n="批量翻译">批量翻译</button>
+      <span class="hint" id="noise-info"></span>
       <div class="menu-wrap">
         <button class="btn" id="btn-more" data-i18n="更多" title="更多操作">更多 ▾</button>
         <div class="menu" id="menu-more">
+          <button class="btn" id="btn-undo" data-i18n="撤销上次应用">撤销上次应用</button>
+          <div class="menu-sep"></div>
           <button class="btn" id="btn-import" data-i18n="读入翻译表">读入翻译表</button>
           <button class="btn" id="btn-export" data-i18n="导出 Excel">导出 Excel</button>
           <button class="btn" id="btn-zip" data-i18n="打开压缩包">打开压缩包</button>
@@ -91,18 +83,6 @@
                   data-i18n="打开输出目录">打开输出目录</button>
         </div>
       </div>
-    </div>
-    <div class="divider"></div>
-    <div class="row">
-      <span class="label" data-i18n="提取范围">提取范围</span>
-      <button class="chip on" data-opt="localeFirst" data-i18n="优先语言包">优先语言包</button>
-      <button class="chip on" data-opt="providerPair" data-i18n="Provider 配对">Provider 配对</button>
-      <button class="chip on" data-opt="lua" data-i18n=".lua 设置文本">.lua 设置文本</button>
-      <button class="chip on" data-opt="loose" data-i18n="长句兜底">长句兜底</button>
-      <button class="chip" data-opt="trace" data-i18n="调试文本">调试文本</button>
-      <button class="chip" data-opt="locale" data-i18n="语言包文件">语言包文件</button>
-      <div class="spacer"></div>
-      <span class="hint" id="noise-info"></span>
     </div>
   </section>
 
@@ -327,6 +307,18 @@
         <select class="select grow" id="set-lang"></select></div>
       <div class="field"><label data-i18n="目标语言">目标语言</label>
         <select class="select grow" id="set-target"></select></div>
+      <div class="divider"></div>
+      <p class="hint" data-i18n="提取范围：决定扫描时把哪些字符串算进待翻译列表。不确定就全开（后两项默认关）。">
+        提取范围：决定扫描时把哪些字符串算进待翻译列表。</p>
+      <div class="row gap" style="flex-wrap:wrap">
+        <button class="chip on" data-opt="localeFirst" data-i18n="优先语言包">优先语言包</button>
+        <button class="chip on" data-opt="providerPair" data-i18n="Provider 配对">Provider 配对</button>
+        <button class="chip on" data-opt="lua" data-i18n=".lua 设置文本">.lua 设置文本</button>
+        <button class="chip on" data-opt="loose" data-i18n="长句兜底">长句兜底</button>
+        <button class="chip" data-opt="trace" data-i18n="调试文本">调试文本</button>
+        <button class="chip" data-opt="locale" data-i18n="语言包文件">语言包文件</button>
+      </div>
+      <div class="divider"></div>
       <label class="check"><input type="checkbox" id="set-tm"> <span data-i18n="使用翻译记忆(加载时自动填充)">使用翻译记忆</span></label>
       <label class="check"><input type="checkbox" id="set-dark"> <span data-i18n="深色模式">深色模式</span></label>
       <div class="field"><label data-i18n="配色主题">配色主题</label>

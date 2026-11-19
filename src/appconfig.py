@@ -77,6 +77,16 @@ DEFAULT_SETTINGS = {
     # 关窗时问一句「要停掉本地模型吗」：Ollama 默认 keep_alive，关掉翻译器它
     # 也不会自己退出（9B 常占 6~8 GB、27B 常驻 21 GB）。嫌烦可以关掉这个勾。
     "ask_unload_model": True,
+    # 提取范围（原先是工具条上的一排 chip，只能管当次会话）。挪进设置面板后
+    # 落盘，下次启动还认这套开关。键名与前端 state.opts 一致。
+    "extract_opts": {
+        "localeFirst": True,     # 优先语言包
+        "providerPair": True,    # Provider 配对
+        "lua": True,             # .lua 设置文本
+        "loose": True,           # 长句兜底
+        "locale": False,         # 语言包文件
+        "trace": False,          # 调试文本
+    },
     # 界面不用 GPU 渲染（WebView2 加 --disable-gpu）。
     # 2026-11-05 的证据：这台机器的 NVIDIA 内核驱动 nvlddmkm.sys 被 Windows 判成
     # 两次 0xD1 蓝屏的相关驱动，同一天还有两百多条 GPU 看门狗 live dump

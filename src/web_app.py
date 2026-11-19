@@ -3981,10 +3981,22 @@ class Api(object):
                         # 老索引没有 filled：用 -1 表示「不知道」，按老规矩算已汉化，
                         # 免得升级后所有模组一下子全变成待翻译。
                         "filled": int(m["filled"]) if "filled" in m else -1,
+                        "rel": rel,
                         "mtime": mt}
 
         rows = []
         seen = set()
+        import mod_ledger as _ml
+
+        def _files_of(rel):
+            """这个模组账本里每个文件还要翻几条 —— 清单展开时显示。"""
+            if not rel:
+                return []
+            try:
+                return _ml.file_stats(os.path.join(ldir, rel.replace("/", os.sep)))
+            except Exception:        # noqa: BLE001 - 账本坏了不该拖垮清单
+                return []
+
         if staging and os.path.isdir(staging):
             try:
                 names = sorted(os.listdir(staging))
@@ -4019,6 +4031,7 @@ class Api(object):
                     status = "done"
                 rows.append({"name": name, "folder": hit["folder"],
                              "entries": entries, "filled": filled,
+                             "files": _files_of(hit.get("rel") or ""),
                              "hasLedger": True, "orphan": False,
                              "updated": updated, "status": status})
         # 账本里有、staging 里没有：目录被删掉或改名了（Vortex 里卸了？）
