@@ -147,6 +147,7 @@ function bind() {
   const mlist = $("mods-list");
   if (mlist) {
     mlist.onclick = (e) => {
+      if (e.target.closest(".mck")) return;      // 勾选框不触发展开
       const g = e.target.closest(".grp");
       if (!g) return;
       const i = parseInt(g.getAttribute("data-i"), 10);
@@ -156,7 +157,35 @@ function bind() {
       else _modsOpen.add(m.name);
       renderMods();
     };
+    mlist.onchange = (e) => {
+      const ck = e.target.closest(".mck input");
+      if (!ck) return;
+      const name = ck.getAttribute("data-name") || "";
+      if (!name) return;
+      if (ck.checked) _modsSel.add(name); else _modsSel.delete(name);
+      syncModsBar();
+    };
   }
+  const mckAll = $("mods-check-all");
+  if (mckAll) {
+    mckAll.onchange = () => {
+      const rows = _modsRows || [];
+      if (mckAll.checked) {
+        rows.forEach((m) => { if (modStatus(m) !== "orphan") _modsSel.add(m.name); });
+      } else {
+        rows.forEach((m) => _modsSel.delete(m.name));
+      }
+      // 只同步勾选框，不重建列表：重建会把滚动条弹回顶部
+      if (mlist) {
+        mlist.querySelectorAll(".mck input").forEach((c) => {
+          if (!c.disabled) c.checked = mckAll.checked;
+        });
+      }
+      syncModsBar();
+    };
+  }
+  const mStart = $("btn-mods-start");
+  if (mStart) mStart.onclick = () => startModsBatch();
   $("btn-pack-sync").onclick = async () => {
     const b = $("btn-pack-sync");
     b.disabled = true;

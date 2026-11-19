@@ -184,6 +184,9 @@ function setQueueSel(mode) {
 
 function renderQueue() {
   const box = $("q-list");
+  // 这张列表已经不在面板里显示了（勾选和开始都在模组列表页那条批量条上）。
+  // 每来一个事件就重建几百行隐藏 DOM 是白烧 CPU，没人看就不建。
+  if (box && box.offsetParent === null) return;
   const all = state.mbItems;
   if (!all.length) {
     box.innerHTML = "";
@@ -306,6 +309,7 @@ function onMbStart(e) {
   enterBatchMask();
   $("ov-count").textContent = "0 / " + Number(state.mbTotal || 0).toLocaleString();
   syncQueueStart();
+  try { if (typeof syncModsBar === "function") syncModsBar(); } catch (_) {}
 }
 
 function onMbItem(e) {
@@ -384,6 +388,9 @@ function onMbDone(e) {
   toast(msg, err ? "err" : "ok");
   refreshQueueInfo();
   syncQueueStart();     // 跑完了把「全选 / 反选 / 开始」重新放开
+  // 状态变了：模组列表页那几条要重新读一遍，批量条的按钮也要跟着放开
+  try { if (typeof refreshMods === "function" && _modsData) refreshMods(); } catch (_) {}
+  try { if (typeof syncModsBar === "function") syncModsBar(); } catch (_) {}
 }
 
 function onMbPack(e) {

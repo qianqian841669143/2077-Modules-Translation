@@ -197,6 +197,8 @@ let _modsData = null;
 let _modsFilter = "all";
 let _modsHideOrphan = false;
 const _modsOpen = new Set();     // 展开着的模组（按目录名记）
+const _modsSel = new Set();      // 勾选着的模组（按目录名记，就是 batch_start 的 key）
+let _modsRows = [];              // 上一次渲染出来的行（全选只作用在当前筛选上）
 
 /* Viewer 目录名带着版本和哈希：Appearance Menu Mod 790 2.15.1 2026-10-25T12-38Z ebPkbzzu3
    清单里没必要显示这些，能剥就剥，剥不出来就原样显示。 */
@@ -270,6 +272,9 @@ function renderMods() {
   const d = _modsData || { mods: [], summary: {} };
   const q = ($("mods-search").value || "").trim().toLowerCase();
   const all = d.mods || [];
+  // 目录没了（卸载 / 改名）就把它从勾选里剔掉，别让「已选 N」虚高
+  const alive = new Set(all.map((m) => m.name));
+  [..._modsSel].forEach((k) => { if (!alive.has(k)) _modsSel.delete(k); });
   const cnt = { all: all.length, done: 0, todo: 0, empty: 0, orphan: 0 };
   all.forEach((m) => { cnt[modStatus(m)] += 1; });
   ["all", "done", "todo", "empty", "orphan"].forEach((k) => {
@@ -286,7 +291,7 @@ function renderMods() {
     }
     return true;
   });
-  // 一个模组一块：折叠时只占一行，展开后列出「这个模组里还要翻哪些文件」
+  // 一个模组一行：勾选框 / 名字 / 状态 / 已填 / 总条数，展开后列出还要翻哪些文件
   const box = $("mods-list");
   const autoOpen = _modsFilter !== "all" || !!q;
   const parts = [];
@@ -296,25 +301,38 @@ function renderMods() {
     const e = Number(m.entries || 0);
     const f = Number(m.filled || 0);
     const todo = Math.max(0, e - f);
-    const num = !e ? "—" : `${f.toLocaleString()} / ${e.toLocaleString()}`;
+    // 没账本（或账本里一条都没有）= 还没提取过：条数是「不知道」，不是 0。
+    // 「无文本」是提取过、确实没有可翻的字符串，那是已知结果，不打这个标。
+    const unknown = st !== "empty" && st !== "orphan" && st !== "done" && !e;
+    // 已汉化的行 filled == entries，再写一遍 N/N 是废话，只留总数 + 满格条
+    const showFilled = st !== "done" && e > 0;
+    const pct = e ? Math.min(100, Math.round((f * 100) / e)) : 0;
     // 只有「有账本」的模组才知道具体文件；没提取过的给一句提示
     const files = Array.isArray(m.files) ? m.files : [];
     const open = autoOpen || _modsOpen.has(m.name);
+    const checked = _modsSel.has(m.name);
     parts.push(`<div class="mgrp">
       <div class="grp mod" data-i="${idx}">
-        <span class="ar">${open ? "▾" : "▸"}</span>
-        <span class="gn">${esc(prettyName(m.name))}` +
+        <label class="mck"><input type="checkbox" data-name="${esc(m.name)}"` +
+        (checked ? " checked" : "") + (st === "orphan" ? " disabled" : "") +
+        `></label>
+        <span class="gn"><span class="ar">${open ? "▾" : "▸"}</span>` +
+        `<span class="nm">${esc(prettyName(m.name))}</span>` +
         (st === "orphan" ? `<span class="o">${esc(T("目录已不在"))}</span>` : "") +
+        (unknown ? `<span class="tag">${esc(T("未分析"))}</span>` : "") +
         `</span>
-        <span class="gc">${e ? e.toLocaleString() + " " + esc(T("条")) : ""}</span>` +
-        (todo ? `<span class="gt">${todo} ${esc(T("待翻译"))}</span>` : "") +
-        `<span class="mn">${num}</span>
-        <span class="pill ${s.cls}">${esc(T(s.txt))}</span>
+        <span class="gs"><span class="pill ${s.cls}">${esc(T(s.txt))}</span></span>
+        <span class="mn${todo ? " todo" : ""}">${showFilled
+          ? f.toLocaleString() : (unknown ? esc(T("未知")) : "")}</span>
+        <span class="mt">` +
+        `<b>${unknown ? "?" : (e ? e.toLocaleString() : "—")}</b>` +
+        (e ? `<span class="minibar"><i style="width:${pct}%"></i></span>` : "") +
+        `</span>
       </div>`);
     if (open) {
       if (!files.length) {
         parts.push(`<div class="mfiles"><div class="mfile empty">${
-          esc(T(e ? "没有未填的条目" : "还没提取过，不知道有哪些文件"))}</div></div>`);
+          esc(T(unknown ? "还没提取过，不知道有哪些文件" : "没有未填的条目"))}</div></div>`);
       } else {
         // 要翻的排在前面；已经全填的文件折成一行「另外 N 个文件已翻完」
         const need = files.filter((x) => Number(x.todo) > 0);
@@ -340,6 +358,8 @@ function renderMods() {
   });
   box.innerHTML = parts.length ? parts.join("")
     : `<p class="hint" style="padding:14px 20px">${esc(T("没有匹配的模组。"))}</p>`;
+  _modsRows = rows;
+  syncModsBar();
 
   // 右上角：已汉化 N / 总数 + 进度条
   const p = cnt.all ? Math.round((cnt.done * 100) / cnt.all) : 0;
@@ -352,6 +372,108 @@ function renderMods() {
   state.stagingCount = cnt.all;
   const tabN = $("tab-mods-n");
   if (tabN) tabN.textContent = cnt.all || "";
+}
+
+/* 批量条的状态：选中几个 / 开始按钮文字 / 全选框的半选状态 / 输出路径。
+   勾选只改这一条，不重建列表（重建会把滚动条弹回顶部）。 */
+function syncModsBar() {
+  const rows = _modsRows || [];
+  // 孤立的（目录已经不在）勾不上：全选框只按「能勾的」算满不满
+  const pickable = rows.filter((m) => modStatus(m) !== "orphan");
+  const selRows = pickable.filter((m) => _modsSel.has(m.name)).length;
+  const n = _modsSel.size;
+  const el = $("mods-sel-n");
+  if (el) {
+    el.innerHTML = esc(T("已选")) + " <b>" + n + "</b> / "
+      + esc(T("当前筛选")) + " " + rows.length;
+  }
+  const all = $("mods-check-all");
+  if (all) {
+    all.checked = pickable.length > 0 && selRows === pickable.length;
+    all.indeterminate = selRows > 0 && selRows < pickable.length;
+  }
+  const btn = $("btn-mods-start");
+  if (btn) {
+    if (state.mbRunning) {
+      btn.disabled = true;
+      btn.textContent = T("批量进行中…");
+    } else {
+      btn.disabled = !n;
+      btn.textContent = n
+        ? T("开始批量翻译 %d 个").replace("%d", n)
+        : T("开始批量翻译");
+    }
+  }
+  const p = $("mods-path");
+  if (p) {
+    const s = state.settings || {};
+    const from = String(s.staging_dir || "").trim();
+    const qo = $("q-out");
+    const to = String((qo && qo.value) || s.batch_out_dir || "").trim();
+    p.textContent = from ? from + "   →   " + (to || T("（还没设输出目录）")) : "";
+    p.title = p.textContent;
+  }
+}
+
+/* 批量条的「开始」：勾了哪几个就跑哪几个。
+   不用先预扫（batch_scan 要一分钟），后端拿目录名现找。 */
+async function startModsBatch() {
+  if (state.mbRunning) { toast(T("批量正在运行"), "err"); return; }
+  const names = [..._modsSel];
+  if (!names.length) { toast(T("请先勾选要翻译的模组"), "err"); return; }
+  const qo = $("q-out");
+  const outDir = String((qo && qo.value)
+    || (state.settings || {}).batch_out_dir || "").trim();
+  if (!outDir) {
+    toast(T("请先设置批量输出目录（右下角 ⚙ 里）"), "err");
+    const host = $("mb-host");
+    if (host) host.hidden = false;
+    if (qo) qo.focus();
+    return;
+  }
+  const withArchive = $("q-archive") ? !!$("q-archive").checked : false;
+  const skipAssets = $("q-assets") ? !$("q-assets").checked : true;
+  const dv = $("q-deploy"), dry = $("q-deploy-dry");
+  const doDeploy = dv ? !!dv.checked : false;
+  const doDry = dry ? !!dry.checked : true;
+  let msg = T("将要处理 %d 个 mod：先复制到输出目录，再翻译、写回副本。\n同名目录会被覆盖。继续？")
+    .replace("%d", names.length);
+  if (doDeploy) {
+    msg += "\n\n" + (doDry
+      ? T("本轮只预演部署：算出会覆盖/新增哪些文件，不写原模组目录。")
+      : T("本轮跑完会**原地覆盖**原模组目录里对应的文件（副本里没有的文件保持原样）。"));
+  }
+  if (!confirm(msg)) return;
+  // 面板里的输出目录 / 部署开关要落盘：后端 batch_start 读的是 settings
+  const saved = await pywebview.api.save_settings({
+    batch_out_dir: outDir, batch_deploy: doDeploy, batch_deploy_dry: doDry,
+  });
+  if (!saved || !saved.ok) {
+    toast((saved && saved.error) || T("输出目录保存失败"), "err");
+    return;
+  }
+  state.settings = saved.settings;
+  const btn = $("btn-mods-start");
+  if (btn) btn.disabled = true;
+  const r = await pywebview.api.batch_start(names, withArchive, skipAssets);
+  if (!r || !r.ok) {
+    toast((r && r.error) || "error", "err");
+    if (((r && r.error) || "").includes("API")) openSettings();
+    syncModsBar();
+    return;
+  }
+  if (r.started === false) {          // 全都在上一次跑完了
+    toast(r.message || "ok", "ok");
+    const qs = $("q-summary");
+    if (qs) qs.textContent = r.message || "";
+    syncModsBar();
+    return;
+  }
+  state.mbRunning = true;
+  state.mbCached = r.cached || 0;
+  startMbPoll();
+  enterBatchMask();      // 别等第一次轮询，立刻就盖住
+  syncModsBar();
 }
 
 function openSettings() {

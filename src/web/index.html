@@ -181,16 +181,8 @@
   <!-- ============ 模组列表页 ============ -->
   <section class="pagecol" data-page="manage" hidden>
     <div class="mtools">
-      <input class="input" id="mods-search" style="width:300px"
+      <input class="input" id="mods-search" style="width:280px"
              data-i18n-ph="搜索模组名或目录…" placeholder="搜索模组名或目录…">
-      <button class="chip" id="mods-hide-orphan" data-i18n="隐藏目录不存在的">隐藏目录不存在的</button>
-      <div class="mright" id="mods-summary"></div>
-      <button class="btn" id="btn-queue" data-i18n="批量翻译">批量翻译</button>
-      <button class="btn" id="btn-mods-refresh" data-i18n="刷新">刷新</button>
-    </div>
-    <!-- 批量翻译面板：运行时从 #modal-queue 里搬进来（见 inlineQueuePanel） -->
-    <div id="mb-host" hidden></div>
-    <div class="mchips">
       <button class="chip on" id="mods-filter-all">
         <span data-i18n="全部">全部</span> <b id="mc-all">0</b></button>
       <button class="chip" id="mods-filter-done">
@@ -201,6 +193,28 @@
         <span data-i18n="无文本">无文本</span> <b id="mc-empty">0</b></button>
       <button class="chip" id="mods-filter-orphan">
         <span data-i18n="孤立">孤立</span> <b id="mc-orphan">0</b></button>
+      <button class="chip" id="mods-hide-orphan" data-i18n="隐藏目录不存在的">隐藏目录不存在的</button>
+      <div class="mright" id="mods-summary"></div>
+      <button class="btn" id="btn-mods-refresh" data-i18n="刷新">刷新</button>
+    </div>
+    <!-- 批量条：勾选即开跑。⚙ 展开安装缓存 / 输出目录等设置（面板见下） -->
+    <div class="mbar">
+      <label class="mcheck">
+        <input type="checkbox" id="mods-check-all"><span data-i18n="全选">全选</span>
+      </label>
+      <span class="mseln" id="mods-sel-n"></span>
+      <button class="btn primary" id="btn-mods-start" data-i18n="开始批量翻译">开始批量翻译</button>
+      <span class="mpath mono" id="mods-path"></span>
+      <button class="btn icon" id="btn-queue" title="批量设置">⚙</button>
+    </div>
+    <!-- 批量翻译面板：运行时从 #modal-queue 里搬进来（见 inlineQueuePanel） -->
+    <div id="mb-host" hidden></div>
+    <div class="mhead">
+      <span></span>
+      <span data-i18n="模组">模组</span>
+      <span data-i18n="状态">状态</span>
+      <span data-i18n="已填">已填</span>
+      <span data-i18n="总条数">总条数</span>
     </div>
     <div class="groups" id="mods-list"></div>
   </section>
@@ -257,7 +271,7 @@
         <div class="spacer"></div>
         <label class="chk"><input type="checkbox" id="q-archive"><span data-i18n="包含归档层（慢）">包含归档层（慢）</span></label>
         <label class="chk"><input type="checkbox" id="q-assets"><span data-i18n="连同贴图/音频">连同贴图/音频</span></label>
-        <label class="chk"><input type="checkbox" id="q-hide-todo"><span data-i18n="隐藏无需翻译">隐藏无需翻译</span></label>
+        <label class="chk" style="display:none"><input type="checkbox" id="q-hide-todo"><span data-i18n="隐藏无需翻译">隐藏无需翻译</span></label>
       </div>
       <div class="progress" id="q-progress"><div class="bar" id="q-bar"></div></div>
       <div class="row gap" style="padding:6px 0 2px">

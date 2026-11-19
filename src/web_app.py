@@ -2510,11 +2510,37 @@ class Api(object):
         """异步跑批量：复制 → 提取 → 机翻 → 写回副本。"""
         if self._mb_running:
             return {"ok": False, "error": self._tr("批量已在运行")}
-        items = [it for it in (self._mb_items or []) if it.get("todo")]
+        # 勾选即开跑：模组列表页的勾选框只给目录名，这里按 staging 现列一遍，
+        # 不强制先跑一次全量预扫（309 个目录要一分钟）。预扫过的条目直接用，
+        # 它带着 todo / alreadyRows / deployed 这些额外信息。
         if keys:
             want = {str(k) for k in keys}
-            items = [it for it in items if str(it.get("key")) in want]
+            cache = {str(it.get("key")): it for it in (self._mb_items or [])}
+            items = [it for it in cache.values()
+                     if str(it.get("key")) in want and it.get("todo")]
+            # 预扫过、判定「无需翻译」的不再整目录复制一遍，哪怕它被勾上了
+            empty = {k for k, it in cache.items() if not it.get("todo")}
+            rest = want - {str(it.get("key")) for it in items} - empty
+            if rest:
+                found = {}
+                try:
+                    import mod_batch as _MB0
+                    for it in _MB0.list_dirs(
+                            (self.settings.get("staging_dir") or "").strip()):
+                        found[str(it.get("key"))] = it
+                        found.setdefault(str(it.get("name")), it)
+                except Exception:      # noqa: BLE001 - 列不出来就走下面的报错
+                    found = {}
+                for k in sorted(rest):
+                    hit = found.get(k)
+                    if hit:
+                        items.append(dict(hit))
+        else:
+            items = [it for it in (self._mb_items or []) if it.get("todo")]
         if not items:
+            if keys:
+                return {"ok": False, "error": self._tr(
+                    "勾选的模组里没有可翻译的文本（或者目录已经不在了）")}
             return {"ok": False,
                     "error": self._tr("没有可跑的 mod，请先扫描或勾选条目")}
         base = normalize_api_base(self.settings.get("api_base", ""))

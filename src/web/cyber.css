@@ -259,11 +259,10 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
              font-size: 12px; color: var(--muted); }
 
 /* --------------------------------------------------------- 模组清单页 */
-.mtools { display: flex; align-items: center; gap: 10px; padding: 14px 20px 0; }
+.mtools { display: flex; align-items: center; gap: 8px; padding: 14px 20px 0;
+          overflow: hidden; }
 .mtools .input { height: 34px; }
-.mchips { display: flex; align-items: center; gap: 9px; padding: 12px 20px 12px;
-          border-bottom: 1px solid var(--border); }
-.mchips .chip { height: 30px; }
+.mtools .chip { height: 30px; flex: none; }
 .mright { margin-left: auto; display: flex; align-items: center; gap: 14px;
           font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 .mright b { color: var(--text); }
@@ -286,17 +285,66 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .grp .gd { font-size: 12.5px; color: var(--success); }
 .grp .go { font-size: 12.5px; color: var(--danger); }
 
-/* 模组清单：一行一个模组，展开后列出这个模组里还要翻的文件 */
+/* 批量条：一行说完「勾了什么、跑几个、输出到哪」。
+   以前这里是一整块批量面板（路径 + 开关 + 一张跟页面重复的列表），
+   高度 290px，一屏只看得到 7 个模组；开关和输出目录收进 ⚙。 */
+.mbar { display: flex; align-items: center; gap: 12px; height: 44px;
+        margin: 10px 20px 0; padding: 0 14px; border: 1px solid var(--border);
+        border-radius: 9px; background: #12131a; }
+.mbar .mcheck { display: flex; align-items: center; gap: 7px; font-size: 13px;
+                color: #9a9cb0; cursor: pointer; white-space: nowrap; }
+.mbar .mcheck input { accent-color: var(--primary); cursor: pointer; }
+.mbar .mseln { font-size: 12.5px; color: var(--dim2); white-space: nowrap; }
+.mbar .mseln b { color: var(--text); font-weight: 600; }
+.mbar .btn.primary { height: 28px; padding: 0 13px; font-size: 12.5px;
+                     border-radius: 14px; }
+.mbar .btn.primary:disabled { opacity: .45; }
+.mbar .mpath { margin-left: auto; font-size: 11.5px; color: #5b5d6b;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+               max-width: 46%; }
+.mbar .btn.icon { flex: none; }
+
+/* 列头：模组 / 状态 / 已填 / 总条数 */
+.mhead { display: grid;
+         grid-template-columns: 26px minmax(0, 1fr) 86px 66px 152px;
+         gap: 12px; align-items: center; height: 30px; margin: 10px 20px 0;
+         font-size: 11.5px; letter-spacing: .04em; color: #6f7183;
+         border-bottom: 1px solid var(--border); }
+.mhead > span:nth-child(2) { padding-left: 18px; }   /* 对齐行里的名字（跳过 ▸） */
+.mhead > span:nth-child(3) { text-align: center; }
+.mhead > span:nth-child(n+4) { text-align: right; }
+
+/* 一个模组一行：勾选框 / 名字 / 状态 / 已填 / 总条数（带小进度条） */
 .mgrp { border-bottom: 1px solid #17181f; }
-.grp.mod { height: 50px; border-bottom: 0; background: transparent; }
+.grp.mod { display: grid;
+           grid-template-columns: 26px minmax(0, 1fr) 86px 66px 152px;
+           gap: 12px; height: 40px; padding: 0 20px;
+           border-bottom: 0; background: transparent; }
 .mgrp:nth-child(odd) > .grp.mod { background: #0f1016; }
 .grp.mod:hover { background: var(--hover); }
-.grp.mod .gn { font-size: 14.5px; font-weight: 500; color: #e6e8f2;
-               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.grp.mod .gn .o { color: var(--amber); font-size: 11.5px; margin-left: 8px; }
-.grp.mod .mn { margin-left: auto; font-size: 13px; color: #9a9cb0;
+.grp.mod .mck { display: flex; align-items: center; justify-content: center; }
+.grp.mod .mck input { accent-color: var(--primary); cursor: pointer; }
+.grp.mod .gn { display: flex; align-items: center; gap: 8px; min-width: 0;
+               font-size: 14px; font-weight: 500; color: #e6e8f2; }
+.grp.mod .gn .ar { color: #6f7183; font-size: 11px; width: 10px; flex: none;
+                   text-align: center; }
+.grp.mod .gn .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grp.mod .gn .o { color: var(--amber); font-size: 11.5px; flex: none; }
+/* 没提取过的模组：条数是「不知道」，不是 0 */
+.grp.mod .gn .tag { flex: none; height: 18px; padding: 0 6px; border-radius: 4px;
+                    font-size: 10.5px; color: #8d90a0; background: #1b1c25;
+                    border: 1px solid #262833; display: inline-flex;
+                    align-items: center; }
+.grp.mod .gs { display: flex; justify-content: center; }
+.grp.mod .mn { text-align: right; font-size: 12.5px; color: #9a9cb0;
                font-variant-numeric: tabular-nums; }
-.mfiles { background: #0a0b0f; padding: 5px 20px 9px 46px; }
+.grp.mod .mn.todo { color: var(--amber); }
+.grp.mod .mt { display: flex; align-items: center; justify-content: flex-end;
+               gap: 9px; }
+.grp.mod .mt b { font-size: 12.5px; font-weight: 500; color: #9a9cb0;
+                 font-variant-numeric: tabular-nums; }
+.grp.mod .mt .minibar { width: 62px; flex: none; }
+.mfiles { background: #0a0b0f; padding: 5px 20px 9px 78px; }
 .mfile { display: flex; align-items: center; gap: 12px; height: 26px;
          font-size: 12.5px; }
 .mfile .fpath {
@@ -389,6 +437,12 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .mbpanel .modal-body { overflow: auto; max-height: 300px; }
 .mbpanel .modal-foot .btn[data-close],
 .mbpanel .modal-head .winbtn { display: none; }
+/* ⚙ 里只留「设置」：勾选和开始都在上面那条批量条上，
+   面板里这一整套（预扫按钮、重复的开始、跟页面重复的列表）全部让位。 */
+.mbpanel #btn-q-scan, .mbpanel #btn-q-start, .mbpanel #btn-q-cancel,
+.mbpanel #q-progress, .mbpanel #btn-q-all, .mbpanel #btn-q-none,
+.mbpanel #btn-q-invert, .mbpanel #q-sel-count, .mbpanel #q-list,
+.mbpanel #q-summary { display: none; }
 
 /* ------------------------------------------------- 表格：5 列窄版布局 */
 /* 三栏之后中间只剩 600 出头，8 列挤不下（原来的 974px 要横向滚动）。
