@@ -13,6 +13,9 @@ dist/
 
 # 运行时产物
 *.bak
+# 改动前的备份（统一命名 *.bak-<日期>-<时分>），只留本地，不入库
+*.bak-*
+src/_bak/
 userdata/
 *.log
 
@@ -30,5 +33,9 @@ src/tmp_wa1.py
 src/tmp_wa2.py
 
 # 编辑器
-.vscode/
+# .vscode 只共享这三份：dev 热更新的启动配置、打包任务、解释器路径
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
 .idea/

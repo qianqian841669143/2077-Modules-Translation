@@ -1,0 +1,30 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "2077 翻译器（dev 热更新）",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/web_app.py",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "MT_DEV": "1",
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "2077 翻译器（正式模式）",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/web_app.py",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

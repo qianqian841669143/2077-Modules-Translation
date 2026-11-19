@@ -1,0 +1,33 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "打包 exe",
+      "detail": "PyInstaller 重建 dist\\2077ModTranslator.exe",
+      "type": "shell",
+      "command": "C:\\Users\\84166\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+      "args": [
+        "-m", "PyInstaller",
+        "--noconfirm", "--clean",
+        "--distpath", "dist",
+        "--workpath", "build",
+        "2077ModTranslator.spec"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "语法检查",
+      "detail": "py_compile src 下的改动文件 + node --check 前端",
+      "type": "shell",
+      "command": "C:\\Users\\84166\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+      "args": [
+        "-c",
+        "import py_compile,glob,json;[py_compile.compile(p,doraise=True) for p in glob.glob('src/*.py')];json.load(open('src/locales/en-US.json',encoding='utf-8'));print('OK')"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    }
+  ]
+}

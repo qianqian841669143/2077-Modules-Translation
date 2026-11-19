@@ -1,0 +1,27 @@
+{
+  "python.defaultInterpreterPath": "C:\\Users\\84166\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+
+  // 开发时用不到的东西别占资源管理器视线：
+  //   src/_bak   历次改动前的备份（含拆分前的 app.js.orig）
+  //   build      PyInstaller 的中间产物
+  "files.exclude": {
+    "src/_bak": true,
+    "build": true,
+    "**/__pycache__": true
+  },
+
+  // 打包产物和数据目录不要被全局搜索/替换命中
+  "search.exclude": {
+    "dist/userdata": true,
+    "dist": true,
+    "src/_bak": true
+  },
+
+  "files.associations": {
+    "*.reds": "lua",
+    "*.tweak": "yaml"
+  },
+
+  // 前端是 8 个普通 <script>（不是 module），关掉“建议改成 ES module”的提示
+  "javascript.suggest.autoImports": false
+}
