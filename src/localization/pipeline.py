@@ -467,10 +467,18 @@ class Session(object):
         if not todo:
             raise PipelineError("没有可提交的译文")
 
+        # extend 目标必须是**真的存在**的那个 .xl：名字拼错或路径来自已删掉的
+        # 文件时，ArchiveXL 只会报一句 "extend target not found"，译文整个不生效。
+        # 目标不在就退回独立配置（我们的资源有自己的命名空间，不挂接也能加载）。
+        xl = self.target.xl_path
+        want = extend and xl is not None
+        if want and not xl.is_file():
+            self.warnings.append(
+                "extend 目标 %s 不存在，改成独立配置" % xl)
+            want = False
         spec = buildmod.make_spec(
             name or buildmod.default_output_name(self.target.name, self.lang),
-            extend=(self.target.xl_path.name
-                    if (extend and self.target.xl_path) else ""),
+            extend=(xl.name if want else ""),
         )
 
         sub_index = 0

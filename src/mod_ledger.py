@@ -363,6 +363,60 @@ def ensure_names(out_dir, ids, base="", model="", target="简体中文",
     return stat
 
 
+def _read_entries(path):
+    """读回已经写出去的模组账本，按文件里的顺序返回条目。
+
+    只认本工具写出来的那种格式（`{ t = .., o = .., z = .., f = .. }`）；
+    照这个格式手写进去的条目也会被读到，格式不同的行会被忽略。
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except OSError:
+        return []
+    return [{"t": _unesc(t), "o": _unesc(o), "z": _unesc(z), "f": _unesc(f)}
+            for t, o, z, f in _LEDGER_ENTRY.findall(text)]
+
+
+def _merge_entries(old, new):
+    """按原文合并新旧条目：这轮没出现的旧条目留下，同原文的以新译文为准。
+
+    以前是整份覆盖写。账本从 32,505 条缩到 27,740 条就是因为某一轮只提取到
+    其中一部分原文，剩下的被整块抹掉了（CTO 那个合集从 671 条掉到 166 条）。
+    合并之后重跑一个模组不会再丢掉别的轮次写进去的条目；顺带也缓解了
+    folder_name 撞车（两个模组推成同一个文件夹名）时后写的挤掉先写的问题。
+    """
+    out, idx = [], {}
+    for e in old or []:
+        o = str(e.get("o") or "")
+        if not o or o in idx:
+            continue                    # 同一原文只留第一条：运行时也是按原文查
+        idx[o] = len(out)
+        out.append({"t": str(e.get("t") or ""), "o": o,
+                    "z": str(e.get("z") or ""), "f": str(e.get("f") or "")})
+    base, added, updated, matched = len(out), 0, 0, 0
+    for e in new or []:
+        o = str(e.get("o") or "")
+        if not o:
+            continue
+        i = idx.get(o)
+        if i is None:
+            idx[o] = len(out)
+            out.append({"t": str(e.get("t") or ""), "o": o,
+                        "z": str(e.get("z") or ""), "f": str(e.get("f") or "")})
+            added += 1
+            continue
+        matched += 1
+        cur = out[i]
+        if str(cur.get("z") or "") != str(e.get("z") or ""):
+            cur["t"] = str(e.get("t") or cur.get("t") or "")
+            cur["z"] = str(e.get("z") or "")
+            updated += 1
+        if e.get("f"):
+            cur["f"] = str(e["f"])      # 文件/行号以这轮为准
+    return out, added, updated, base - matched
+
+
 def write(out_dir, mod_root, rows, staging_name="", target="简体中文",
           base="", model="", log=None):
     """写一份账本，并更新索引。返回记录（写进 results 里给界面看）。
@@ -371,10 +425,16 @@ def write(out_dir, mod_root, rows, staging_name="", target="简体中文",
     单模组里就是原目录），用来推断文件夹名和把文件路径转成相对路径。
     """
     folder = folder_name(mod_root) or safe_name(staging_name) or "mod"
-    entries = _entries(rows, mod_root)
     mods_dir = os.path.join(out_dir, "mods")
     os.makedirs(mods_dir, exist_ok=True)
     path = os.path.join(mods_dir, folder + ".lua")
+
+    # 合并写，不是覆盖写：这一轮没提取到的旧条目必须留着（见 _merge_entries）
+    fresh = _entries(rows, mod_root)
+    entries, added, updated, kept = _merge_entries(_read_entries(path), fresh)
+    if log and (added or updated or kept):
+        log("账本 %s：本轮 %d 条，合并后 %d 条（新增 %d / 更新 %d / 保留旧 %d）"
+            % (folder, len(fresh), len(entries), added, updated, kept))
 
     ids = _source_ids(mod_root)
 
@@ -389,7 +449,8 @@ def write(out_dir, mod_root, rows, staging_name="", target="简体中文",
 
     lines = [
         "-- 由 2077 Mod Translator 生成（%s）。" % time.strftime("%Y-%m-%d %H:%M:%S"),
-        "-- 改译文请改 z 字段；重跑工具会按原文重新对一遍，译文不同的以这里为准。",
+        "-- 改译文请改 z 字段；重跑同一个模组时按原文对一遍，同原文以新一轮的译文为准，",
+        "-- 这一轮没提取到的旧条目会原样保留（合并写，不是覆盖写）。",
         "return {",
         "  mod = %s," % _q(staging_name or folder),
         "  folder = %s," % _q(folder),

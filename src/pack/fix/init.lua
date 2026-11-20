@@ -237,7 +237,8 @@ local function loadLedger()
     if chunk then
       local okh, install = pcall(chunk)
       if okh and type(install) == "function" then
-        local ok2, cnt = pcall(install, function(t) return globalMap[t] end)
+        -- 第二个参数是 log：不传的话钩子里的诊断全静默，只剩那句「接管 N 个」
+        local ok2, cnt = pcall(install, function(t) return globalMap[t] end, log)
         if ok2 then
           log(string.format("ImGui 钩子：接管 %d 个绘制函数", tonumber(cnt) or 0))
         else
