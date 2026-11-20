@@ -83,7 +83,6 @@
       <button class="btn" id="btn-browse" data-i18n="浏览">浏览</button>
       <button class="btn primary" id="btn-load" data-i18n="加载 / 提取">加载 / 提取</button>
       <button class="btn primary" id="btn-apply" data-i18n="应用">应用</button>
-      <span class="hint" id="noise-info"></span>
     </div>
   </section>
 
@@ -177,6 +176,11 @@
           <span class="y">%d</span>、<span class="y">\n</span>
         </div>
         <div class="dsec" id="detail-warn"></div>
+        <!-- 已过滤噪音：原来挤在工具条那一行，挪进详情栏 -->
+        <div class="dsec" id="noise-sec" hidden>
+          <div class="dlabel" data-i18n="已过滤噪音">已过滤噪音</div>
+          <div id="noise-info"></div>
+        </div>
       </div>
     </aside>
 

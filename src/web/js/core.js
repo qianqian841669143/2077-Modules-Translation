@@ -357,18 +357,29 @@ function bindMoreMenu() {
   });
 }
 
-/* ---------------- 已过滤噪音统计 ---------------- */
+/* ---------------- 已过滤噪音统计（详情栏底部） ----------------
+   原来是一整行长句挂在工具条上，开着模组就顶到「应用」按钮旁边。
+   现在按详情的 kv 风格一行一类：本地化键 / 记录名 / 标识符 / 位置标识符。 */
 function updateNoiseInfo() {
   const el = $("noise-info");
   if (!el) return;
+  const sec = $("noise-sec");
   const noise = (state.meta && state.meta.noise) || {};
-  const total = Object.keys(noise).reduce((a, k) => a + (Number(noise[k]) || 0), 0);
-  if (!total) { el.textContent = ""; el.title = ""; return; }
-  const parts = Object.keys(noise)
-    .filter((k) => Number(noise[k]) > 0)
-    .map((k) => T(k) + " " + noise[k]);
-  el.textContent = T("已过滤噪音 %d 条").replace("%d", total) + ": " + parts.join(" · ");
-  el.title = el.textContent;
+  const keys = Object.keys(noise).filter((k) => Number(noise[k]) > 0);
+  const total = keys.reduce((a, k) => a + (Number(noise[k]) || 0), 0);
+  if (!total) {
+    el.innerHTML = "";
+    el.title = "";
+    if (sec) sec.hidden = true;
+    return;
+  }
+  if (sec) sec.hidden = false;
+  const head = T("共 %d 条").replace("%d", total.toLocaleString());
+  el.title = T("已过滤噪音 %d 条").replace("%d", total);
+  el.innerHTML =
+    '<div class="kv nsum"><span>' + esc(head) + "</span></div>" +
+    keys.map((k) => '<div class="kv"><span>' + esc(T(k)) + "</span><b>" +
+      Number(noise[k]).toLocaleString() + "</b></div>").join("");
 }
 
 function setStatus(s) { $("status").textContent = s; }
