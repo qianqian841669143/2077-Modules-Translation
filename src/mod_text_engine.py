@@ -1906,6 +1906,40 @@ def _brace_end(text, open_pos):
     return n
 
 
+# CET 模组把设置页画在 ImGui 上，文案就是调用参数。哪些位置是给玩家看的
+# 是确定的，不需要靠「像不像句子」去猜：位置判定那条通用规则把
+# ImGui.SetTooltip 的第一个参数当成名字放过了，于是 Complete Third Person
+# Overhaul / TakedownSystem 这类 mod 的 tooltip 一直查不到中文。
+# 只对白名单函数生效，日志、ID、路径照旧走原来的过滤。
+_UI_CALL_ARGS = {
+    "ImGui.SetTooltip":        {0: TYPE_DESC},
+    "ImGui.TextWrapped":       {0: TYPE_UI},
+    "ImGui.Text":              {0: TYPE_UI},
+    "ImGui.TextDisabled":      {0: TYPE_UI},
+    "ImGui.TextColored":       {},
+    "ImGui.Button":            {0: TYPE_UI},
+    "ImGui.SmallButton":       {0: TYPE_UI},
+    "ImGui.MenuItem":          {0: TYPE_UI},
+    "ImGui.Selectable":        {0: TYPE_UI},
+    "ImGui.Checkbox":          {0: TYPE_UI},
+    "ImGui.CollapsingHeader":  {0: TYPE_UI},
+    "ImGui.BeginTabItem":      {0: TYPE_UI},
+    "ImGui.TreeNode":          {0: TYPE_UI},
+    "ImGui.Begin":             {0: TYPE_UI},
+    "ImGui.SeparatorText":     {0: TYPE_UI},
+    "M.UI.check":              {0: TYPE_NAME, 2: TYPE_DESC},
+    "M.UI.toggle":             {0: TYPE_NAME, 1: TYPE_DESC},
+    "M.UI.button":             {0: TYPE_UI},
+    "M.UI.slider":             {0: TYPE_NAME, 5: TYPE_DESC},
+    "M.UI.combo":              {0: TYPE_NAME},
+    "M.UI.head":               {0: TYPE_CAT},
+    "M.UI.header":             {0: TYPE_CAT},
+    "M.UI.section":            {0: TYPE_CAT},
+    "M.UI.label":              {0: TYPE_UI},
+    "M.UI.text":               {0: TYPE_UI},
+}
+
+
 def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
     toks, lits = scan_source(text, "lua")
     by_start = {l.start: l for l in lits}
@@ -2106,6 +2140,29 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
               else is_label_text(lit.inner))
         if ok:
             take(lit, typ, "get" + m.group(1) + "=function() return")
+
+    # ---- 2c) 已知 UI 调用：按参数位置收文案
+    #
+    # ImGui.SetTooltip("...") / M.UI.check("标签", 值, "描述") 的参数位置是确定的。
+    # 通用规则对它们无能为力：SetTooltip 的第一个参数被位置判定当成名字放过，
+    # M.UI.* 的第 3 / 第 6 个参数根本没有规则覆盖。于是一个 mod 整个设置页的
+    # tooltip 在游戏里永远是英文，而账本里连原文都没有 —— 运行时钩子也查不到。
+    # 2026-11-21 实测：78 个 lua 文件、611 处这类调用没进账本。
+    for _name, _oi, _close in spans:
+        _spec = _UI_CALL_ARGS.get(_name)
+        if not _spec:
+            continue
+        _args = _split_args(toks, _oi, _close)
+        for _idx, _typ in _spec.items():
+            if _idx >= len(_args):
+                continue
+            for _ti in _arg_strings(toks, _args[_idx]):
+                _lit = by_start.get(toks[_ti].start)
+                if _lit is None or _lit.start in taken:
+                    continue
+                # 白名单调用的参数位置就是文案位置，优先于通用的位置判定。
+                name_starts.discard(_lit.start)
+                take(_lit, _typ, "%s(arg%d)" % (_name, _idx))
 
     # ---- 3) 多行选项表:  labels = { "A", "B", ... }
     for lit in lits:
