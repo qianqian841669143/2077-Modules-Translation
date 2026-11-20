@@ -3806,6 +3806,11 @@ class Api(object):
 
         不能只并账本：zip 一旦被删/换掉，只并账本会造出一个没有运行时
         init.lua 的空壳包。这里优先用工作目录整份重建。
+
+        顺手把包里**旧的逻辑脚本**（.reds）删掉：2026-11-20 之前所有 .reds
+        都当覆盖文件投，模组被禁用后游戏里只剩我们的副本，redscript 编译
+        直接失败（RedRequire「您的模组脚本未编译」）。新规则只投本地化包，
+        旧条目得跟着清，否则重装一次 zip 又全回来了。
         """
         import mod_pack
         zp = self._pack_zip_path()
@@ -3814,12 +3819,45 @@ class Api(object):
         if not files:
             self._batch_log("账本目录为空，跳过同步")
             return {"files": 0, "zip": zp}
-        r = mod_pack.merge_into_zip(zp, files, log=self._batch_log)
-        self._batch_log("补丁包同步进 zip：%d 个文件（替换 %d，保留 %d）"
+        drop = self._bad_reds_names(zp)
+        r = mod_pack.merge_into_zip(zp, files, drop_names=drop,
+                                    log=self._batch_log)
+        self._batch_log("补丁包同步进 zip：%d 个文件（替换 %d，保留 %d%s）"
                         % (len(files), r.get("replaced") or 0,
-                           r.get("kept") or 0))
+                           r.get("kept") or 0,
+                           ("，删掉 %d 个旧脚本" % len(drop)) if drop else ""))
         return {"files": len(files), "zip": zp,
-                "replaced": r.get("replaced"), "kept": r.get("kept")}
+                "replaced": r.get("replaced"), "kept": r.get("kept"),
+                "dropped": r.get("dropped")}
+
+    def _bad_reds_names(self, zp):
+        """zip 里该删掉的 .reds：不是 Codeware 本地化包的那些。
+
+        逻辑 / UI 脚本一旦被我们单独投递，就等于只给了某个 redscript
+        模块的一部分编译单元。模组被禁用或升级后，游戏里剩下的这份副本
+        会让 import 找不到声明，214 条错、游戏起不来。所以宁可让这些
+        文案只留在账本里（MCM / ImGui 能替到），也不覆盖源码。
+        """
+        import mod_pack
+        import zipfile
+        out = set()
+        if not zp or not os.path.isfile(zp):
+            return out
+        try:
+            with zipfile.ZipFile(zp, "r") as z:
+                for name in z.namelist():
+                    if not name.lower().endswith(".reds"):
+                        continue
+                    try:
+                        text = z.read(name).decode("utf-8", "replace")
+                    except Exception:       # noqa: BLE001 - 读不动就当不安全
+                        out.add(name)
+                        continue
+                    if not mod_pack.is_localization_text(text):
+                        out.add(name)
+        except Exception as ex:             # noqa: BLE001 - 检查失败不该挡住同步
+            self._batch_log("检查旧包里的 .reds 失败：%s" % ex)
+        return out
 
     # ------------------------------------------------- 单模组：独立 zip
     @staticmethod

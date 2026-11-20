@@ -19,6 +19,8 @@
     含设置注册的文件  → 整份不进包，只走账本（改了可能整模组报废）
     语言包 / tweakdb  → 进包
     其余源码           → 进包
+    redscript（.reds）→ 只有「整目录都是 Codeware 本地化包」才进包，
+                          逻辑 / UI 脚本一条都不投（见 is_localization_package）
 """
 from __future__ import annotations
 
@@ -51,6 +53,36 @@ _NEVER_PACK_EXT = (
 
 # 语言包 / 本地化：这些文件里的文案必须靠覆盖文件生效，账本拦不到
 _LOCAL_HINTS = ("localization/", "localisation/", "/locale", "languages/")
+
+# Codeware 的本地化包只有这两个基类。只有它们能当覆盖文件单独投递：
+# 内容就是一张「key → 原文」的表，不 import 本模组的其它编译单元，
+# 所以模组被禁用 / 升级后，我们的副本孤零零留着也不会让谁缺声明。
+_L10N_MARKS = ("ModLocalizationPackage", "ModLocalizationProvider")
+
+
+def is_localization_text(text):
+    """redscript 源码是不是 Codeware 的本地化包（纯文本表）。
+
+    2026-11-20 的教训：以前把所有 .reds 都当覆盖文件投，等于只投了
+    某个模块的一部分编译单元。模组一被禁用（或升级换了文件名），
+    游戏里就只剩我们的副本，`module X` 的声明文件不在 → 整条依赖链
+    UNRESOLVED_IMPORT → redscript 报 214 条错 → RedRequire 把游戏拦在
+    启动前（「您的模组脚本未编译」）。所以默认一条逻辑脚本都不投。
+    """
+    if not text:
+        return False
+    return any(m in text for m in _L10N_MARKS)
+
+
+def is_localization_package(path):
+    """is_localization_text 的磁盘版；读不到就当不是（宁可少投）。"""
+    try:
+        if os.path.getsize(path) > 2 << 20:
+            return False
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return is_localization_text(f.read())
+    except OSError:
+        return False
 
 
 def sha1_file(path):
@@ -139,10 +171,13 @@ def is_settings_file(path):
     return any(m in text for m in _SETTING_MARKS)
 
 
-def route(rel, typ, has_settings=False):
+def route(rel, typ, has_settings=False, reds_lang_ok=False):
     """决定一条行走哪条通道。
 
     返回 "ledger" / "pack" / "skip"。
+
+    reds_lang_ok：这个 .reds 所在的目录是否「整目录都是 Codeware
+    本地化包」（由 classify 预先算好）。逻辑 / UI 脚本永远是 False。
     """
     low = (rel or "").lower().replace("\\", "/")
     ext = os.path.splitext(low)[1]
@@ -153,6 +188,11 @@ def route(rel, typ, has_settings=False):
     # 含设置注册的文件：整份留在原地，只能靠账本在显示层替换
     if has_settings:
         return "ledger"
+
+    # redscript：只有本地化包能进包。其余 .reds 的文案走账本，
+    # 文件本身一个字节都不覆盖 —— 见 is_localization_text 的说明。
+    if ext == ".reds":
+        return "pack" if reds_lang_ok else "ledger"
 
     # 语言包 / 本地化 / tweakdb：必须靠覆盖文件
     if any(h in low for h in _LOCAL_HINTS):
@@ -176,6 +216,20 @@ def classify(mod_root, rows):
     out = {"ledger": [], "pack": [], "archive": [], "skip": 0,
            "settings_files": []}
     cache = {}
+
+    # 先把 .reds 按目录归堆：整目录都是 Codeware 本地化包的才允许投递。
+    # 单个文件判不够 —— 语言包目录里还有 LocalizationProvider 之类没被翻的
+    # 兄弟文件，模组启用时由模组自己提供，我们只替换有译文的那些。
+    reds_dirs = {}
+    for r in rows or []:
+        rel = str(r.get("file") or "")
+        if rel.lower().endswith(".reds"):
+            d = os.path.dirname(rel).replace("\\", "/")
+            reds_dirs.setdefault(d, []).append(rel)
+    lang_dirs = {d for d, rels in reds_dirs.items()
+                 if rels and all(is_localization_package(os.path.join(mod_root, x))
+                                 for x in rels)}
+
     for r in rows or []:
         rel = str(r.get("file") or "")
         if not rel:
@@ -195,7 +249,8 @@ def classify(mod_root, rows):
             cache[rel] = is_settings_file(full)
             if cache[rel]:
                 out["settings_files"].append(rel)
-        ch = route(rel, r.get("type") or "", cache[rel])
+        rel_dir = os.path.dirname(rel).replace("\\", "/")
+        ch = route(rel, r.get("type") or "", cache[rel], rel_dir in lang_dirs)
         if ch in ("ledger", "pack", "archive"):
             out[ch].append(r)
         else:
@@ -245,6 +300,13 @@ def build_pack(mod_root, rows, extra_files=None, log=None):
         src = os.path.join(mod_root, rel)
         if not os.path.isfile(src):
             errors.append("%s: 源文件不存在" % rel)
+            fail += len(pairs)
+            continue
+        # 兜底闸门：逻辑 / UI 脚本绝不出现在包里（route 那边已经拦过一道）。
+        # 漏一个进去就可能在游戏里留下「半个模块」，代价是游戏启动不了。
+        if rel.lower().endswith(".reds") and not is_localization_package(src):
+            errors.append("%s: 跳过（redscript 逻辑文件不投递）" % rel)
+            _log("跳过 %s：不是本地化包，文案只进账本" % rel)
             fail += len(pairs)
             continue
         dst = os.path.join(temp, rel)
