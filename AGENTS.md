@@ -269,14 +269,18 @@ TrueFirstPersonCamera 与 CTO 的 `.reds` 全部走账本。
 `账本 ledger/all.lua：N 条` 和 `ImGui 钩子：接管 M 个绘制函数`；
 还打「找不到账本」就是路径又不对。
 
-## 当前基线（2026-11-20 12:08）
+## 当前基线（2026-11-20 12:46）
 
-- 最新提交：`cf51a8e fix(runtime): ImGui 是 userdata，判 table 导致钩子一个都没接上`
-  （前一个：`10701b4 fix(runtime): MCM 设置项在 cat.settings 里，不是 cat.items`）
-- `dist\2077ModTranslator.exe`：14,103,597 字节，2026-11-20 12:08:08，
-  SHA256 前 32 位 `849BE07CB31FC17CEE1DF98177516890`
-  备份 `dist\2077ModTranslator.exe.bak-20261120-1207`（12:07 那版 14,102,762 B；
-  再往前是 `bak-20261120-1154`，11:54 那版）
+- 最新提交：`21bc928 feat(batch): 批量遮罩按「条」显示进度，不再只报模组个数`
+  （前一个：`cf51a8e fix(runtime): ImGui 是 userdata，判 table 导致钩子一个都没接上`）
+- `dist\2077ModTranslator.exe`：14,103,676 字节，2026-11-20 12:46:34，
+  SHA256 前 32 位 `4D81AB059E2BA3E921C6391DDA03D48D`
+  备份 `dist\2077ModTranslator.exe.bak-20261120-1246`（12:08 那版 14,103,597 B；
+  再往前是 `bak-20261120-1207`）
+- 从新 exe 里读回：`web\js\queue.js` 26,294 B（`renderMaskCount` ×6、
+  `Math.max(est, real)`、`已翻译 %d / %d 条`）、`web\js\events.js` 12,666 B
+  （`renderMaskCount` ×3）、`mod_batch` 有 `textTotal`、入口有 `textTotal`；
+  `mbGlobalTxt` 两处都是 0
 - 从 exe 里读回：`init.lua` 13,083 B（`cat.settings` / `cat.items` 回退、
   `add("ledger/all.lua")`、`relPath`）、`imgui_hook.lua` 4,336 B
   （`kind ~= "userdata"`、`local seen = 0`）
