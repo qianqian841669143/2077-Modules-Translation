@@ -439,17 +439,18 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
 .dot.c { background: var(--cyan); }  .dot.g { background: var(--success); }
 .dot.a { background: var(--amber); } .dot.d { background: var(--dim2); }
 
-/* 4) 列表滚动容器。列头粘在顶上、和行共享同一份宽度；滚动条用标准
-   scrollbar-width: thin（8px），细、暗、hover 才亮，不抢表格的视线。
+/* 4) 列表滚动容器。列头粘在顶上、和行共享同一份宽度。
    右边不留内距：表格内容一直到滚动条左缘，滚动条就贴在表格边上。
-   最外面那条 --edge 的空白是留给拖窗口的（滚动条贴死窗口边会挡住边缘拖拽）。 */
+   最外面那条 --edge 的空白是留给拖窗口的（滚动条贴死窗口边会挡住边缘拖拽）；
+   内层再留 8px，让「已填 / 总数」和展开后的文件数字右缘对齐，不贴着滚动条。
+   滚动条样式一律走下面的 ::-webkit-scrollbar：这里**绝对不能写
+   scrollbar-width / scrollbar-color**——Chromium 121 之后只要元素上有这两个
+   属性，就会放弃 -webkit-scrollbar 的自定义，改用系统原生滚动条，而原生滚动条
+   是照 color-scheme 画的（本文件第 69 行钉了 dark），于是浅色主题上就冒出
+   一根深灰轨道 + 浅灰滑块。2026-11-20 用户截图就是这么来的。 */
 .mscroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
            margin-right: var(--edge);
-           padding: 0 0 0 var(--pad); scrollbar-gutter: stable;
-           scrollbar-width: thin; }
-/* style.css 里有一条全局 ::-webkit-scrollbar{width:10px}，一旦它存在
-   Chromium 就只认它、忽略 scrollbar-width，所以这里必须再钉一次 8px，
-   不然列表的槽比 --sbw 宽 2px，表头又会跟上面的功能栏差一点。 */
+           padding: 0 0 0 var(--pad); scrollbar-gutter: stable; }
 .mscroll::-webkit-scrollbar { width: var(--sbw); height: var(--sbw); }
 .mscroll::-webkit-scrollbar-track { background: transparent; }
 .mscroll::-webkit-scrollbar-thumb {
@@ -518,7 +519,9 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
 .grp.mod .mt b.fnum.todo { color: var(--amber); }   /* 还有没翻完的 */
 .grp.mod .mt b.total { min-width: 42px; }
 .grp.mod .mt .sep { color: var(--dim2); font-size: 12px; margin: 0 -1px; }
-.mfiles { background: var(--panel2); padding: 5px 0 9px 58px; }
+/* 右边 8px 和 .grp.mod / .mhead 对齐：展开后的「已翻完 / 1008」不再比上面的
+   「已填 / 总数」更靠右、也不会贴着滚动条。 */
+.mfiles { background: var(--panel2); padding: 5px 8px 9px 58px; }
 .mfile { display: flex; align-items: center; gap: 12px; height: 26px;
          font-size: 12.5px; }
 .mfile .fpath {
