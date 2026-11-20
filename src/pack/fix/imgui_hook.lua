@@ -81,11 +81,52 @@ return function(lookup, log)
     if memoN > 20000 then          -- 换模组/换场景之后旧的没用了，别无限长
       memo, memoN = {}, 0
     end
-    local zh = lookup(s)
+
+    -- ImGui 把「给人看的文字」和「控件 id」拼在同一个参数里，用 ## / ### 分隔：
+    --   ImGui.Checkbox(title .. '##preventUntrackedMainQuests.', ...)
+    -- 账本里只有 title，拿整串查必然查不到 —— Untrack Quest Ultimate 那个窗口
+    -- 一行标题都翻成中文了、勾选项全是英文，就是这个原因。
+    -- 查表时切掉 ## 之后的部分，命中后把尾巴拼回去：控件 id 一个字不动。
+    local base, tail = s, ""
+    local i = s:find("##", 1, true)
+    if i and i > 1 then
+      base, tail = s:sub(1, i - 1), s:sub(i)
+    end
+
     memoN = memoN + 1
-    if type(zh) == "string" and zh ~= "" and zh ~= s then
-      memo[s] = zh
-      return zh
+    local zh = lookup(base)
+    if type(zh) ~= "string" or zh == "" or zh == base then
+      zh = nil
+    end
+    if not zh then
+      -- 同一个模组常常有两套文案：CET 窗口那份带句号、nativeSettings 那份不带，
+      -- 账本只收了其中一份。去掉句尾的点/冒号再查一次，命中就直接用译文，
+      -- 不把那个标点补回中文后面（中文自己有句号）。
+      local cut = base:match("^(.-)%.$") or base:match("^(.-):$")
+        or base:match("^(.-)：$")
+      if cut and cut ~= "" then
+        local zh2 = lookup(cut)
+        if type(zh2) == "string" and zh2 ~= "" and zh2 ~= cut then
+          zh = zh2
+        end
+      end
+    end
+    if not zh then
+      -- 反过来也一样：账本里那份带句号、界面文字不带（nativeSettings 用的
+      -- 文案常常没有句号，CET 窗口那份有）。补一个点再查一次。
+      local full = base .. "."
+      local zh3 = lookup(full)
+      if type(zh3) == "string" and zh3 ~= "" and zh3 ~= full then
+        zh = zh3
+      end
+    end
+    if zh then
+      local out = zh
+      if tail ~= "" then
+        out = zh .. tail
+      end
+      memo[s] = out
+      return out
     end
     memo[s] = false
     return nil
