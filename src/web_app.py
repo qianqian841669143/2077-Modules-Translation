@@ -24,9 +24,23 @@ from appconfig import (VERSION, DEFAULT_SETTINGS, TARGET_LANGS, config_dir,
                        normalize_api_base, disp_path, legacy_batch_out_dir)
 
 
-def web_dir():
+def bundle_dir(name):
+    """打包后的资源目录（exe 里是 _MEIPASS，源码运行时是 src\\）。"""
     base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base, "web")
+    return os.path.join(base, name)
+
+
+def web_dir():
+    return bundle_dir("web")
+
+
+def pack_dir():
+    """内置的补丁包运行时（``src\\pack``，打包后在 ``_MEIPASS\\pack``）。
+
+    2026-11-20 之前运行时的 init.lua 只存在于 ``userdata\\pack\\fix``，
+    既不在版本控制里、也没法回滚。现在代码以仓库里的这份为准。
+    """
+    return bundle_dir("pack")
 
 
 # 汉化包的落点：包名固定（Vortex 里重装时认的是同一个包），所在目录可改。
@@ -3735,12 +3749,18 @@ class Api(object):
         out = {}
         root = self._pack_work_dir()
 
+        # 运行时（init.lua / imgui_hook.lua / README.txt）以仓库里的 src\pack
+        # 为准，userdata\pack\fix 只用来补内置里没有的文件：以前只有 userdata
+        # 那一份，升级后老副本会把新代码顶掉（还没法 diff、没法回滚）。
         fix = os.path.join(root, "fix")
-        if os.path.isdir(fix):
-            for base, _dirs, files in os.walk(fix):
+        builtin = os.path.join(pack_dir(), "fix")
+        for fix_dir in (fix, builtin):
+            if not os.path.isdir(fix_dir):
+                continue
+            for base, _dirs, files in os.walk(fix_dir):
                 for fn in files:
                     p = os.path.join(base, fn)
-                    rel = os.path.relpath(p, fix).replace("\\", "/")
+                    rel = os.path.relpath(p, fix_dir).replace("\\", "/")
                     out[self._PACK_MOD_DIR + rel] = p
 
         led = os.path.join(root, "ledger")
@@ -3756,9 +3776,15 @@ class Api(object):
         return out
 
     def _has_runtime(self):
-        """工作目录里有没有运行时 init.lua（没它装上去也不生效）。"""
-        return os.path.isfile(
-            os.path.join(self._pack_work_dir(), "fix", "init.lua"))
+        """有没有运行时 init.lua（没它装上去也不生效）。
+
+        内置（src\\pack）和 userdata 各查一遍：内置那份是仓库里的正式副本。
+        """
+        for d in (os.path.join(self._pack_work_dir(), "fix"),
+                  os.path.join(pack_dir(), "fix")):
+            if os.path.isfile(os.path.join(d, "init.lua")):
+                return True
+        return False
 
     def _ledger_zip_map(self):
         """账本目录 → {zip 内路径: 磁盘路径}，只收 .lua / .json。"""
@@ -3877,7 +3903,9 @@ class Api(object):
         folder = mod_ledger.folder_name(root) or mod_ledger.safe_name(
             os.path.basename(root.rstrip("\\/")) or "mod")
 
-        keep = {self._PACK_MOD_DIR + n for n in ("init.lua", "README.txt", "names.lua")}
+        # imgui_hook.lua 必须带：ImGui 自绘界面（CTO 那一类）靠它才翻得动
+        keep = {self._PACK_MOD_DIR + n
+                for n in ("init.lua", "imgui_hook.lua", "README.txt", "names.lua")}
         keep.add(self._LEDGER_ZIP_REL + "mods/" + folder + ".lua")
         for k, v in self._patch_map().items():
             if k in keep:

@@ -44,7 +44,8 @@ a = Analysis(
     pathex=[SRC],
     binaries=[],
     datas=(collect(os.path.join(SRC, "locales"), "locales")
-           + collect(os.path.join(SRC, "web"), "web")),
+           + collect(os.path.join(SRC, "web"), "web")
+           + collect(os.path.join(SRC, "pack"), "pack")),
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
