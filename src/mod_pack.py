@@ -260,7 +260,14 @@ def classify(mod_root, rows):
 
 # ---------------------------------------------------------------- 打包
 def _group_by_file(rows):
-    """{相对路径: [(行号, 原文, 译文)]}"""
+    """{相对路径: [(行号, 原文, 译文, ctx)]}
+
+    ctx 是写回时的稳定标识：数据表 JSON 是 JSON Pointer，语言包是条目名。
+    2026-11-21 之前这里把 ctx 丢了，build_pack 只能按行号写回，于是数据表
+    JSON 落到 apply_many_ex 被整份拒绝（mod_text_engine.py:3774）——
+    BountyContracts 3 个 json 数据表 7843 条就是这么全丢的。按行号写 json
+    本来也不成立：`"键": "值"` 在 reds 词法下是两个独立字面量。
+    """
     files = {}
     for r in rows or []:
         rel = str(r.get("file") or "")
@@ -268,7 +275,8 @@ def _group_by_file(rows):
         trans = str(r.get("trans") or "")
         if not rel or not orig or not trans or trans == orig:
             continue
-        files.setdefault(rel, []).append((r.get("line"), orig, trans))
+        files.setdefault(rel, []).append(
+            (r.get("line"), orig, trans, str(r.get("ctx") or "")))
     return files
 
 
@@ -317,8 +325,22 @@ def build_pack(mod_root, rows, extra_files=None, log=None):
             errors.append("%s: 复制失败 %s" % (rel, ex))
             fail += len(pairs)
             continue
+        is_json = rel.lower().endswith(".json")
+        if is_json and not all(str(p[3] or "") for p in pairs):
+            # 数据表没有 JSON Pointer 就没法按值定位，按行号写只会在
+            # 「代码骨架不一致」那道守卫上整批被拒，白跑一趟。
+            errors.append("%s: 数据表缺少 JSON Pointer，已拒绝写回" % rel)
+            fail += len(pairs)
+            continue
         try:
-            n, fails = MTE.apply_many_ex(dst, pairs)
+            if is_json:
+                # 数据表 JSON：按 JSON Pointer 改值再整份序列化。apply_many_ex
+                # 对 .json 是硬拒绝（mod_text_engine.py:3774），走它必然 0 写入。
+                n, fails = MTE.apply_json_ex(
+                    dst, [(p[3], p[1], p[2]) for p in pairs])
+            else:
+                n, fails = MTE.apply_many_ex(
+                    dst, [(p[0], p[1], p[2]) for p in pairs])
         except Exception as ex:
             errors.append("%s: 写回异常 %s" % (rel, ex))
             fail += len(pairs)
