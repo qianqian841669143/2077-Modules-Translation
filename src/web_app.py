@@ -2757,6 +2757,14 @@ class Api(object):
         def work():
             try:
                 import mod_batch as MB
+                # 开跑前先把模组名补齐：只扫注册写法（实测 310 个目录 1.1 秒）
+                # + 几次模型调用，比让 300 个模组各自补一遍划算，而且已经翻完、
+                # 这轮被续跑跳过的模组也能补到名。
+                try:
+                    nm = self.refresh_names(log=self._batch_log)
+                    self._batch_log("开跑前补模组名：%r" % (nm,))
+                except Exception as nex:     # noqa: BLE001 - 补名失败不该挡住批量
+                    self._batch_log("开跑前补模组名失败：%r" % (nex,))
                 ctx = MB.Ctx(spawn_worker=spawn, out_root=out_root,
                              with_archive=bool(with_archive),
                              skip_assets=bool(skip_assets),
@@ -2765,7 +2773,8 @@ class Api(object):
                              deploy=bool(self.settings.get("batch_deploy")),
                              deploy_dry=bool(self.settings.get("batch_deploy_dry", True)),
                              ledger=True,
-                             ledger_dir=self._ledger_dir())
+                             ledger_dir=self._ledger_dir(),
+                             log=self._batch_log)
                 self._mb_results = MB.run(ctx, items)
                 # 覆盖文件是边跑边攒的（collect），收尾一次性并进 zip，
                 # 顺带把账本 / 运行时 / 说明同步进去（见 _flush_pack）。
@@ -4510,21 +4519,73 @@ class Api(object):
                             "entries": sum(int(r.get("entries") or 0)
                                            for r in rows)}}
 
+    def refresh_names(self, log=None):
+        """扫一遍 staging 里所有模组的注册写法，把缺的模组名补齐。
+
+        只读 `.reds` / `.lua` 里的注册调用（ms 的 runtimeProperty、rcf 的
+        DVRCF.Register、nativeSettings 的 addTab），不碰正文，所以比跑一轮
+        批量便宜得多（实测扫 310 个目录 1.1 秒）。翻出来的名字写进 names.lua，
+        键和英文名各一份。
+
+        为什么要单独有这一轮：names.lua 以前只在「重跑某个模组」时才补，已经
+        翻完的模组不会回头补名，于是 MCM 列表里一半名字永远是英文。
+        """
+        import mod_ledger
+        log = log or self._batch_log
+        stg = str(self.settings.get("staging_dir") or "").strip()
+        if not stg or not os.path.isdir(stg):
+            return {"ok": False, "error": "没有设置安装缓存目录"}
+        # 汉化包自己在 staging 里的副本（是我们投出去的覆盖文件）别扫：
+        # 那里面已经是中文，扫进来只会多出一堆没用的键。
+        skip = os.path.splitext(os.path.basename(self._pack_zip_path()))[0]
+        pairs = []
+        for name in sorted(os.listdir(stg)):
+            d = os.path.join(stg, name)
+            if not os.path.isdir(d) or name == skip:
+                continue
+            try:
+                pairs.extend(mod_ledger.scan_name_pairs(d))
+            except Exception:            # noqa: BLE001 - 一个目录坏了不该毁整轮
+                continue
+        out = mod_ledger.ledger_dir(self.settings)
+        if not out:
+            return {"ok": False, "error": "账本目录为空"}
+        stat = mod_ledger.ensure_names(
+            out, pairs,
+            base=normalize_api_base(self.settings.get("api_base", "")),
+            model=str(self.settings.get("model") or "").strip(),
+            target=str(self.settings.get("target_lang") or "简体中文"),
+            log=log)
+        log("模组名：扫出 %d 个候选，names.lua 新增 %d 条（现有 %d）"
+            % (len(pairs), int(stat.get("added") or 0),
+               int(stat.get("have") or 0) + int(stat.get("added") or 0)))
+        return {"ok": True, "pairs": len(pairs), "added": stat.get("added"),
+                "todo": stat.get("todo"), "error": stat.get("error") or ""}
+
     def sync_pack(self):
         """手动把账本同步进 zip（界面上点「同步账本」/「重新打包」）。
 
         以前「重新打包」走的是 `pack_zip()`：弹保存框、把当前模组目录整份打成
         `*_translated.zip` —— 那是「覆盖文件」时代的东西。账本模式下它跟总包
         完全不是一回事：用户点完以为总包更新了，其实一条新译文都没进去。
+
+        顺手补一轮模组名：这条路上补名最便宜（只扫注册写法、不重译正文），
+        扫完再同步，zip 里的 names.lua 才是全的。
         """
         if self._busy:
             return {"ok": False, "error": "busy"}
+        names = {}
+        try:
+            names = self.refresh_names()
+        except Exception as ex:          # noqa: BLE001 - 补名失败不该挡住同步
+            self._batch_log("补模组名失败：%r" % (ex,))
         try:
             r = self._sync_ledger_to_zip()
         except Exception as ex:          # noqa: BLE001 - 回给界面显示
             return {"ok": False, "error": str(ex)}
         return {"ok": True, "files": r.get("files"), "zip": r.get("zip"),
-                "path": r.get("zip"), "status": self.pack_status()}
+                "path": r.get("zip"), "names": names,
+                "status": self.pack_status()}
 
     def open_pack(self):
         """在资源管理器里定位汉化包 zip（选中它）。"""

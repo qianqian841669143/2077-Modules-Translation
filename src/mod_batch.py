@@ -268,7 +268,7 @@ class Ctx(object):
     def __init__(self, spawn_worker, out_root, with_archive=False,
                  skip_assets=True, base="", model="", target="简体中文",
                  on_event=None, cancel=None, deploy=False, deploy_dry=True,
-                 ledger=False, ledger_dir=""):
+                 ledger=False, ledger_dir="", log=None):
         self.spawn_worker = spawn_worker
         self.out_root = out_root
         self.with_archive = with_archive
@@ -283,6 +283,9 @@ class Ctx(object):
         self.deploy_dry = deploy_dry    # 只算不写
         self.ledger = ledger            # 只写账本（mods/<文件夹>.lua），不回写模组
         self.ledger_dir = ledger_dir    # 账本输出目录，空则用 out_root
+        # 诊断日志（宿主的 _batch_log → logs/batch.log）。以前这条链没接，
+        # 账本合并 / 模组名翻译的日志在批量里全是静默的，出问题只能靠猜。
+        self.log = log or (lambda _m: None)
 
     def stopped(self):
         return self.cancel is not None and self.cancel.is_set()
@@ -456,7 +459,8 @@ def finish(ctx, cand, prep, r):
         got = mod_ledger.write(
             ctx.ledger_dir or ctx.out_root, dst, items,
             staging_name=cand.get("name") or "",
-            target=ctx.target, base=ctx.base, model=ctx.model)
+            target=ctx.target, base=ctx.base, model=ctx.model,
+            log=ctx.log)
         r["ledger"] = got
         r["ledgerEntries"] = int(got.get("entries") or 0)
 

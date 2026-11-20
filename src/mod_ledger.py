@@ -28,6 +28,23 @@ _BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 _MOD_RE = re.compile(
     r'@runtimeProperty\(\s*"ModSettings\.mod"\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)')
 
+# rcf（Redscript 配置框架）的注册：DVRCF.Register(game, "id", "显示名", …)。
+# 这个 id 就是 rcf bridge 的 `listMods` 里的 `mod.id`，跟显示名是两个字符串——
+# Monowire Rework 注册成 "MonowireE3" / "Monowire Rework"，两张表都得建键。
+_RCF_RE = re.compile(
+    r'DVRCF\.Register\s*\(\s*[\w.]+\s*,\s*"((?:[^"\\]|\\.)*)"\s*,'
+    r'\s*"((?:[^"\\]|\\.)*)"')
+
+# nativeSettings 的顶层页签：native_settings bridge 的 listMods 用
+# `id = tostring(tabPath)`、`name = tab.label`，所以键是 "/ENC" 这种带前导斜杠的串。
+# 只认 addTab —— addSubcategory 是页签**里**的分类，不是模组名。
+_TAB_RE = re.compile(
+    r'nativeSettings\.addTab\s*\(\s*"((?:[^"\\]|\\.)*)"\s*,'
+    r'\s*"((?:[^"\\]|\\.)*)"')
+
+# 扫出来的「名字」里混着框架自己的提示语，别写进 names.lua
+_NAME_JUNK = re.compile(r"(installed!|^nomod$|^nil$|^unknown$)", re.I)
+
 _SCAN_SKIP = {".git", "__pycache__", "node_modules", ".svn"}
 
 # 从 mod 内部路径推断「部署到游戏目录时的文件夹名」。按优先级匹配：
@@ -142,6 +159,56 @@ def scan_ids(root):
                 if v and v not in seen:
                     seen.add(v)
                     out.append(v)
+    return out
+
+
+def scan_name_pairs(root):
+    """扫出「模组显示名」候选，返回 [(键, 英文名)]，按出现顺序去重。
+
+    三个 bridge 给的 id 形状各不相同，所以两种键都要建：
+        ms      @runtimeProperty("ModSettings.mod", "X")        → 键 "X"
+        rcf     DVRCF.Register(game, "MonowireE3", "Monowire…") → 键 "MonowireE3" + 英文名
+        native  nativeSettings.addTab("/ENC", "ENC")            → 键 "/ENC" + 英文名
+
+    运行时先按 id 查、再按英文名查（init.lua 的 lookupName），所以
+    names.lua 里键和英文名各写一份，任一形状对上就能换。
+    """
+    out = []
+    seen = set()
+
+    def add(key, name):
+        key = re.sub(r"\s+", " ", str(key or "")).strip()
+        name = re.sub(r"\s+", " ", _unesc(str(name or ""))).strip()
+        if not name or _CJK_RE.search(name) or _NAME_JUNK.search(name):
+            return
+        for k in ((key, name) if key and key != name else (name,)):
+            if k not in seen:
+                seen.add(k)
+                out.append((k, name))
+
+    if not root or not os.path.isdir(root):
+        return out
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d.lower() not in _SCAN_SKIP]
+        for fn in filenames:
+            low = fn.lower()
+            if not low.endswith((".reds", ".lua")):
+                continue
+            try:
+                with open(os.path.join(dirpath, fn), "r",
+                          encoding="utf-8", errors="ignore") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            if "ModSettings.mod" in text:
+                for m in _MOD_RE.finditer(_strip_comments(text)):
+                    add(m.group(1), m.group(1))
+            if "DVRCF.Register" in text:
+                for m in _RCF_RE.finditer(text):
+                    add(m.group(1), m.group(2))
+            if "nativeSettings.addTab" in text:
+                for m in _TAB_RE.finditer(text):
+                    add(m.group(1), m.group(2))
     return out
 
 
@@ -277,7 +344,7 @@ def write_names(path, mapping):
     rows = sorted(mapping.items(), key=lambda kv: kv[0].lower())
     width = max([len("  ['%s'] = " % _q(k)) for k, _ in rows] + [20]) + 1
     lines = [
-        "-- 模组显示名表（sourceId -> 中文名）。工具只补缺的，人工改过的不会被覆盖。",
+        "-- 模组显示名表（mod.id 或英文名 -> 中文名）。工具只补缺的，人工改过的不会被覆盖。",
         "-- 由 2077 Mod Translator 生成（%s）" % time.strftime("%Y-%m-%d %H:%M:%S"),
         "return {",
     ]
@@ -298,55 +365,110 @@ def _clean_name(name):
     return s if s and _CJK_RE.search(s) else ""
 
 
-def translate_names(ids, base, model, target="简体中文", timeout=180, log=None):
-    """只翻模组名。返回 {id: 中文名}，没翻出来的不放进结果。"""
+_NAME_CHUNK = 25          # 一批最多翻多少个模组名
+_NAME_SINGLE_MAX = 40     # 批里漏掉的名字，最多再逐个补多少个
+
+
+def _translate_chunk(names, base, model, target, timeout, log):
+    """翻一小批名字。返回 {英文名: 中文名}；模型回的数组长度对不上就整批作废。"""
     import json as _json
     import mt_client as MT
 
-    ids = [str(x).strip() for x in (ids or []) if str(x).strip()]
-    if not ids or not base:
-        return {}
     sys_prompt = _NAME_SYS.replace("简体中文", target, 1)
     try:
         raw = MT.chat(
             base, model,
             [{"role": "system", "content": sys_prompt},
-             {"role": "user", "content": _json.dumps(ids, ensure_ascii=False)}],
+             {"role": "user", "content": _json.dumps(names, ensure_ascii=False)}],
             temperature=0.2, timeout=timeout,
-            max_tokens=max(256, 80 * len(ids)))
+            max_tokens=max(256, 80 * len(names)))
     except Exception as ex:                       # noqa: BLE001
         if log:
-            log("names: 翻模组名失败 %s" % ex)
+            log("names: 翻 %d 个模组名失败 %s" % (len(names), ex))
         return {}
-    got = MT.parse_json_array(raw, len(ids))
+    got = MT.parse_json_array(raw, len(names))
     if got is None:
         try:
-            got = MT._parse_lines(raw, len(ids))   # noqa: SLF001 - 同包内部兜底
+            got = MT._parse_lines(raw, len(names))   # noqa: SLF001 - 同包内部兜底
         except Exception:                          # noqa: BLE001
             got = None
     if not got:
         return {}
     out = {}
-    for i, name in zip(ids, got):
+    for i, name in zip(names, got):
         lab = _clean_name(name)
         if lab:
             out[i] = lab
     return out
 
 
-def ensure_names(out_dir, ids, base="", model="", target="简体中文",
+def _translate_batch(chunk, base, model, target, timeout, log):
+    """翻一批；整批空手而归就劈半再来，劈到单个为止。
+
+    模型对「一次 25 个名字」最常见的失败是数组长度对不上，整批作废。
+    劈半比逐个补省得多：8 个名字一次失败，劈到单个是 8 次调用，劈半是 4 次。
+    """
+    got = _translate_chunk(chunk, base, model, target, timeout, log)
+    if got or len(chunk) <= 1:
+        return got
+    mid = len(chunk) // 2
+    out = _translate_batch(chunk[:mid], base, model, target, timeout, log)
+    out.update(_translate_batch(chunk[mid:], base, model, target, timeout, log))
+    return out
+
+
+def translate_names(names, base, model, target="简体中文", timeout=180, log=None):
+    """只翻模组名，分批 + 补漏。返回 {英文名: 中文名}，没翻出来的不放进结果。
+
+    以前是一把全丢给模型、要一个等长 JSON 数组：数组少一个多一个，长度校验
+    就整批作废，names.lua 里于是只有一部分名字，而且失败是静默的（批量那条
+    路调 write 时没传 log）。现在每批 25 个，批结果都进日志，漏掉的再逐个补。
+    """
+    todo = [str(x).strip() for x in (names or []) if str(x or "").strip()]
+    todo = list(dict.fromkeys(todo))
+    if not todo or not base:
+        return {}
+    out = {}
+    for i in range(0, len(todo), _NAME_CHUNK):
+        chunk = todo[i:i + _NAME_CHUNK]
+        got = _translate_batch(chunk, base, model, target, timeout, log)
+        out.update(got)
+        if log:
+            log("names: 第 %d 批 %d 个，回来 %d 个"
+                % (i // _NAME_CHUNK + 1, len(chunk), len(got)))
+    missing = [n for n in todo if n not in out][:_NAME_SINGLE_MAX]
+    for n in missing:
+        out.update(_translate_chunk([n], base, model, target, timeout, log))
+    if log and missing:
+        log("names: 逐个补 %d 个，补回 %d 个"
+            % (len(missing), sum(1 for n in missing if n in out)))
+    return out
+
+
+def ensure_names(out_dir, pairs, base="", model="", target="简体中文",
                  timeout=180, log=None):
-    """补 names.lua：已有中文的不动，缺的翻一次，id 本身是中文的跳过。"""
+    """补 names.lua。pairs: [(键, 英文名)]，键和英文名各写一份。
+
+    键是运行时拿得到的 mod.id：ms 的注册名 / rcf 的 id / nativeSettings 的
+    页签路径。英文名也建键——runtime 按 id 查不到时会拿 `mod.name` 再查
+    （init.lua 的 lookupName）。表里已经有中文的键，一个都不覆盖。
+    """
     path = os.path.join(out_dir, "names.lua")
     have = parse_names(path)
-    todo = []
-    for i in ids:
-        if not i or _CJK_RE.search(i):
-            continue                     # 已经是中文名，不需要映射
-        cur = have.get(i)
-        if cur is not None and _CJK_RE.search(cur):
-            continue                     # 表里已有中文名，绝不覆盖
-        todo.append(i)
+
+    by_eng = {}
+    for key, eng in pairs or []:
+        eng = str(eng or "").strip()
+        if not eng or _CJK_RE.search(eng):
+            continue                     # 名字本来就是中文，不需要映射
+        keys = by_eng.setdefault(eng, [])
+        key = str(key or "").strip()
+        if key and key != eng and key not in keys:
+            keys.append(key)
+
+    todo = [eng for eng, keys in by_eng.items()
+            if not _clean_name(have.get(eng))
+            and not any(_clean_name(have.get(k)) for k in keys)]
     stat = {"added": 0, "todo": len(todo), "have": len(have), "error": ""}
     if not todo:
         return stat
@@ -355,11 +477,22 @@ def ensure_names(out_dir, ids, base="", model="", target="简体中文",
         return stat
     got = translate_names(todo, base, model, target, timeout, log)
     if not got:
-        stat["added"] = 0
+        stat["error"] = "模组名一个都没翻出来"
         return stat
-    have.update(got)
+
+    added = 0
+    for eng, keys in by_eng.items():
+        zh = got.get(eng) or _clean_name(have.get(eng))
+        if not zh:
+            continue
+        for k in [eng] + keys:
+            if have.get(k) != zh:
+                have[k] = zh
+                added += 1
     write_names(path, have)
-    stat["added"] = len(got)
+    stat["added"] = added
+    if log:
+        log("names.lua：%d 条模组名（这轮新增 %d）" % (len(have), added))
     return stat
 
 
@@ -438,10 +571,15 @@ def write(out_dir, mod_root, rows, staging_name="", target="简体中文",
 
     ids = _source_ids(mod_root)
 
-    # 模组名的中文名并进 names.lua：人工整理过的不会被覆盖，缺的才翻
-    if ids:
+    # 模组名的中文名并进 names.lua：人工整理过的不会被覆盖，缺的才翻。
+    # 三种注册写法都要扫（ms 的 runtimeProperty / rcf 的 DVRCF.Register /
+    # nativeSettings 的 addTab）——只认 ms 那一种时，MCM 里一半模组名永远是英文。
+    pairs = scan_name_pairs(mod_root)
+    if not pairs and ids:
+        pairs = [(i, i) for i in ids]
+    if pairs:
         try:
-            ensure_names(out_dir, ids, base=base, model=model,
+            ensure_names(out_dir, pairs, base=base, model=model,
                          target=target, log=log)
         except Exception as ex:          # noqa: BLE001 - 补名失败不影响账本
             if log:

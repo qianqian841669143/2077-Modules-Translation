@@ -280,7 +280,10 @@ local function patchSchema(schema, sourceId)
     return
   end
 
-  local name = lookupName(sourceId) or lookup(sourceId, schema.name)
+  -- names.lua 里两种键都写了：mod.id，以及英文名本身。三个 bridge 给的 id
+  -- 形状各不相同（"/ENC" / "MonowireE3" / ms 的注册名），按英文名再兜一次。
+  local name = lookupName(sourceId) or lookupName(schema.name)
+    or lookup(sourceId, schema.name)
   if name ~= nil then
     schema.name = name
     replaced = replaced + 1
@@ -347,7 +350,8 @@ local function patchProvider(provider)
       if type(snapshot) == "table" and type(snapshot.mods) == "table" then
         for _, mod in ipairs(snapshot.mods) do
           local sid = tostring(mod.id or "")
-          local nm = lookupName(sid) or lookup(sid, mod.name)
+          local nm = lookupName(sid) or lookupName(mod.name)
+            or lookup(sid, mod.name)
           if nm ~= nil then
             mod.name = nm
           end
