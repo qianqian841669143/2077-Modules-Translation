@@ -164,8 +164,72 @@ function renderPackStatus(s) {
     L.push("✗ " + T("缺运行时 init.lua：包装上去也不会替换任何文本"));
   }
   $("pack-text").textContent = L.join("\n");
+
+  // ---- 卡片版：这个 zip 到底装了什么，一眼看完 ----
+  const box = $("pack-cards");
+  if (!box) return;
+  const n = (v) => Number(v || 0).toLocaleString();
+  const row = (k, v) => '<div class="pk"><span>' + esc(k) +
+    "</span><b>" + esc(String(v)) + "</b></div>";
+  const head = (cls, name, badge, badgeCls) => '<div class="phead">' +
+    '<span class="pdot ' + cls + '"></span>' +
+    '<span class="pname" title="' + esc(name) + '">' + esc(name) + "</span>" +
+    (badge ? '<span class="pbadge ' + badgeCls + '">' + esc(badge) + "</span>" : "") +
+    "</div>";
+  const of = String(s.zip || "").split(/[\\/]/).pop();
+  const dirOf = String(s.zip || "").replace(/[\\/][^\\/]+$/, "");
+  const cards = [];
+
+  // 1) 包本身
+  cards.push('<div class="pcard">' +
+    head(s.exists ? "ok" : "wa", of || T("汉化包"),
+         T(s.exists ? "已生成" : "未生成"), s.exists ? "ok" : "wa") +
+    '<div class="pmeta">' + (s.exists
+      ? esc(fmtBytes(s.size)) + " · " + esc(s.mtime || "-")
+      : esc(T("还没点过「应用」，包还不存在"))) + "</div>" +
+    '<div class="pmeta pmeta-path" title="' + esc(s.zip || "") + '">' +
+    esc(dirOf || "-") + "</div>" +
+    row(T("条目总数"), n(s.entries)) +
+    row(T("覆盖文本"), n(s.textInZip)) +
+    row(T("账本条目"), n(s.ledgerInZip)) +
+    row(T("归档"), n(s.archiveInZip)) +
+    row(T("运行时"), n(s.overrideInZip)) +
+    row(T("说明文件"), n(s.patchInZip)) +
+    "</div>");
+
+  // 2) 账本
+  cards.push('<div class="pcard">' +
+    head(lg.inSync ? "ok" : "wa", T("账本"),
+         T(lg.inSync ? "已同步" : "未同步"), lg.inSync ? "ok" : "wa") +
+    '<div class="pmeta">' + esc(lg.dir || "-") + "</div>" +
+    row(T("文件"), tf("%d 个 / 进包 %d 个", lg.files || 0, s.ledgerInZip || 0)) +
+    row(T("模组"), (lg.mods || 0) + " / " + n(lg.entries) + " " + T("条")) +
+    row("all.lua", fmtBytes(lg.all)) +
+    row(T("更新时间"), lg.mtime || "-") +
+    "</div>");
+
+  // 3) 检查：哪里会出问题就写在这里
+  const warns = [];
+  if (!lg.inSync) {
+    warns.push(T("账本没进包：现在重装 zip 会覆盖 staging 里的账本，先点「同步账本」。"));
+  }
+  if (!s.hasRuntime) warns.push(T("缺运行时 init.lua：包装上去也不会替换任何文本"));
+  if (s.error) warns.push(s.error);
+  cards.push('<div class="pcard">' +
+    head(warns.length ? "wa" : "ok", T("检查"),
+         warns.length ? T("有 %d 项要注意").replace("%d", warns.length) : T("没问题"),
+         warns.length ? "wa" : "ok") +
+    (warns.length
+      ? warns.map((w) => '<div class="pwarn">' + esc(w) + "</div>").join("")
+      : '<div class="pok">' + esc(T("账本已随包走，重装这个 zip 不会丢译文。")) + "</div>") +
+    row(T("覆盖记录"), tf("%d 个模组", s.packed || 0)) +
+    "</div>");
+
+  box.innerHTML = cards.join("");
+
+  // 底部那行只在「账本没同步」时提示，同步了就别跟卡片重复
   $("pack-tip").textContent = lg.inSync
-    ? T("账本已随包走，重装这个 zip 不会丢译文。")
+    ? ""
     : T("账本没进包：现在重装 zip 会覆盖掉 staging 里的账本，先点「同步账本」。");
 }
 

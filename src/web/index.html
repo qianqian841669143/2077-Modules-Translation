@@ -261,13 +261,18 @@
   <section class="pagecol" data-page="pack" hidden>
     <div class="packbar">
       <div class="pnote"
-           data-i18n="这个 zip 是唯一交付物：覆盖文本、归档产物、运行时补丁、账本都并在这里。重装前确认「账本」一行是「已同步」。">
-        这个 zip 是唯一交付物。重装前确认「账本」一行是「已同步」。</div>
+           data-i18n="这个 zip 是唯一交付物：覆盖文本、归档产物、运行时补丁、账本都并在这里。重装前确认「账本」是「已同步」。">
+        这个 zip 是唯一交付物。重装前确认「账本」是「已同步」。</div>
+      <button class="btn" id="btn-pack-refresh" data-i18n="刷新">刷新</button>
       <button class="btn" id="btn-pack-open" data-i18n="打开所在文件夹">打开所在文件夹</button>
+      <button class="btn" id="btn-pack-build" data-i18n="重新打包">重新打包</button>
       <button class="btn primary" id="btn-pack-sync" data-i18n="同步账本">同步账本</button>
     </div>
-    <pre class="report" id="pack-text"></pre>
-    <p class="hint" id="pack-tip" style="padding:0 20px 10px"></p>
+    <!-- 汉化包详情：三块卡片（包 / 账本 / 提示），由 renderPackStatus 填充 -->
+    <div class="packgrid" id="pack-cards"></div>
+    <!-- 纯文本版留在隐藏处：出问题时要能原样复制出去 -->
+    <pre class="report" id="pack-text" hidden></pre>
+    <p class="hint" id="pack-tip"></p>
   </section>
 
   <footer class="statusbar">

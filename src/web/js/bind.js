@@ -206,6 +206,21 @@ function bind() {
     const r = await pywebview.api.open_pack();
     if (!r.ok) toast(r.error || "error", "err");
   };
+  $("btn-pack-refresh").onclick = () => refreshPackStatus();
+  $("btn-pack-build").onclick = async () => {
+    const b = $("btn-pack-build");
+    b.disabled = true;
+    b.textContent = T("打包中 ...");
+    try {
+      const r = await pywebview.api.pack_zip();
+      if (!r || !r.ok) { toast((r && r.error) || "error", "err"); return; }
+      toast(T("已打包: %s").replace("%s", r.path), "ok");
+      await refreshPackStatus();
+    } finally {
+      b.disabled = false;
+      b.textContent = T("重新打包");
+    }
+  };
   // ---- 资源模式（.archive 内的 CR2W 本地化）----
   $("btn-l10n").onclick = async () => {
     const p = await pywebview.api.l10n_pick();
