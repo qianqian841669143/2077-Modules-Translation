@@ -15,6 +15,31 @@
 
 local unpack = unpack or table.unpack   -- LuaJIT 是 5.1，只有全局 unpack
 
+-- 取元表，保护 metatable（__metatable 字段）和非 table 返回值。
+local function mtOf(v)
+  local ok, mt = pcall(getmetatable, v)
+  if not ok or mt == nil or type(mt) ~= "table" then
+    return nil
+  end
+  return mt
+end
+
+-- 能不能当函数调用。Lua 函数直接是；sol2 绑出来的东西是 userdata / table，
+-- 靠 __call 元方法调用 —— CET 的 ImGui 成员就是这种。
+-- 2026-11-20 13:40 那次日志「读到 0 个绘制函数」，就是因为这里只认
+-- type(v) == "function"，24 个名字全被跳过，一次赋值都没试过。
+local function isCallable(v)
+  local t = type(v)
+  if t == "function" then
+    return true
+  end
+  if t ~= "userdata" and t ~= "table" then
+    return false
+  end
+  local mt = mtOf(v)
+  return mt ~= nil and mt.__call ~= nil
+end
+
 return function(lookup, log)
   local kind = type(ImGui)
 
@@ -31,6 +56,19 @@ return function(lookup, log)
   -- 同一串每帧都会来问一遍：查过一次就记住。
   -- 存 false 表示「账本里没有」，跟「没查过」（nil）区分开。
   local memo, memoN = {}, 0
+
+  -- 诊断：ImGui 本身、它的成员、元表各是什么。只看「接管 N 个」分不清
+  -- 是成员读不到、不是函数，还是写不回去。
+  if log then
+    local okp, probe = pcall(function() return ImGui.Text end)
+    local mt = mtOf(ImGui)
+    log(string.format(
+      "ImGui 钩子：ImGui=%s，ImGui.Text=%s，metatable=%s，__index=%s，__newindex=%s",
+      kind, okp and type(probe) or "读取报错",
+      mt and "有" or "无",
+      mt and type(mt.__index) or "-",
+      mt and type(mt.__newindex) or "-"))
+  end
 
   local function tr(s)
     if type(s) ~= "string" or s == "" or #s > 200 then
@@ -55,16 +93,18 @@ return function(lookup, log)
 
   local wrapped = 0
   local seen = 0        -- 读到过几个绘制函数：用来区分「读不到」和「写不回去」
+  local writeErr = nil  -- 第一次写回去的报错原文（原来被 pcall 吞掉了）
+  local failed = {}     -- 有、但写不回去的名字
 
   -- 第一个参数就是显示文字的：签名不变，只是把那一格换掉再转给原函数。
   -- 不用 {...} + unpack 转发：ImGui.Text 一帧要调几百次，别每次都建表。
   local function wrapFirst(name)
-    local f = ImGui[name]
-    if type(f) ~= "function" then
+    local okr, f = pcall(function() return ImGui[name] end)
+    if not okr or not isCallable(f) then
       return
     end
     seen = seen + 1
-    local ok = pcall(function()
+    local ok, err = pcall(function()
       ImGui[name] = function(label, ...)
         if type(label) == "string" then
           local zh = tr(label)
@@ -77,16 +117,22 @@ return function(lookup, log)
     end)
     if ok then
       wrapped = wrapped + 1
+    else
+      failed[#failed + 1] = name
+      if writeErr == nil then
+        writeErr = tostring(err)
+      end
     end
   end
 
   -- TextColored 的文字在最后一位（r,g,b,a,text）
   local function wrapTextColored()
-    local f = ImGui.TextColored
-    if type(f) ~= "function" then
+    local okr, f = pcall(function() return ImGui.TextColored end)
+    if not okr or not isCallable(f) then
       return
     end
-    local ok = pcall(function()
+    seen = seen + 1
+    local ok, err = pcall(function()
       ImGui.TextColored = function(r, g, b, a, t)
         if type(t) == "string" then
           local zh = tr(t)
@@ -99,6 +145,11 @@ return function(lookup, log)
     end)
     if ok then
       wrapped = wrapped + 1
+    else
+      failed[#failed + 1] = "TextColored"
+      if writeErr == nil then
+        writeErr = tostring(err)
+      end
     end
   end
 
@@ -117,8 +168,17 @@ return function(lookup, log)
   wrapTextColored()
 
   if log and wrapped == 0 then
-    log(string.format(
-      "ImGui 钩子：读到 %d 个绘制函数，但一个都写不回去（ImGui 是只读的）", seen))
+    if seen == 0 then
+      log(string.format(
+        "ImGui 钩子：%d 个名字里一个都没读到可调用对象（成员类型见上面那行诊断）",
+        #first + 1))
+    else
+      log(string.format("ImGui 钩子：读到 %d 个绘制函数，但一个都写不回去：%s",
+        seen, tostring(writeErr)))
+    end
+  elseif log and #failed > 0 then
+    log(string.format("ImGui 钩子：%d 个里有 %d 个写不回去（%s…）",
+      seen, #failed, table.concat(failed, "/", 1, math.min(#failed, 6))))
   end
   return wrapped
 end
