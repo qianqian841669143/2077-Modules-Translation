@@ -122,12 +122,27 @@ def seed_themes():
     return n
 
 
+def _guard_css(css):
+    """内联前把 "</style" 拆成 "<\\/style"。
+
+    HTML 里的 <style> 是 raw text，解析器只认 "</style" 这一个结束标记，
+    CSS 注释里出现它也照关不误——一旦提前闭合，后面整份 CSS 就变成页面
+    上的纯文本。CSS 里 "\\/" 转义就是普通斜杠，放进注释和字符串都无害。
+    """
+    return css.replace("</style", "<\\/style")
+
+
+def _guard_js(js):
+    """同上，给 </script 用。JS 字符串/正则里的 "\\/" 同样等价于 "/"。"""
+    return js.replace("</script", "<\\/script")
+
+
 def _theme_style_block(name):
     """把主题 CSS 包成一段 <style>，给 build_html / dev server 启动时注入。"""
     css = theme_css(name)
     if not css:
         return ""
-    return '<style id="theme-extra">\n%s\n</style>\n' % css
+    return '<style id="theme-extra">\n%s\n</style>\n' % _guard_css(css)
 
 # 前端按功能拆成了多个文件（2026-11-20），这里按顺序内联成单页。
 # 顺序就是依赖顺序：core.js 里的 state / $ / T 必须先于其余脚本出现。
@@ -147,7 +162,7 @@ def build_html(theme="light", theme_name=""):
     with open(os.path.join(d, "style.css"), "r", encoding="utf-8-sig") as f:
         css = f.read()
     html = html.replace('<link rel="stylesheet" href="style.css">',
-                        "<style>\n%s\n</style>" % css)
+                        "<style>\n%s\n</style>" % _guard_css(css))
     # 深色外套：紧跟在 style.css 之后，靠覆盖变量换皮，不改 style.css 本体
     try:
         with open(os.path.join(d, "cyber.css"), "r", encoding="utf-8-sig") as f:
@@ -155,7 +170,7 @@ def build_html(theme="light", theme_name=""):
     except OSError:
         cyber = "/* missing cyber.css */"
     html = html.replace('<link rel="stylesheet" href="cyber.css">',
-                        "<style>\n%s\n</style>" % cyber)
+                        "<style>\n%s\n</style>" % _guard_css(cyber))
     # 前端按功能拆成 8 个文件，逐个内联。缺文件时塞一句注释而不是崩掉：
     # 至少还能看到界面，日志里也能看出少了哪一块。
     for name in JS_FILES:
@@ -166,11 +181,16 @@ def build_html(theme="light", theme_name=""):
         except OSError:
             js = "/* missing js/%s */" % name
         html = html.replace('<script src="js/%s"></script>' % name,
-                            "<script>\n%s\n</script>" % js)
-    # 主题在启动前就注入，避免先按默认配色画一帧再跳色
+                            "<script>\n%s\n</script>" % _guard_js(js))
+    # 主题在启动前就注入，避免先按默认配色画一帧再跳色。
+    # 插在**最后一个** "</head>" 前：内联进来的 CSS/JS 是原文照搬，注释或
+    # 字符串里可能先出现这个字面量，取第一处会把主题 <style> 插进注释中间
+    # （2026-11-20 就这么把整份 CSS 变成页面纯文本过）。
     extra = _theme_style_block(theme_name)
     if extra:
-        html = html.replace("</head>", extra + "</head>", 1)
+        i = html.rfind("</head>")
+        if i >= 0:
+            html = html[:i] + extra + html[i:]
     return html
 
 
