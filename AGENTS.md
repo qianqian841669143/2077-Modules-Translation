@@ -124,6 +124,35 @@ selftest 本来就因为引用已删除的 `src\web\app.js` 跑不通，下次�
 `applied`（这轮真写回去）的定义一致。前端那行是**本轮涉及**的累计（被续跑
 跳过的模组不会计入），并包那句用后端从 `_mb_results` 算的准数。
 
+## 批量遮罩改成按「条」显示进度（2026-11-20）
+
+用户原话：「批量翻译遮罩的进度看不到啊 … 不是模组数量，是总条数的那个」。
+原来的遮罩只有两样东西在动，都不是他要的：
+
+- `ov-count` / `ov-bar`：**第几个模组 / 共几个**（`onMbItem` 的 `done/total`）
+- 第三行 `ov-now`：当前模组名 + 这个模组内部的 `done / total 条`
+- 全局条数只有 `mbGlobalTxt()`，而且只在某个模组**跑完之后**追加到第三行，
+  分母 `Y = Σ(rows)` 只累计已完成的模组 → 分母自己会长，根本不是进度条
+
+现在：
+
+- `mod_batch.run()` 的 `mb-start` 事件多带一个 `textTotal`
+- `web_app.batch_start()` 用 `_scan_cache_read(staging)` 给每个 item 填
+  `textTotal = 缓存里的 entries`（预扫写进 `userdata\mods_scan.json` 的总条数，
+  含本来就是中文的行）。没扫过的目录是 0，前端整块退回按模组数显示
+- 前端 `renderMaskCount()`（`queue.js`）：`X = 已完成模组的 already+applied +
+  当前模组机翻进度`，`Y = max(预扫条数, 已完成模组的实际 rows)`，`ov-count`
+  显示 `已翻译 X / Y 条（M / N 个模组）`，`ov-bar` 按 X/Y 走
+- `mbGlobalTxt()` 删了（重复的第二个条数）
+
+**那个 `max()` 不能省**：预扫只看明文层，归档里的行它看不见。实测 Smart Vendor
+预扫只给出 2 条，实际有 33 条（31 条在 `.archive` 里）；只用预扫值的话，模组
+刚开始跑进度条就 100%。用已完成模组的实际 `rows` 托底，分母会随进度长大，
+但不会说谎。X 超过 Y 时显示按 Y 封顶。
+
+**这个改动要重新打包 exe 才生效**（exe 里内联了 `queue.js` / `events.js` 和
+`web_app.py` / `mod_batch.py`）。
+
 ## 归档层曾经整批写不进去（2026-11-20，提交 `d9fa20e`）
 
 10:09 那轮 `archive=True`，309 个模组里 **87 个、4,387 条归档文本被机翻完就丢**。

@@ -141,11 +141,14 @@ function onEvt(e) {
       // 批量：进度条和 ov-count 归队列管（那两个说的是「第几个模组」），这里
       // 只补遮罩第三行的当前模组条数。以前两边都写 ov-count / ov-bar，遮罩上
       // 的数字每几百毫秒就在「第几个模组」和「第几条文本」之间来回跳。
+      // 2026-11-20：遮罩改成按「总条数」显示后，这里顺手把当前模组的机翻
+      // 进度报给队列（renderMaskCount 用它把总数往前推）。
+      state.mbCur = Number(e.done || 0);
+      if (typeof renderMaskCount === "function") renderMaskCount();
       const now = $("ov-now");
       if (now) {
         const nm = now.dataset.name || "";
-        now.textContent = (nm ? nm + " · " : "") + doneTxt + " / " + totTxt + " " + T("条")
-          + (typeof mbGlobalTxt === "function" ? mbGlobalTxt() : "");
+        now.textContent = (nm ? nm + " · " : "") + doneTxt + " / " + totTxt + " " + T("条");
       }
     } else {
       $("ov-bar").style.width = pct + "%";

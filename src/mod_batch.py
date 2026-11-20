@@ -593,7 +593,12 @@ def run(ctx, cands):
 
     results = []
     total = len(cands)
-    ctx.on_event({"type": "mb-start", "total": total, "outRoot": ctx.out_root})
+    # 遮罩上「已翻译 X / Y 条」的分母：Y 取预扫描缓存里的 entries
+    # （每个目录的总条数，含本来就是中文的）。缓存里没有的目录是 0，
+    # 前端拿不到 Y 就退回按模组数显示，不会出现 0 / 0 的死数字。
+    text_total = sum(int(c.get("textTotal") or 0) for c in cands)
+    ctx.on_event({"type": "mb-start", "total": total, "outRoot": ctx.out_root,
+                  "textTotal": text_total})
     pool = ThreadPoolExecutor(max_workers=1)
 
     def submit(i):

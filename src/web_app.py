@@ -2733,6 +2733,14 @@ class Api(object):
                     "message": self._tr("这 %d 个 mod 上次已经跑完了。要重跑请先「清空输出」。")
                                % len(cached)}
 
+        # 遮罩要按「条」显示进度，分母是本轮的总文本量。预扫描缓存里有每个
+        # 目录的 entries（总条数，含已中文）；没扫过的目录就是 0，前端会自动
+        # 退回按模组数显示。这里只读缓存，不为一个进度数字去解包。
+        scan = self._scan_cache_read(staging)
+        for it in items:
+            sc = scan.get(str(it.get("name") or "")) or {}
+            it["textTotal"] = int(sc.get("entries") or 0)
+
         self._mb_running = True
         self._mb_cancel.clear()
         self._bus.clear()

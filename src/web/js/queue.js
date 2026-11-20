@@ -353,24 +353,50 @@ function onMbScanned(e) {
     .replace("%d", e.rows || 0);
 }
 
-/* 遮罩第三行尾部那截「已翻译 X / Y 条」。
- * 数字来自每个模组的 mb-item 事件：rows 是这个模组的全部文本行，already 是
- * 本来就已是中文的行，applied 是这一轮真写回去的行——后两者相加就是「这份
- * 产物里已经是中文的条数」。所以这是「本轮涉及到的文本」的统计，不是整台
- * 机器的全量（被续跑跳过的模组不会计入总文本数）。 */
-function mbGlobalTxt() {
-  const g = state.mbRowsStat;
-  if (!g || !g.total) return "";
-  return " ｜ " + T("已翻译") + " " + Number(g.hit).toLocaleString()
-    + " / " + Number(g.total).toLocaleString() + " " + T("条");
+/* 遮罩上的进度，优先按「条」算。
+ *
+ * Y = 本轮总条数（后端 mb-start 的 textTotal，来自预扫缓存的 entries）；
+ * X = 已完成模组的「本来中文 + 这轮写回」之和，加上当前模组正在机翻的条数。
+ * Y 拿不到（没预扫就直接跑）就退回按模组数显示 —— 一直停在 0 / 0 的死数字
+ * 比没有进度更糟。
+ */
+function renderMaskCount() {
+  const cnt = $("ov-count");
+  if (!cnt) return;
+  const done = Number(state.mbTextDone || 0) + Number(state.mbCur || 0);
+  // 分母：预扫的明文层总量，和已完成模组实际行数的较大者。
+  // 归档里的行预扫看不到，若只用预扫值，带归档的模组一跑就冲到 100%；
+  // 用实际行数托底，分母会随进度长大但不会说谎。没预扫过就整块退回模组数。
+  const est = Number(state.mbTextTotal || 0);
+  const real = Number((state.mbRowsStat || {}).total || 0);
+  const total = est > 0 ? Math.max(est, real) : 0;
+  const md = Number(state.mbModDone || 0);
+  const mt = Number(state.mbTotal || 0);
+  const mods = T("%d / %d 个模组").replace("%d", md).replace("%d", mt);
+  if (total > 0) {
+    const shown = Math.min(done, total);
+    $("ov-bar").style.width = Math.min(100, Math.round((shown / total) * 100)) + "%";
+    cnt.textContent = T("已翻译 %d / %d 条")
+      .replace("%d", shown.toLocaleString())
+      .replace("%d", total.toLocaleString()) + "（" + mods + "）";
+    return;
+  }
+  $("ov-bar").style.width = mt ? Math.min(100, Math.round((md / mt) * 100)) + "%" : "0%";
+  cnt.textContent = T("已翻译 %d 条").replace("%d", done.toLocaleString())
+    + "（" + mods + "）";
 }
 
 function onMbStart(e) {
   state.mbRunning = true;
   state.mbTotal = e.total || 0;
   state.mbIndex = 0;
-  // 本轮「已翻译 / 总文本数」的累计器，见 mbGlobalTxt()
+  // 本轮「已翻译 / 总文本数」的累计器，供 renderMaskCount 用
   state.mbRowsStat = { total: 0, hit: 0 };
+  // 遮罩进度按「条」走：总量来自预扫缓存，拿不到就退回按模组数（见 renderMaskCount）
+  state.mbTextTotal = Number(e.textTotal || 0);
+  state.mbTextDone = 0;
+  state.mbCur = 0;
+  state.mbModDone = 0;
   $("btn-q-cancel").style.display = "";
   $("q-progress").classList.add("on");
   $("q-bar").style.width = "0%";
@@ -380,7 +406,7 @@ function onMbStart(e) {
   }
   $("q-summary").textContent = msg;
   enterBatchMask();
-  $("ov-count").textContent = "0 / " + Number(state.mbTotal || 0).toLocaleString() + " " + T("个模组");
+  renderMaskCount();
   syncQueueStart();
   try { if (typeof syncModsBar === "function") syncModsBar(); } catch (_) {}
 }
@@ -391,12 +417,11 @@ function onMbItem(e) {
   const total = e.total || 1;
   if (e.phase === "start") {
     state.mbIndex = e.index || 0;
+    state.mbCur = 0;          // 上一个模组的机翻进度已经结算进 mbTextDone
     state.mbDone[key] = { state: "", text: T("处理中 ...") };
     renderQueue();
     $("q-bar").style.width = Math.round(((e.index || 0) / total) * 100) + "%";
-    $("ov-bar").style.width = Math.round(((e.index || 0) / total) * 100) + "%";
-    $("ov-count").textContent = (Number(e.index || 0) + 1).toLocaleString()
-      + " / " + Number(e.total || 0).toLocaleString() + " " + T("个模组");
+    renderMaskCount();
     // 遮罩第三行：当前模组名。名字存在 data-name 里，条数由 events.js 的
     // progress 事件拼在后面——那边拿不到模组名。
     const now = $("ov-now");
@@ -443,16 +468,19 @@ function onMbItem(e) {
   }
   renderQueue();
   $("q-bar").style.width = Math.round(((e.done || 0) / total) * 100) + "%";
-  $("ov-bar").style.width = Math.round(((e.done || 0) / total) * 100) + "%";
-  $("ov-count").textContent = Number(e.done || 0).toLocaleString()
-    + " / " + Number(e.total || 0).toLocaleString() + " " + T("个模组");
-  // 这个模组做完了：第三行只剩名字 + 本轮累计，等下一个模组的条数过来拼
+  // 这个模组结算：接下来的条数从「已完成」走，机翻进度归零
+  state.mbModDone = Number(e.done || 0);
+  state.mbCur = 0;
+  state.mbTextDone = Number((gstat && gstat.hit) || 0);
+  renderMaskCount();
+  // 这个模组做完了：第三行只剩名字，条数看上面的总进度
   const now = $("ov-now");
-  if (now && now.dataset.name) now.textContent = now.dataset.name + mbGlobalTxt();
+  if (now && now.dataset.name) now.textContent = now.dataset.name;
 }
 
 function onMbDone(e) {
   state.mbRunning = false;
+  state.mbCur = 0;
   $("btn-q-cancel").style.display = "none";
   $("q-progress").classList.remove("on");
   $("q-bar").style.width = "0%";
