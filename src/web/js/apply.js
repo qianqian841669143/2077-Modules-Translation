@@ -200,9 +200,18 @@ function onApplied(r) {
       if (r.pack && r.pack.entries) parts.push(T("覆盖包 %d 个文件").replace("%d", r.pack.files || 0));
       if (r.archive && r.archive.archive) parts.push(T("归档包 1 个"));
       const detail = parts.length ? "（" + parts.join(" · ") + "）" : "";
-      toast(T("%d 条译文已应用%s。\n设置层由 zzz_CP2077_Localization 运行时替换；其余已并入补丁包，重新安装该包即可覆盖。")
-        .replace("%d", r.ok).replace("%s", detail), "ok");
-      setStatus(T("应用完成: %d 条%s").replace("%d", r.ok).replace("%s", detail));
+      // 单模组现在出独立 zip（<模组名>_<目标语言>.zip），不再并进总包
+      if (r.standalone && r.standalone.zip) {
+        const zn = baseName(r.standalone.zip);
+        toast(T("%d 条译文已应用%s。\n已生成 %s，装这一个包就行。")
+          .replace("%d", r.ok).replace("%s", detail).replace("%s", zn), "ok");
+        setStatus(T("应用完成: %d 条 · 已生成 %s")
+          .replace("%d", r.ok).replace("%s", zn));
+      } else {
+        toast(T("%d 条译文已应用%s。\n设置层由 zzz_CP2077_Localization 运行时替换；其余已并入补丁包，重新安装该包即可覆盖。")
+          .replace("%d", r.ok).replace("%s", detail), "ok");
+        setStatus(T("应用完成: %d 条%s").replace("%d", r.ok).replace("%s", detail));
+      }
     }
   }
 }
@@ -252,7 +261,9 @@ function onAppliedResource(r) {
     return;
   }
 
-  if (r.archive) {
+  if (r.standalone && r.standalone.zip) {
+    setStatus(T("已生成 %s").replace("%s", r.standalone.zip));
+  } else if (r.archive) {
     setStatus(T("已生成 %s / %s → %s")
       .replace("%s", baseName(r.archive))
       .replace("%s", baseName(r.xl || ""))
@@ -274,8 +285,12 @@ function onAppliedResource(r) {
       msg += " · " + T("已记入翻译记忆 %d 条").replace("%d", r.memorySaved);
     }
     toast(msg, "ok");
-    // 产物就落在 mod 目录里：Vortex 管的模组要重新 Deploy 才能进游戏。
-    if (r.outdir) {
+    // 单模组出的是 zip：装这一个包，不用再去 staging 里翻文件
+    if (r.standalone && r.standalone.zip) {
+      setStatus(T("已生成 %s").replace("%s", r.standalone.zip)
+        + " · " + T("Vortex 装这一个包就行。"));
+    } else if (r.outdir) {
+      // 产物就落在 mod 目录里：Vortex 管的模组要重新 Deploy 才能进游戏。
       setStatus(T("已输出到 %s").replace("%s", r.outdir)
         + " · " + T("Vortex 用户请重新 Deploy 后启动游戏。"));
     }

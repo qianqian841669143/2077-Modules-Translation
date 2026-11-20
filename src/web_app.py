@@ -1584,7 +1584,18 @@ class Api(object):
         以前固定落 userdata\\output，用户还得自己拖回 mod 目录；可产物本来就是
         「这个 mod 的中文版」，跟原归档放一起才算落在它该在的地方。只有目录
         不可写（只读盘、权限不足）才退回 output，不让整个应用失败。
+
+        例外：单模组「应用」现在出独立 zip（`<模组名>_<目标语言>.zip`），
+        产物只是 zip 的原料，不该再往 staging 里丢。那条路会先设
+        `_res_out_override` 指向临时目录，这里优先用它。
         """
+        ov = str(getattr(self, "_res_out_override", "") or "")
+        if ov:
+            try:
+                os.makedirs(ov, exist_ok=True)
+                return ov
+            except Exception:
+                self._res_out_override = ""
         sess = sess if sess is not None else self.l10n_session
         target = getattr(sess, "target", None) if sess is not None else None
         arch = getattr(target, "archive_path", None) if target is not None else None
@@ -3782,8 +3793,131 @@ class Api(object):
         return {"files": len(files), "zip": zp,
                 "replaced": r.get("replaced"), "kept": r.get("kept")}
 
+    # ------------------------------------------------- 单模组：独立 zip
+    @staticmethod
+    def _all_lua_subset(text, folder):
+        """从 all.lua 里只挑出指定模组那一段。
+
+        单模组包要是带全量 all.lua，装两个单模组包会互相覆盖（后装的把先装的
+        整份挤掉）。all.lua 的格式由 mod_ledger._rebuild_all 生成，每个模组一段
+        `  ['<folder>'] = { … },`，按行切就够。找不到就返回空串，调用方跳过
+        all.lua（宁可不带，也不带错）。
+        """
+        def un(s):
+            return s.replace("\\'", "'").replace("\\\\", "\\")
+
+        head, blocks, cur, buf = [], {}, None, []
+        for ln in text.splitlines():
+            m = re.match(r"^  \['(.*)'\] = \{$", ln)
+            if m:
+                if cur is not None:
+                    blocks[cur] = buf
+                cur, buf = m.group(1), [ln]
+                continue
+            if cur is not None:
+                buf.append(ln)
+                if ln == "  },":
+                    blocks[cur], cur, buf = buf, None, []
+                continue
+            head.append(ln)
+        if cur is not None:
+            blocks[cur] = buf
+        want = un(folder)
+        pick = [v for k, v in blocks.items() if un(k) == want]
+        if not pick:
+            return ""
+        head = [h for h in head if h.strip() not in ("return {", "")]
+        head.append("-- 单模组包：只含 %s 这一份账本。" % want)
+        head.append("return {")
+        return "\n".join(head + pick[0] + ["}", ""])
+
+    def _standalone_zip_path(self, mod_root=""):
+        """单模组「应用」的产物：``<输出目录>\\<模组名>_<目标语言>.zip``。
+
+        输出目录和汉化包总包同一个（设置里的 zh_pack_dir，留空则从 staging 推导）。
+        文件名用的是「部署到游戏目录时的文件夹名」——不是 staging 里那串带版本号
+        和 hash 的目录名（`ApexGrapple 1.0.7 36443 …LACBAIvh4`）。
+        """
+        import mod_ledger
+        d = os.path.dirname(self._pack_zip_path())
+        root = mod_root or (self.root or "")
+        folder = mod_ledger.folder_name(root) or mod_ledger.safe_name(
+            os.path.basename(root.rstrip("\\/")) or "mod")
+        lang = mod_ledger.safe_name(
+            str(self.settings.get("target_lang") or "简体中文").strip())
+        return os.path.join(d, "%s_%s.zip" % (folder, lang))
+
+    def _build_standalone_zip(self, mod_root, extra=None):
+        """把这一轮单模组的产物打成一个独立 zip。只含这一个模组。
+
+        extra: 额外要收的文件 {zip内路径: 磁盘路径}，归档产物走这个口。
+
+        内容：
+          覆盖文件（和原模组同路径同名）
+          归档产物 archive/pc/mod/<mod>_zh-cn.archive + .xl
+          zzz_CP2077_Localization 的运行时（init.lua / README.txt / names.lua）
+          这个模组的 ledger/mods/<folder>.lua
+          只含这个模组的一份 all.lua
+        """
+        import mod_ledger
+        import zipfile
+
+        files = {}
+        pend = getattr(self, "_pack_pending", None) or {}
+        for k, v in (pend.get("files") or {}).items():
+            if v and os.path.isfile(v):
+                files[k] = v
+        for k, v in (extra or {}).items():
+            if v and os.path.isfile(v):
+                files[k] = v
+
+        root = mod_root or (self.root or "")
+        folder = mod_ledger.folder_name(root) or mod_ledger.safe_name(
+            os.path.basename(root.rstrip("\\/")) or "mod")
+
+        keep = {self._PACK_MOD_DIR + n for n in ("init.lua", "README.txt", "names.lua")}
+        keep.add(self._LEDGER_ZIP_REL + "mods/" + folder + ".lua")
+        for k, v in self._patch_map().items():
+            if k in keep:
+                files[k] = v
+
+        # all.lua 必须带（运行时只读这一个文件），但只留这一个模组
+        ldir = self._ledger_dir()
+        allp = os.path.join(ldir, "all.lua") if ldir else ""
+        if allp and os.path.isfile(allp):
+            try:
+                with open(allp, "r", encoding="utf-8", errors="ignore") as f:
+                    sub = self._all_lua_subset(f.read(), folder)
+                if sub:
+                    td = tempfile.mkdtemp(prefix="zhsub-")
+                    self._standalone_tmp.append(td)
+                    tp = os.path.join(td, "all.lua")
+                    with open(tp, "w", encoding="utf-8", newline="\n") as f:
+                        f.write(sub)
+                    files[self._LEDGER_ZIP_REL + "all.lua"] = tp
+                else:
+                    self._batch_log("all.lua 里没找到 %s 这一段，单模组包不含账本汇总"
+                                    % folder)
+            except Exception as ex:      # noqa: BLE001 - 少一份 all.lua 不该毁掉产物
+                self._batch_log("生成 all.lua 子集失败：%s" % ex)
+
+        if not files:
+            return {"ok": False, "error": self._tr("没有可打包的内容")}
+
+        zp = self._standalone_zip_path(root)
+        os.makedirs(os.path.dirname(zp) or ".", exist_ok=True)
+        tmpz = zp + ".new"
+        with zipfile.ZipFile(tmpz, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, path in files.items():
+                z.write(path, name)
+        os.replace(tmpz, zp)
+        self._batch_log("单模组包：%d 个文件 → %s"
+                        % (len(files), os.path.basename(zp)))
+        return {"ok": True, "zip": zp, "files": len(files),
+                "name": os.path.basename(zp)}
+
     # ------------------------------------------------------------ 分流
-    def _apply_all(self, items):
+    def _apply_all(self, items, standalone=True):
         """按通道分流：设置层写账本，其余写成覆盖文件进汉化包。
 
         原模组**一行不动**。含设置注册的文件整份留在原地（见 mod_pack.route），
@@ -3799,6 +3933,18 @@ class Api(object):
         out = {"ok": 0, "fail": 0, "errors": [], "ledger": None, "pack": None,
                "archive": None}
 
+        # 单模组：产物全部先落临时目录，最后打成一个独立 zip；
+        # 不写 staging，也不碰 CP2077 Localization Pack.zip（那是批量的总包）。
+        self._standalone_tmp = []
+        self._res_out_override = ""
+        self._pack_pending = None
+        if standalone:
+            td = tempfile.mkdtemp(prefix="zhsingle-")
+            self._standalone_tmp.append(td)
+            self._res_out_override = td
+            self._pack_pending = {"files": {}, "temp": [], "ok": 0, "fail": 0,
+                                  "errors": []}
+
         if cls["ledger"]:
             try:
                 lr = self._ledger_apply(cls["ledger"])
@@ -3809,7 +3955,7 @@ class Api(object):
 
         if cls["pack"]:
             try:
-                pr = self._pack_apply(root, cls["pack"])
+                pr = self._pack_apply(root, cls["pack"], collect=bool(standalone))
                 out["ok"] += int(pr.get("ok") or 0)
                 out["fail"] += int(pr.get("fail") or 0)
                 out["errors"].extend(pr.get("errors") or [])
@@ -3823,14 +3969,17 @@ class Api(object):
         # 产物随后并进汉化包 zip 的 archive/pc/mod/ 下。
         if cls.get("archive"):
             try:
-                ar = self._do_apply(cls["archive"])
+                ar = self._do_apply(cls["archive"], make_undo=not standalone,
+                                    keep_backup=not standalone)
                 out["ok"] += int(ar.get("ok") or 0)
                 out["fail"] += int(ar.get("fail") or 0)
                 out["errors"].extend(ar.get("errors") or [])
                 out["archive"] = {"archive": ar.get("archive", ""),
                                   "xl": ar.get("xl", ""),
                                   "outdir": ar.get("outdir", "")}
-                self._merge_archive_into_zip(ar.get("archive"), ar.get("xl"))
+                # 单模组：归档产物只是 zip 的原料，别并进总包
+                if not standalone:
+                    self._merge_archive_into_zip(ar.get("archive"), ar.get("xl"))
             except Exception as ex:
                 out["errors"].append("归档组包失败：%s" % ex)
 
@@ -3841,11 +3990,40 @@ class Api(object):
         # 不管这轮走了哪条通道，zip 收尾时都必须是完整的补丁包
         # （运行时 init.lua + 账本 + 说明）。重装 zip 会用它覆盖 staging，
         # 缺的不只是译文，还有游戏侧替换设置文本的那个 mod。
-        if cls["ledger"] or cls["pack"] or cls.get("archive"):
+        if standalone:
+            # 单模组：打成一个只含这个模组的独立 zip，总包一个字不动
+            try:
+                extra = {}
+                ar = out.get("archive") or {}
+                for k in ("archive", "xl"):
+                    p = ar.get(k) or ""
+                    if p:
+                        extra["archive/pc/mod/" + os.path.basename(p)] = p
+                sp = self._build_standalone_zip(root, extra)
+                if sp.get("ok"):
+                    out["standalone"] = sp
+                else:
+                    out["errors"].append(sp.get("error") or "打包失败")
+            except Exception as ex:      # noqa: BLE001 - 打包失败不该吞掉已写的账本
+                out["errors"].append("单模组打包失败：%s" % ex)
+        elif cls["ledger"] or cls["pack"] or cls.get("archive"):
             try:
                 out["patchSync"] = self._sync_ledger_to_zip()
             except Exception as ex:      # noqa: BLE001 - 同步失败不毁已写内容
                 out["errors"].append("补丁包同步失败：%s" % ex)
+
+        # 临时目录用完就删（里面的文件已经写进 zip 了）
+        import mod_pack as _mp
+        for d in getattr(self, "_standalone_tmp", []):
+            _mp.cleanup(d)
+        # collect 模式下 _pack_apply 把文件留在 zhpack-* 里等 _flush_pack 收尾，
+        # 单模组不走那条路，这里自己收（zip 已经写完了）
+        pend = getattr(self, "_pack_pending", None) or {}
+        for t in (pend.get("temp") or []):
+            _mp.cleanup(t)
+        self._standalone_tmp = []
+        self._res_out_override = ""
+        self._pack_pending = None
         return out
 
     def _pack_pending_state(self):
