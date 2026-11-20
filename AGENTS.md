@@ -360,31 +360,28 @@ ImGui 的 `##` / `###` 是「显示文字 / 控件 id」分隔符，传给 ImGui
 所以它的勾选项能翻；`Bounty Contracts` 也传裸字面量，界面还全英文纯粹因为
 **它的账本被同名文件夹覆盖了**（见「待办：产物名字会撞车」），跟钩子无关。
 
-## 当前基线（2026-11-20 13:58）
+## 当前基线（2026-11-20 21:26）
 
-- 最新提交：`fc7a67f fix(runtime): ImGui 标签带 ##控件id，整串查表查不到`
-  （前几个：`29bcc43` ImGui 类型判断、`ccc0430` 账本合并写、
-  `7516fc0` docs）
-- `dist\2077ModTranslator.exe`：14,106,546 字节，2026-11-20 13:58:56，
-  SHA256 前 32 位 `DED94C0D66022BB825D69243F71FFABD`
-  备份：`bak-20261120-1355`（13:48 那版 14,106,162 B，`BF17FBBF…`）、
-  `bak-20261120-1348`（13:37 版 14,105,087 B，`A9054F19…`）、
-  `bak-20261120-1350`（12:46 版 14,103,676 B，`4D81AB05…`）
-- 从新 exe 里读回并**逐函数比对过字节码**（`co_code` / `co_names` /
-  `co_varnames` / 常量）：`mod_ledger`（28 个函数）、`localization.pipeline`
-  （55 个）与 `src\` 当前内容**零差异**
-- 从 exe 里读回：`pack\fix\imgui_hook.lua` 8,288 B sha1[:12] `4e718df43038`
-  （`isCallable` / `mtOf` / `ImGui=%s` 诊断 / `s:find("##", 1, true)` /
-  `base .. "."` / 「切掉 ## 之后的部分」）、`init.lua` 13,197 B
-  `4492ce92600e`、`README.txt` 2,174 B `1efbaf8e6380`，与 `src\pack\fix\`
-  同名文件 sha1 一致
-- 从新 exe 里读回：`web\js\queue.js` 26,294 B（`renderMaskCount` ×6、
-  `Math.max(est, real)`、`已翻译 %d / %d 条`）、`web\js\events.js` 12,666 B
-  （`renderMaskCount` ×3）、`mod_batch` 有 `textTotal`、入口有 `textTotal`；
-  `mbGlobalTxt` 两处都是 0
-- 从 exe 里读回：`init.lua`（`cat.settings` / `cat.items` 回退、
-  `add("ledger/all.lua")`、`relPath`）
-- 11:54 那版的两条修复都在：`.reds` 只投本地化包、账本走裸相对路径
+- 最新提交：`e9eb1b1 docs: 记下模组名三种注册写法、单模组并进总包、多行 tooltip 三个坑`
+  代码提交：`5c81fa8` 模组名三种写法、`338e8f2` 单模组并进总包、`d892863`
+  多行 tooltip（再往前：`fc7a67f` / `29bcc43` / `ccc0430`）
+- `dist\2077ModTranslator.exe`：14,111,670 字节，2026-11-20 21:26:21，
+  SHA256 前 32 位 `47F694F98C9425C7B36FDE08A565EE16`
+  备份：`bak-20261120-2126`（13:58 那版 14,106,546 B，`DED94C0D…`）、
+  `bak-20261120-1355`（13:48 版 14,106,162 B，`BF17FBBF…`）、`bak-20261120-1348`、
+  `bak-20261120-1350`
+- 从新 exe 里读回并**逐函数比对过字节码**：`web_app`（237 个函数）、
+  `mod_batch`（31）、`mod_ledger`（35）与 `src\` **零差异**。
+  比对脚本（`_tmp\readback_exe.py`）有两个坑：`co_consts` 里的嵌套 code 对象
+  必须剔除（repr 带内存地址），`frozenset` 常量必须排序（字符串哈希每进程不同），
+  否则永远报「有差异」
+- 从 exe 里读回的数据文件与 `src\` sha1 一致：`web\js\bind.js` 27,683 B
+  `861d058e002c`（`pywebview.api.sync_pack()`）、`queue.js` 26,294 B、
+  `pack\fix\init.lua` 13,459 B `fa543bebedfe`（`lookupName(schema.name)`）、
+  `imgui_hook.lua` 9,000 B `34bbcf293e1b`（真换行兜底 / 1600 上限）、
+  `README.txt` 2,174 B
+- 关键符号都在：`web_app.refresh_names` / `sync_pack`、`mod_ledger.scan_name_pairs`
+  / `translate_names` / `_translate_batch` / `ensure_names`
 - **MCM 文本链**：MCM UI 读 `ModConfigurationMenuAPI`，API 的 provider 来自三个
   bridge（`native_settings` / `ms` / `rcf`），**设置项一律放在
   `categories[i].settings`**（不是 `items`），字段是 `label` / `description`。
@@ -393,7 +390,9 @@ ImGui 的 `##` / `###` 是「显示文字 / 控件 id」分隔符，传给 ImGui
   1,559 条（61.4%）能在账本里查到原文；没命中的多是数字与含引号嵌套的串
 - 装上新包后：`sync` 一次 → Vortex 重装 zip → Deploy → 重启游戏；
   日志应见 `账本 ledger/all.lua：N 条` + `ImGui 钩子：ImGui=…` 诊断 +
-  `ImGui 钩子：接管 M 个绘制函数`
+  `ImGui 钩子：接管 M 个绘制函数` + `names.lua：N 条模组名`
+- 新包第一次跑：点「重新打包」（或「同步账本」）会先补一轮模组名
+  （`names.lua` 55 → 90），再同步 zip；批量开跑前也会先补一次
 
 ## 待办：产物名字会撞车（已确认造成真实丢失）
 
