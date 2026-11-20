@@ -429,8 +429,6 @@ function renderMods() {
     // 没账本（或账本里一条都没有）= 还没提取过：条数是「不知道」，不是 0。
     // 「无文本」是提取过、确实没有可翻的字符串，那是已知结果，不打这个标。
     const unknown = st !== "empty" && st !== "orphan" && st !== "done" && !e;
-    // 已汉化的行 filled == entries，再写一遍 N/N 是废话，只留总数 + 满格条
-    const showFilled = st !== "done" && e > 0;
     const pct = e ? Math.min(100, Math.round((f * 100) / e)) : 0;
     // 只有「有账本」的模组才知道具体文件；没提取过的给一句提示
     const files = Array.isArray(m.files) ? m.files : [];
@@ -447,11 +445,13 @@ function renderMods() {
         (unknown ? `<span class="tag">${esc(T("未分析"))}</span>` : "") +
         `</span>
         <span class="gs"><span class="pill ${s.cls}">${esc(T(s.txt))}</span></span>
-        <span class="mn${todo ? " todo" : ""}">${showFilled
-          ? f.toLocaleString() : (unknown ? esc(T("未知")) : "")}</span>
         <span class="mt">` +
         (e ? `<span class="minibar"><i style="width:${pct}%"></i></span>` : "") +
-        `<b>${unknown ? "?" : (e ? e.toLocaleString() : "—")}</b>` +
+        (e
+          ? `<b class="fnum${todo ? " todo" : ""}">${f.toLocaleString()}</b>` +
+            `<span class="sep">/</span>` +
+            `<b class="total">${e.toLocaleString()}</b>`
+          : `<b class="total">${unknown ? "?" : "\u2014"}</b>`) +
         `</span>
       </div>`);
     if (open) {

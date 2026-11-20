@@ -473,7 +473,7 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
 
 /* 列头：模组 / 状态 / 已填 / 总条数（跟着列表一起滚，粘顶） */
 .mhead { position: sticky; top: 0; z-index: 2; display: grid;
-         grid-template-columns: 26px minmax(0, 1fr) 86px 66px 152px;
+         grid-template-columns: 26px minmax(0, 1fr) 86px 212px;
          gap: 12px; align-items: center; height: 30px;
          padding-right: 8px;   /* 别让「总条数」的千位数字贴着滚动条 */
          font-size: 11.5px; letter-spacing: .04em; color: var(--dim2);
@@ -483,10 +483,10 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
 .mhead > span:nth-child(3) { text-align: center; }
 .mhead > span:nth-child(n+4) { text-align: right; }
 
-/* 一个模组一行：勾选框 / 名字 / 状态 / 已填 / 总条数（带小进度条） */
+/* 一个模组一行：勾选框 / 名字 / 状态 / （进度条 + 已填 / 总数） */
 .mgrp { border-bottom: 1px solid var(--border); }
 .grp.mod { display: grid;
-           grid-template-columns: 26px minmax(0, 1fr) 86px 66px 152px;
+           grid-template-columns: 26px minmax(0, 1fr) 86px 212px;
            gap: 12px; height: 40px; padding: 0 8px 0 0;   /* 右内距同 .mhead */
            border-bottom: 0; background: transparent; }
 .mgrp:nth-child(odd) > .grp.mod { background: var(--row-alt); }
@@ -505,15 +505,19 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
                     border: 1px solid var(--line2); display: inline-flex;
                     align-items: center; }
 .grp.mod .gs { display: flex; justify-content: center; }
-.grp.mod .mn { text-align: right; font-size: 12.5px; color: var(--muted);
-               font-variant-numeric: tabular-nums; }
-.grp.mod .mn.todo { color: var(--amber); }
+/* 进度条 +「已填 / 总数」并在最后一格。以前分成两格（已填 66px / 总条数 152px），
+   条挂在总条数那格的左边，两个数字之间横跨 12px 间距；而「已汉化」的行原来
+   故意不输出已填数字（怕重复），于是「已填」列整列是空的，条看起来就跑到了
+   别人家的列底下。合成一格之后，一行读下来就是「▓▓▓ 460 / 460」。 */
 .grp.mod .mt { display: flex; align-items: center; justify-content: flex-end;
-               gap: 9px; }
-.grp.mod .mt b { min-width: 52px; text-align: right;
-                 font-size: 12.5px; font-weight: 500; color: var(--muted);
-                 font-variant-numeric: tabular-nums; }
-.grp.mod .mt .minibar { width: 62px; flex: none; }
+               gap: 7px; }
+.grp.mod .mt .minibar { width: 96px; flex: none; }
+.grp.mod .mt b { text-align: right; font-size: 12.5px; font-weight: 500;
+                 color: var(--muted); font-variant-numeric: tabular-nums; }
+.grp.mod .mt b.fnum { min-width: 34px; }
+.grp.mod .mt b.fnum.todo { color: var(--amber); }   /* 还有没翻完的 */
+.grp.mod .mt b.total { min-width: 42px; }
+.grp.mod .mt .sep { color: var(--dim2); font-size: 12px; margin: 0 -1px; }
 .mfiles { background: var(--panel2); padding: 5px 0 9px 58px; }
 .mfile { display: flex; align-items: center; gap: 12px; height: 26px;
          font-size: 12.5px; }
