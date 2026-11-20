@@ -47,6 +47,58 @@ _NAME_JUNK = re.compile(r"(installed!|^nomod$|^nil$|^unknown$)", re.I)
 
 _SCAN_SKIP = {".git", "__pycache__", "node_modules", ".svn"}
 
+# ms 的 ModSettings.mod 有两种写法：作者直接写可读名（"Apex Grapple"），
+# 或者写一个 id（"CNC-nttn-Framework-Title"）。id 逐词直译出来是
+# 「CNC-nttn 框架标题」这种谁也看不懂的东西——这种值要换回它所属模组的
+# 正式名（staging 目录名剥掉版本尾巴，得到 "Cosmopolitan Framework"）。
+_ID_SHAPE = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+$")
+
+# Vortex staging 目录名的尾巴，从最具体剥到最兜底：
+#   <名> 36235 1.3.2 2026-11-02T21-10Z n1B61wfRS
+#   <名> 2026-11-02T21-10Z n1B61wfRS
+#   <名> 1.4-19632-1-4-1776700679
+_MOD_TAIL_RULES = (
+    re.compile(r"^(.*?)\s+\d+\s+\S+\s+\d{4}-\d{2}-\d{2}T[0-9T:\-]+Z\s+[A-Za-z0-9]+$"),
+    re.compile(r"^(.*?)\s+\d{4}-\d{2}-\d{2}T[0-9T:\-]+Z\s+[A-Za-z0-9]+$"),
+    re.compile(r"^(.*?)\s+\d+(?:\.\d+)*-\d+(?:-\d+)+$"),
+)
+_TAIL_VER = re.compile(r"^(.*?)\s+[Vv]?\d+(?:\.\d+)+$")
+# "Always_Best_Quality For 2.5" 里的 2.5 是名字的一部分（适用游戏 2.5），别剥
+_TAIL_STOP = re.compile(r"(?:^|\s)(?:for|with|and|of|to|in|by|vs|@)$", re.I)
+
+# staging 根上直接就是这些目录时，说明传进来的是单个模组目录而不是 staging
+_GAME_DIRS = {"r6", "bin", "archive", "red4ext", "mods", "v2077",
+              "cyberpunk 2077", "tools"}
+
+
+def mod_title(dirname):
+    """把 Vortex staging 目录名剥成作者写的模组名；剥不出来就返回原名。
+
+    目录名是 `Cosmopolitan Framework 35340 1.0 2026-10-31T04-06Z NEnvE3Wgg`
+    这种「名字 + 版本 + 时间戳 + 随机 ID」，名字是要拿去翻的那部分。
+    """
+    name = re.sub(r"\s+", " ", str(dirname or "")).strip()
+    if not name:
+        return ""
+    for rx in _MOD_TAIL_RULES:
+        m = rx.match(name)
+        if m and m.group(1).strip():
+            name = m.group(1).strip()
+            break
+    m = _TAIL_VER.match(name)
+    if m and m.group(1).strip() and not _TAIL_STOP.search(m.group(1).strip()):
+        name = m.group(1).strip()
+    return name
+
+
+def _is_mod_root(root):
+    """root 本身是一个模组目录（下面直接是 r6/bin/…），还是整个 staging？"""
+    try:
+        names = {n.lower() for n in os.listdir(root)}
+    except OSError:
+        return False
+    return bool(names & _GAME_DIRS)
+
 # 从 mod 内部路径推断「部署到游戏目录时的文件夹名」。按优先级匹配：
 #   ① r6\scripts\X\…            redscript 模组
 #   ② bin\…\cyber_engine_tweaks\mods\X\…   CET 模组
@@ -170,6 +222,10 @@ def scan_name_pairs(root):
         rcf     DVRCF.Register(game, "MonowireE3", "Monowire…") → 键 "MonowireE3" + 英文名
         native  nativeSettings.addTab("/ENC", "ENC")            → 键 "/ENC" + 英文名
 
+    ms 的 X 有时是 id 不是名字（"CNC-nttn-Framework-Title"）。这种值不按字面
+    翻，改用它所在 staging 目录的正式名（"Cosmopolitan Framework"）——否则
+    界面上会出现「CNC-nttn 框架标题」这种谁也看不懂的直译。
+
     运行时先按 id 查、再按英文名查（init.lua 的 lookupName），所以
     names.lua 里键和英文名各写一份，任一形状对上就能换。
     """
@@ -188,6 +244,24 @@ def scan_name_pairs(root):
 
     if not root or not os.path.isdir(root):
         return out
+
+    mod_root_mode = _is_mod_root(root)
+
+    def dir_title(dirpath):
+        """当前 .reds 所属模组目录的正式名；判断不出来就返回空串。"""
+        if mod_root_mode:
+            cand = os.path.basename(os.path.normpath(root))
+        else:
+            rel = os.path.relpath(dirpath, root)
+            if rel == ".":
+                cand = os.path.basename(os.path.normpath(root))
+            else:
+                cand = rel.split(os.sep)[0]
+        title = mod_title(cand)
+        if not title or title.lower() in _GAME_DIRS:
+            return ""
+        return title
+
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d.lower() not in _SCAN_SKIP]
         for fn in filenames:
@@ -202,7 +276,11 @@ def scan_name_pairs(root):
                 continue
             if "ModSettings.mod" in text:
                 for m in _MOD_RE.finditer(_strip_comments(text)):
-                    add(m.group(1), m.group(1))
+                    key = m.group(1)
+                    name = key
+                    if _ID_SHAPE.match(key):
+                        name = dir_title(dirpath) or key
+                    add(key, name)
             if "DVRCF.Register" in text:
                 for m in _RCF_RE.finditer(text):
                     add(m.group(1), m.group(2))
@@ -318,6 +396,8 @@ _NAME_SYS = (
     "输入是一个 JSON 字符串数组，每个元素是一个模组的英文名称。"
     "要求：翻成简短自然的中文名，不超过 12 个汉字；"
     "开头是厂商/系列缩写前缀的（如 ST / CVL / GR / CNC-nttn）保留前缀不翻；"
+    "专有品牌/系列名（Cosmopolitan、Kiroshi、Monowire 等）保留原文不译，"
+    "只翻它后面的通用词；"
     "不要加句号、引号、括号或任何解释。"
     "只输出一个 JSON 字符串数组，顺序和长度与输入完全一致。"
 )
@@ -466,9 +546,15 @@ def ensure_names(out_dir, pairs, base="", model="", target="简体中文",
         if key and key != eng and key not in keys:
             keys.append(key)
 
-    todo = [eng for eng, keys in by_eng.items()
-            if not _clean_name(have.get(eng))
-            and not any(_clean_name(have.get(k)) for k in keys)]
+    def needs(eng, keys):
+        if _clean_name(have.get(eng)):
+            return False                     # 英文名已经有中文
+        if any(_clean_name(have.get(k)) for k in keys):
+            # 键上有中文：只有「id 键 + 已经拿到正式名」才需要重翻改写
+            return any(_ID_SHAPE.match(k) for k in keys)
+        return True
+
+    todo = [eng for eng, keys in by_eng.items() if needs(eng, keys)]
     stat = {"added": 0, "todo": len(todo), "have": len(have), "error": ""}
     if not todo:
         return stat
@@ -486,9 +572,14 @@ def ensure_names(out_dir, pairs, base="", model="", target="简体中文",
         if not zh:
             continue
         for k in [eng] + keys:
-            if have.get(k) != zh:
-                have[k] = zh
-                added += 1
+            old = have.get(k)
+            if old == zh:
+                continue
+            # id 键可以用正式名的译文改写；其它键保持「已有的中文不覆盖」
+            if old and not (_ID_SHAPE.match(k) and eng != k):
+                continue
+            have[k] = zh
+            added += 1
     write_names(path, have)
     stat["added"] = added
     if log:
