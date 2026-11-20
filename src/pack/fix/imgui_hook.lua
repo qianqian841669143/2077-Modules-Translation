@@ -71,7 +71,9 @@ return function(lookup, log)
   end
 
   local function tr(s)
-    if type(s) ~= "string" or s == "" or #s > 200 then
+    -- 上限 1600：账本里最长的多行 tooltip 是 1456 字符（<Rich …> 那种），
+    -- 卡在 200 时这些长句连查都不会去查。
+    if type(s) ~= "string" or s == "" or #s > 1600 then
       return nil
     end
     local hit = memo[s]
@@ -118,6 +120,16 @@ return function(lookup, log)
       local zh3 = lookup(full)
       if type(zh3) == "string" and zh3 ~= "" and zh3 ~= full then
         zh = zh3
+      end
+    end
+    if not zh and base:find("\n", 1, true) then
+      -- 多行 tooltip：账本里存的是**源码里的字面 \n**（两个字符），运行时传进来
+      -- 的是真换行（一个字符 0x0A）。账本里 339 条这种，整串查必然 miss。
+      -- 把真换行换回字面 \n 再查一次；中文里没有换行，所以命中的译文直接用。
+      local esc = base:gsub("\r\n", "\n"):gsub("\n", "\\n")
+      local zh4 = lookup(esc)
+      if type(zh4) == "string" and zh4 ~= "" and zh4 ~= esc then
+        zh = zh4
       end
     end
     if zh then
