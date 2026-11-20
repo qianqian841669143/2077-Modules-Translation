@@ -101,15 +101,48 @@ selftest 本来就因为引用已删除的 `src\web\app.js` 跑不通，下次�
 前端展开时**所有文件都列**，已翻完的也列，只是标「已翻完」；空列表按
 `orphan` / 未扫过 / 只有条数 / 账本里没有可翻文本四种情况分别给话。
 
-## 当前基线（2026-11-20 10:07）
+## 批量收尾：遮罩不许自己盖回来（2026-11-20，提交 `83f6be9`）
 
-- 最新提交：`a441381 docs: 记下已删的撤销/还原与本轮预扫描明细的改法，更新基线`
-- `dist\2077ModTranslator.exe`：14,087,617 字节，2026-11-20 10:07:09，
-  SHA256 前 32 位 `76261E8C5521DF5763407C4A3D1EDE9B`
-  （比上一版小 27,280 字节，少的就是删掉的 `revert_source.py` 与撤销代码）
-- 这一版从 exe 里读回校验过：`web_app` 有 `_scan_files`/`_scan_need`、无
-  `undo_last`/`revert_mod`；`mod_batch` 有 `_per_file_rows`；`mod_deploy` 无
-  `undo_root`；`revert_source` 不在 PYZ；`dialogs.js` 有「只统计了条数」；
-  `table.js`/`index.html`/`apply.js`/`events.js`/`core.js` 无旧符号
+10:35 那轮 309/309 跑完，zip 也并在 10:35:37 完成了，界面却永远停在
+「批量翻译进行中…」，整窗 `inert`，只能关程序。是竞态，不是卡死：
+
+- `mod_batch.py:616` 的 `mb-done` 在 `_flush_pack()` **之前**就发出
+- `web_app.py` 把 `_mb_running` 置 False 在并包**之后**（每晚约 4 秒）
+- `onMbDone` 关掉遮罩后又调 `refreshQueueInfo()`，此刻问 `batch_info` 仍是
+  `running=true` → `enterBatchMask()` 把遮罩重新盖上，此后再无事件能摘
+
+两个判断「真卡住」的指纹：计数还写着 `309 / 309`（`enterBatchMask` 只在
+`state.mbIndex` 为空时重写数字），但第三行模组名是空的（它会被清掉）。
+
+改法：`refreshQueueInfo(noMask)`，`onMbDone` 传 `true`；「停止批量」调完
+`batch_cancel` 再问一次 `batch_info`，`!running` 就直接 `exitBatchMask()`
+（原来只置标志位就返回，worker 早已结束时没有 `mb-done` 跟回来，按钮变灰
+就再也出不来）。
+
+遮罩第三行和并包那句话里的「已翻译 X / Y 条」：`X = Σ(already + applied)`，
+`Y = Σ(rows)`，与 `mod_batch.finish()` 里 `already`（本来就是中文）/
+`applied`（这轮真写回去）的定义一致。前端那行是**本轮涉及**的累计（被续跑
+跳过的模组不会计入），并包那句用后端从 `_mb_results` 算的准数。
+
+## 当前基线（2026-11-20 10:46）
+
+- 最新提交：`83f6be9 fix(batch): 批量跑完不再被遮罩盖回来，遮罩新增「已翻译 / 总文本数」`
+- `dist\2077ModTranslator.exe`：14,091,193 字节，2026-11-20 10:46，
+  SHA256 前 32 位 `03F318A5DA988CD633CEEF0FE6D42E13`
+- 这一版从 exe 里读回校验过 13 项：`queue.js` 有 `noMask` / `mbGlobalTxt` /
+  `onMbPacking`，`events.js` 分发 `mb-packing`，`bind.js` 有「批量已经结束」，
+  `web_app` 推 `mb-packing`（入口脚本在 CArchive 里，用 `marshal.loads` 读，
+  不在 PYZ）
+- 上一版（10:07）的改造仍然有效：撤销/还原已删、`revert_source` 不在包里、
+  预扫描按文件记明细
 - **装上后要点一次「预扫描」**：老 `mods_scan.json` 只有条数没有 `perFile`，
   304 个模组会被重扫一遍，展开才有文件列表
+
+## 待办：成批「源文件不存在」导致重翻白跑
+
+批量日志里大量模组是 `applied=0 failed=N`，错误
+`base\yv\localization\*.json: 源文件不存在`（`mod_pack.py:238`），例如
+`void_Shirt_Jacket` 20 条机翻一条都没写回去、`They Will Remember` 422 条只
+写进 54 条。**这轮只修了遮罩，没碰这里**，下一轮单独查
+`mod_pack.build_pack` 的取源路径。
+
