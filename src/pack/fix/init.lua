@@ -299,9 +299,18 @@ local function patchSchema(schema, sourceId)
         replaced = replaced + 1
       end
 
-      local items = cat.items
-      if type(items) == "table" then
-        for _, item in ipairs(items) do
+      -- MCM API 的三个 bridge（native_settings / ms / rcf）都把设置项放在
+      -- `settings` 里，老结构才叫 `items`。2026-11-20 之前只认 items，
+      -- 于是 Codeware「原生设置」那几十个模组的设置项一条都没替到，
+      -- 界面里全是英文（provider 明明挂上了 3/3）。
+      local list = cat.settings
+
+      if type(list) ~= "table" then
+        list = cat.items
+      end
+
+      if type(list) == "table" then
+        for _, item in ipairs(list) do
           if type(item) == "table" then
             local ln = lookup(sourceId, item.label)
             if ln ~= nil then
@@ -340,6 +349,11 @@ local function patchProvider(provider)
           local nm = lookupName(sid) or lookup(sid, mod.name)
           if nm ~= nil then
             mod.name = nm
+          end
+          -- rcf bridge 的模组条目还带 description
+          local md = lookup(sid, mod.description)
+          if md ~= nil then
+            mod.description = md
           end
         end
       end
