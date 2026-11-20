@@ -50,6 +50,8 @@ html, html[data-theme="light"], html[data-theme="dark"] {
   --nav-h:         48px;
   --pad:           20px;   /* 页面左右内容线的基准，所有横条/表头/行都对齐到它 */
   --sbw:           8px;    /* 列表滚动条宽度，右侧留白要算上它 */
+  --edge:          10px;   /* 窗口右边缘的拖拽死区：滚动条不能贴着窗口边，
+                              否则想拖窗口改宽度时鼠标先抓到了滚动条 */
 }
 
 html, body { background: var(--bg); color: var(--text); }
@@ -288,15 +290,14 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 
 /* 1) 路径行 */
 .mpaths { display: flex; align-items: center; gap: 8px;
-          padding: 12px calc(var(--pad) + var(--sbw)) 0 var(--pad); }
+          padding: 12px calc(var(--pad) + var(--sbw) + var(--edge)) 0 var(--pad); }
 .mpaths .input { height: 32px; }
 .mpaths .btn { height: 32px; flex: none; }
 
-/* 2) 操作行：左边勾选，右边「归档层 + 开始 + 导出/清空」 */
+/* 2) 操作行：左边勾选和归档层，右边「开始 + 导出/清空」 */
 .mactions { display: flex; align-items: center; gap: 10px; height: 40px;
-            margin: 2px calc(var(--pad) + var(--sbw)) 0 var(--pad); }
-.mactions .chk { font-size: 12.5px; color: var(--muted); white-space: nowrap;
-                 margin-right: 2px; }
+            margin: 2px calc(var(--pad) + var(--sbw) + var(--edge)) 0 var(--pad); }
+.mactions .chk { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 .mcheck { display: flex; align-items: center; gap: 7px; font-size: 13px;
           color: #9a9cb0; cursor: pointer; white-space: nowrap; }
 .mcheck input { accent-color: var(--primary); cursor: pointer; }
@@ -308,7 +309,7 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 
 /* 3) 搜索 + 筛选：紧贴表格上方 */
 .mtools { display: flex; align-items: center; gap: 8px;
-          padding: 4px calc(var(--pad) + var(--sbw)) 8px var(--pad);
+          padding: 4px calc(var(--pad) + var(--sbw) + var(--edge)) 8px var(--pad);
           overflow: hidden; }
 .mtools .input { height: 32px; }
 .mtools .chip { height: 28px; flex: none; }
@@ -323,8 +324,11 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .dot.a { background: var(--amber); } .dot.d { background: #4a4c58; }
 
 /* 4) 列表滚动容器。列头粘在顶上、和行共享同一份宽度；滚动条用标准
-   scrollbar-width: thin（8px），细、暗、hover 才亮，不抢表格的视线。 */
+   scrollbar-width: thin（8px），细、暗、hover 才亮，不抢表格的视线。
+   右边留 --edge 的空白：滚动条贴着窗口边的话，想拖窗口改宽度时
+   鼠标会先抓到滚动条（frameless 窗口的边缘拖拽就没了）。 */
 .mscroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+           margin-right: var(--edge);
            padding: 0 var(--pad); scrollbar-gutter: stable;
            scrollbar-width: thin; scrollbar-color: #2f313d transparent; }
 /* style.css 里有一条全局 ::-webkit-scrollbar{width:10px}，一旦它存在
