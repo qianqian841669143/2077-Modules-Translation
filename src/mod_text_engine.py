@@ -3694,10 +3694,20 @@ def _shape_offenders(base, repls, lang, budget=40):
 
 
 def _parse_json_ptr(ptr):
-    """`/gangs/valentino/0/name` -> ["gangs", "valentino", "0", "name"]。"""
+    """`/gangs/valentino/0/name` -> ["gangs", "valentino", "0", "name"]。
+
+    语言包通道给的 ctx 是纯 key（`SMS_1_0`），不是 RFC 6901 指针。
+    2026-11-21 之前这里对纯 key 一律返回 None，Missing Persons 464 条、
+    MCM 298 条、Pacifica Typhoon 141 条全部卡在「定位路径无效」——
+    排版校验已经放行了，最后一步却因为缺一个斜杠写不进去。
+    数据表基本都是平铺字典，补成 `/key` 即可；key 里的 `~` 和 `/`
+    先转义，否则会被二次拆段。
+    """
     p = (ptr or "").strip()
-    if not p or not p.startswith("/"):
+    if not p:
         return None
+    if not p.startswith("/"):
+        p = "/" + p.replace("~", "~0").replace("/", "~1")
     return [raw.replace("~1", "/").replace("~0", "~")
             for raw in p[1:].split("/")]
 
