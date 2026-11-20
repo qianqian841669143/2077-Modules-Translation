@@ -279,7 +279,9 @@ function bind() {
     $("official-info").textContent = T("正在读取官方语言包，约 1 分钟 ...");
   };
   $("btn-locale").onclick = () => openLocale();  $("btn-loc-load").onclick = () => loadLocale();
-  // 「更多 → 重新打包」：把当前所有译文重新并进汉化包 zip，打完刷一遍状态。
+  // 「更多 → 重新打包」：把账本 + 运行时（含单模组刚翻完的产物）重新并进
+  // 汉化包总包，打完刷一遍状态。以前这里调 pack_zip()，那是个保存框，把当前
+  // 模组目录整份打成 *_translated.zip，跟总包一点关系都没有。
   // （菜单里原来的「打包为 zip」是归档模式用的，由 table.js 控制显隐，别混）
   $("btn-repack").onclick = async () => {
     const b = $("btn-repack");
@@ -287,7 +289,7 @@ function bind() {
     b.disabled = true;
     b.textContent = T("打包中 ...");
     try {
-      const r = await pywebview.api.pack_zip();
+      const r = await pywebview.api.sync_pack();
       if (!r || !r.ok) { toast((r && r.error) || "error", "err"); return; }
       toast(T("已打包: %s").replace("%s", r.path), "ok");
       try { await refreshPackStatus(); } catch (_) {}

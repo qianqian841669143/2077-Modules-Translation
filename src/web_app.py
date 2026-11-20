@@ -3809,11 +3809,15 @@ class Api(object):
                 out[self._LEDGER_ZIP_REL + rel] = p
         return out
 
-    def _sync_ledger_to_zip(self):
+    def _sync_ledger_to_zip(self, extra=None):
         """把补丁包整份（账本 + 运行时 + 说明）合并进汉化包 zip。
 
         不能只并账本：zip 一旦被删/换掉，只并账本会造出一个没有运行时
         init.lua 的空壳包。这里优先用工作目录整份重建。
+
+        extra: 额外并进总包的文件 {zip 内路径: 磁盘路径}。单模组「应用」走
+        这个口——它自己的覆盖文件 / 归档产物只该进那个单模组 zip，但也必须
+        同时进总包，否则总包永远是旧的，重装一次就把这个模组的译文退回去。
 
         顺手把包里**旧的逻辑脚本**（.reds）删掉：2026-11-20 之前所有 .reds
         都当覆盖文件投，模组被禁用后游戏里只剩我们的副本，redscript 编译
@@ -3824,6 +3828,9 @@ class Api(object):
         zp = self._pack_zip_path()
         patch = self._patch_map()
         files = patch or self._ledger_zip_map()
+        for k, v in (extra or {}).items():
+            if v and os.path.isfile(v):
+                files[k] = v
         if not files:
             self._batch_log("账本目录为空，跳过同步")
             return {"files": 0, "zip": zp}
@@ -4067,7 +4074,9 @@ class Api(object):
         # （运行时 init.lua + 账本 + 说明）。重装 zip 会用它覆盖 staging，
         # 缺的不只是译文，还有游戏侧替换设置文本的那个 mod。
         if standalone:
-            # 单模组：打成一个只含这个模组的独立 zip，总包一个字不动
+            # 单模组：产物打成一个只含这个模组的独立 zip；同一份产物**同时**
+            # 并进总包。以前总包在这里一个字不动，于是「单模组翻完 → 重新打包」
+            # 之后总包里还是旧账本，重装一次 zip 这个模组的译文就退回英文。
             try:
                 extra = {}
                 ar = out.get("archive") or {}
@@ -4080,6 +4089,11 @@ class Api(object):
                     out["standalone"] = sp
                 else:
                     out["errors"].append(sp.get("error") or "打包失败")
+
+                pend = getattr(self, "_pack_pending", None) or {}
+                total = dict(pend.get("files") or {})
+                total.update(extra)
+                out["patchSync"] = self._sync_ledger_to_zip(total)
             except Exception as ex:      # noqa: BLE001 - 打包失败不该吞掉已写的账本
                 out["errors"].append("单模组打包失败：%s" % ex)
         elif cls["ledger"] or cls["pack"] or cls.get("archive"):
@@ -4497,7 +4511,12 @@ class Api(object):
                                            for r in rows)}}
 
     def sync_pack(self):
-        """手动把账本同步进 zip（界面上点「同步账本」）。"""
+        """手动把账本同步进 zip（界面上点「同步账本」/「重新打包」）。
+
+        以前「重新打包」走的是 `pack_zip()`：弹保存框、把当前模组目录整份打成
+        `*_translated.zip` —— 那是「覆盖文件」时代的东西。账本模式下它跟总包
+        完全不是一回事：用户点完以为总包更新了，其实一条新译文都没进去。
+        """
         if self._busy:
             return {"ok": False, "error": "busy"}
         try:
@@ -4505,7 +4524,7 @@ class Api(object):
         except Exception as ex:          # noqa: BLE001 - 回给界面显示
             return {"ok": False, "error": str(ex)}
         return {"ok": True, "files": r.get("files"), "zip": r.get("zip"),
-                "status": self.pack_status()}
+                "path": r.get("zip"), "status": self.pack_status()}
 
     def open_pack(self):
         """在资源管理器里定位汉化包 zip（选中它）。"""
