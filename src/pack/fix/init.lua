@@ -85,6 +85,11 @@ local function findLedger()
     end
   end
 
+  -- CET 的 io.open 沙箱只认「相对本 mod 目录」的路径（裸文件名）。
+  -- 实测 CET 里 tostring(package.path) 是空串，上面那套候选一个都拿不到；
+  -- 带 mods/ 前缀的相对路径会被沙箱直接拒（Tried to access invalid path）。
+  -- 所以裸相对路径排第一，其余留作别的加载方式下的兜底。
+  add("ledger/all.lua")
   add("mods/" .. LEDGER_REL)
   add("plugins/cyber_engine_tweaks/mods/" .. LEDGER_REL)
   add("bin/x64/plugins/cyber_engine_tweaks/mods/" .. LEDGER_REL)
@@ -127,9 +132,18 @@ local function addEntry(sourceId, orig, zh)
   total = total + 1
 end
 
+-- base 为空表示账本走的是沙箱认的裸相对路径（"ledger/all.lua"），
+-- 这时同级文件也用裸文件名 —— 不能拼 "./" 或别的目录前缀，沙箱会拒。
+local function relPath(base, name)
+  if base == nil or base == "" then
+    return name
+  end
+  return base .. "/" .. name
+end
+
 -- 模组名单独一张表（names.lua）：人工整理的优先，账本只兜底没有的那些
-local function loadNames(dir)
-  local p = dir .. "/names.lua"
+local function loadNames(base)
+  local p = relPath(base, "names.lua")
   local chunk = loadfile(p)
 
   if not chunk then
@@ -209,14 +223,17 @@ local function loadLedger()
     end
   end
 
-  -- 账本就在补丁包里，顺手把日志也写到那里
-  local dir = path:gsub("[/\\]ledger[/\\]all%.lua$", "")
-  if dir ~= path then
-    LOG_FILE = dir .. "/text_override.log"
-    loadNames(dir)
+  -- 账本就在补丁包里，顺手把日志也写到那里。
+  -- base 是账本所在目录：走裸相对路径时是空串（沙箱基准就是本 mod 目录），
+  -- 这时后面的文件也用裸文件名。
+  local base = path:match("^(.-)[/\\]?ledger[/\\]all%.lua$")
+
+  if base ~= nil then
+    LOG_FILE = relPath(base, "text_override.log")
+    loadNames(base)
     -- ImGui 自绘界面（CTO、AMM 那一类）不走 MCM，账本替不到它们。
     -- 单独一个文件，语法错了也只是钩子不生效，这里 pcall 兜着。
-    local chunk, lerr = loadfile(dir .. "/imgui_hook.lua")
+    local chunk, lerr = loadfile(relPath(base, "imgui_hook.lua"))
     if chunk then
       local okh, install = pcall(chunk)
       if okh and type(install) == "function" then
