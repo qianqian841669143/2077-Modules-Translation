@@ -692,3 +692,28 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
 }
 .skip-box:hover { border-color: var(--primary); }
 .skip-box:checked { background: var(--primary); border-color: var(--primary); }
+
+/* ------------------------------------------------- 处理中遮罩（机翻 / 批量） */
+/* style.css 里 .overlay.tr / .overlay.batch 写死 rgba(10,15,25,.88) 加白字、
+   白色进度条轨道、白色转圈——那是照着深色底调的。浅色主题下批量翻译一开跑，
+   整个浅紫界面就被一层 88% 的黑幕压住（2026-11-20 用户截图）。
+   这里全部改成从变量派生：深色主题 --bg 是 #0c0d10，88% 混出来和原来的深蓝黑
+   几乎没差别；浅色主题自动变成浅紫半透明幕，文字跟着变深。 */
+.overlay.tr, .overlay.batch {
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(3px);
+}
+.overlay-text, .ovrow { color: var(--text); text-shadow: none; }
+/* 轨道原来是对白底设计的 rgba(255,255,255,.18)，浅幕上等于消失 */
+.ovbar { background: color-mix(in srgb, var(--border) 80%, var(--text) 20%); }
+.spinner {
+  border-color: color-mix(in srgb, var(--text) 20%, transparent);
+  border-top-color: var(--primary);
+}
+/* 遮罩里的「显示面板 / 停止批量」：浅色幕上白底白幕，得靠描边和一点阴影
+   把边界立起来，否则看不出那儿有按钮 */
+.overlay .btn {
+  border-color: var(--border);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 14%, transparent);
+}
+.overlay .btn:hover { background: var(--hover); }
