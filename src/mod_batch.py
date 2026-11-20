@@ -461,27 +461,59 @@ def finish(ctx, cand, prep, r):
         r["ledgerEntries"] = int(got.get("entries") or 0)
 
         # 覆盖文件交给宿主的 _pack_apply（collect：先攒，收尾统一合并进 zip）。
+        # 归档行不能走这里：它们的 file 是归档内部路径，磁盘上没有这个文件，
+        # build_pack 只会报「源文件不存在」。归档行单独重建归档再并进 zip。
         import mod_pack
-        cls = mod_pack.classify(dst, items)
+        res_items = [x for x in items if str(x.get("kind") or "") == "resource"]
+        src_items = [x for x in items if str(x.get("kind") or "") != "resource"]
+        cls = mod_pack.classify(dst, src_items)
         r["routes"] = {"ledger": len(cls["ledger"]), "pack": len(cls["pack"]),
-                       "archive": len(cls["archive"]), "skip": cls["skip"]}
+                       "archive": len(res_items), "skip": cls["skip"]}
+        r["applied"] = 0
+        r["failed"] = 0
+        errs = []
+        w.root = dst
+
+        if res_items:
+            # 组包：只把改动过的资源打进 <名字>_zh-cn.archive（不是整份重打），
+            # 产物落在副本的原归档旁边，再按 archive/pc/mod/ 并进汉化包 zip。
+            try:
+                ar = w._apply_resource(res_items)
+                r["archive"] = ar.get("archive") or ""
+                r["xl"] = ar.get("xl") or ""
+                r["applied"] += int(ar.get("ok") or 0)
+                r["failed"] += int(ar.get("fail") or 0)
+                errs.extend(str(x) for x in (ar.get("errors") or [])[:5])
+                if ar.get("archive"):
+                    # 和覆盖文件走同一个暂存区，收尾一次性并进 zip：87 个归档逐个
+                    # 合并等于把 6.5 MB 的总包重写 87 遍。
+                    pend = w._pack_pending_state()
+                    for one in (ar.get("archive"), ar.get("xl")):
+                        if one and os.path.isfile(one):
+                            pend["files"]["archive/pc/mod/"
+                                        + os.path.basename(one)] = one
+                    r["archiveMerged"] = True
+                ctx.stage(cand.get("key"), cand.get("name"), "归档",
+                          round(time.time() - t_tr, 2))
+            except Exception as ex:      # noqa: BLE001 - 归档炸了不该毁掉整轮
+                r["failed"] += len(res_items)
+                errs.append("归档组包失败: %s" % ex)
+
         pack_apply = getattr(w, "_pack_apply", None)
         if cls["pack"] and callable(pack_apply):
-            w.root = dst
             pr = pack_apply(dst, cls["pack"], collect=True)
-            r["applied"] = int(pr.get("ok") or 0)
-            r["failed"] = int(pr.get("fail") or 0)
-            r["errors"] = [str(x) for x in (pr.get("errors") or [])][:20]
+            r["applied"] += int(pr.get("ok") or 0)
+            r["failed"] += int(pr.get("fail") or 0)
+            errs.extend(str(x) for x in (pr.get("errors") or [])[:20])
             r["packFiles"] = int(pr.get("files") or 0)
-            r["ok"] = True
             ctx.stage(cand.get("key"), cand.get("name"), "覆盖",
                       round(time.time() - t_tr, 2))
-            return
 
-        r["applied"] = 0
-        ctx.stage(cand.get("key"), cand.get("name"), "账本",
-                  round(time.time() - t_tr, 2))
+        r["errors"] = errs[:20]
         r["ok"] = True
+        if not res_items and not cls["pack"]:
+            ctx.stage(cand.get("key"), cand.get("name"), "账本",
+                      round(time.time() - t_tr, 2))
         return
     if items:
         # 批量写的是输出根里的副本：这份副本接下来会被整个部署进游戏目录，

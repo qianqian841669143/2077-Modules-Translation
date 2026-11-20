@@ -181,6 +181,15 @@ def classify(mod_root, rows):
         if not rel:
             out["skip"] += 1
             continue
+        # 归档行必须走归档通道：它们的 file 是**归档内部**的资源路径
+        # （base\yv\localization\xxx.json），模组目录里没有这个文件。
+        # 2026-11-20 之前这里只看路径串，命中 _LOCAL_HINTS 就判成 pack，
+        # 于是 build_pack 去磁盘上找 → 「源文件不存在」→ 一整批归档行全丢
+        # （309 个模组那轮丢了 87 个模组 4,387 条）。route() 也永远返回不到
+        # "archive"（行不会带 .archive 扩展名），cls["archive"] 一直是空的。
+        if str(r.get("kind") or "") == "resource":
+            out["archive"].append(r)
+            continue
         full = os.path.join(mod_root, rel)
         if rel not in cache:
             cache[rel] = is_settings_file(full)

@@ -2353,6 +2353,13 @@ class Api(object):
                     k = str(o.get("key") or "")
                     dst = o.get("dst") or ""
                     if k and o.get("ok") and dst and os.path.isdir(dst):
+                        # 上一轮有写失败的条（failed > 0）不算「跑完」：模组会被
+                        # 整块跳过，那些条目就永远补不上。归档行在 2026-11-20 之前
+                        # 正是这样整批失败的（87 个模组 4,387 条），修好写回之后
+                        # 必须让它真的重跑一次。
+                        missed = int(o.get("failed") or 0)
+                        if missed:
+                            continue
                         done[k] = o
         except Exception:
             return {}
