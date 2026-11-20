@@ -2517,6 +2517,43 @@ class Api(object):
                 pass
             return False
 
+    @staticmethod
+    def _scan_need(it, have, cache, force):
+        """这个模组这轮要不要预扫。
+
+        账本里已经有的不扫（提取时数出来的条数比再数一遍准）；剩下的要扫，
+        除非缓存里已经有**文件明细**——只有条数没有明细的老缓存是升级前的
+        产物，展开时列不出文件，所以顺带补扫一遍。
+        """
+        if force:
+            return True
+        if it["name"] in have:
+            return False
+        c = cache.get(it["name"])
+        if c is None:
+            return True
+        return not c.get("perFile")
+
+    @staticmethod
+    def _scan_files(sc):
+        """预扫缓存里的「每个文件几条 / 还差几条」，转成清单要的形状。
+
+        缓存里存的是 [路径, 总条数, 待翻条数] 三元组数组，比字典省一半体积；
+        这里转回 {"file": …, "total": …, "todo": …}，和账本
+        ``mod_ledger.file_stats`` 的输出保持同一个形状，前端不用分两套。
+        """
+        out = []
+        for d in (sc.get("perFile") or []):
+            try:
+                rel, total, todo = d[0], int(d[1]), int(d[2])
+            except (TypeError, IndexError, ValueError):
+                continue
+            if not rel:
+                continue
+            out.append({"file": str(rel), "total": total, "todo": todo})
+        out.sort(key=lambda x: (-x["todo"], -x["total"], x["file"]))
+        return out
+
     def mods_prescan(self, staging="", force=False):
         """异步：把还没有账本的模组真扫一遍，条数落进 ``userdata\\mods_scan.json``。
 
@@ -2560,8 +2597,7 @@ class Api(object):
                 except Exception:    # noqa: BLE001 - 没账本就是全都要扫
                     pass
                 todo = [it for it in items
-                        if force or (it["name"] not in have
-                                     and it["name"] not in cache)]
+                        if self._scan_need(it, have, cache, force)]
                 total = len(todo)
                 if not total:
                     self._mb_push({"type": "mods-scanned", "total": len(items),
@@ -2580,6 +2616,12 @@ class Api(object):
                         "fileCount": int(info.get("files") or 0),
                         "bytes": int(info.get("bytes") or 0),
                         "error": str(info.get("error") or ""),
+                        # 每个文件几条、还差几条：清单展开时直接列出来，
+                        # 不用等提取（提取会写账本，那就不是预扫了）
+                        "perFile": [[str(d.get("file") or ""),
+                                     int(d.get("total") or 0),
+                                     int(d.get("todo") or 0)]
+                                    for d in (info.get("perFile") or [])],
                     }
                     if i % 3 == 0 or i == total - 1:
                         self._mb_push({"type": "mods-scan", "done": i + 1,
@@ -4371,7 +4413,7 @@ class Api(object):
                     rows.append({"name": name, "folder": "", "entries": e2,
                                  "filled": f2, "hasLedger": False,
                                  "orphan": False, "scanned": bool(sc),
-                                 "files": [], "fileCount": int(
+                                 "files": self._scan_files(sc), "fileCount": int(
                                      sc.get("fileCount") or 0),
                                  "scanError": str(sc.get("error") or ""),
                                  # 扫过且一条都没有，是「确实没文本」，不是未知

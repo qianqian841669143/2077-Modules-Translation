@@ -84,6 +84,9 @@ def probe_text(root, target_code, measure=False):
     already = 0
     err = ""
     consumed = set()
+    lrows = []
+    data = {}
+    meta = {}
 
     try:
         files = locale_pack.detect(root, parse=True, target=target_code)
@@ -93,8 +96,9 @@ def probe_text(root, target_code, measure=False):
         srcs = locale_pack.pick_sources(files, target_code) if files else []
         if srcs:
             lrows, _lmeta = locale_pack.extract(root, srcs, target_code)
-            loc = len(lrows or [])
-            for r in (lrows or []):
+            lrows = lrows or []
+            loc = len(lrows)
+            for r in lrows:
                 for k in ("file", "target"):
                     if r.get(k):
                         consumed.add(r[k])
@@ -126,7 +130,38 @@ def probe_text(root, target_code, measure=False):
             out["files"], out["bytes"] = _tree_size(root)
         except Exception:
             pass
+    out["perFile"] = _per_file_rows(lrows, data, meta)
     return out
+
+
+def _per_file_rows(lrows, data, meta):
+    """把一次提取的结果按文件汇总成 [{file, total, todo}]。
+
+    模组清单展开时要显示「这个模组有哪些文件、各差几条」。没提取过的模组
+    没有账本，这份汇总就是它唯一的文件明细来源，所以预扫必须把它算出来、
+    存进缓存——只存总条数的话，展开只能显示空列表。
+    """
+    per = {}
+
+    def _add(rel, total, todo):
+        key = str(rel or "-").replace("\\", "/")
+        d = per.get(key)
+        if d is None:
+            d = per[key] = {"file": key, "total": 0, "todo": 0}
+        d["total"] += int(total)
+        d["todo"] += int(todo)
+
+    # 语言包层（locale json/lua）的行都是待翻的
+    for r in (lrows or []):
+        _add(r.get("file") or r.get("target") or "-", 1, 1)
+    # 明文层：reds / lua / yaml / json，data 里是每文件的待翻项
+    for rel, rows in (data or {}).items():
+        _add(rel, len(rows), len(rows))
+    # 已经是目标语言、被跳过但保留的行：算进总数，todo 记 0（已翻）
+    for rel, rows in ((meta or {}).get("already") or {}).items():
+        _add(rel, len(rows), 0)
+    return sorted(per.values(),
+                  key=lambda d: (-d["todo"], -d["total"], d["file"]))
 
 
 # ---------------------------------------------------------------- 复制

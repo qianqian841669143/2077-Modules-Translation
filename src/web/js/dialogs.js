@@ -456,13 +456,20 @@ function renderMods() {
       </div>`);
     if (open) {
       if (!files.length) {
+        // 空列表有四种来路，别用一个「没有未填的条目」糊过去：
+        // 目录没了 / 没扫过 / 扫过但只知道条数 / 账本里确实没有可翻文本
+        let msg;
+        if (st === "orphan") msg = "目录已不在";
+        else if (unknown) msg = "还没提取过，不知道有哪些文件";
+        else if (!e) msg = "没有可翻的文本";
+        else if (m.hasLedger) msg = "没有未填的条目";
+        else msg = "只统计了条数，点「预扫描」可以列出文件";
         parts.push(`<div class="mfiles"><div class="mfile empty">${
-          esc(T(unknown ? "还没提取过，不知道有哪些文件" : "没有未填的条目"))}</div></div>`);
+          esc(T(msg))}</div></div>`);
       } else {
-        // 要翻的排在前面；已经全填的文件折成一行「另外 N 个文件已翻完」
-        const need = files.filter((x) => Number(x.todo) > 0);
-        const doneN = files.length - need.length;
-        const list = (need.length ? need : files).slice(0, 30);
+        // 要翻的排在前面（后端已排好），已翻完的照样列出来——用户要看的是
+        // 这个模组到底有哪些文件、各多少条，不是只看还剩多少。
+        const list = files.slice(0, 60);
         parts.push(`<div class="mfiles">` + list.map((x) => {
           const td = Number(x.todo || 0);
           const tt = Number(x.total || 0);
@@ -472,10 +479,8 @@ function renderMods() {
               td ? td + " " + esc(T("待翻译")) : esc(T("已翻完"))} / ${tt}</span>
           </div>`;
         }).join("") +
-        (need.length && doneN ? `<div class="mfile empty">${esc(
-          T("另外 %d 个文件已翻完").replace("%d", doneN))}</div>` : "") +
-        (list.length < need.length ? `<div class="mfile empty">${esc(
-          T("还有 %d 个文件没展开").replace("%d", need.length - list.length))}</div>` : "") +
+        (files.length > list.length ? `<div class="mfile empty">${esc(
+          T("还有 %d 个文件没展开").replace("%d", files.length - list.length))}</div>` : "") +
         `</div>`);
       }
     }
