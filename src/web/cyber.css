@@ -427,9 +427,14 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
 .mright { margin-left: auto; display: flex; align-items: center; gap: 14px;
           font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 .mright b { color: var(--text); }
-.minibar { width: 140px; height: 6px; border-radius: 3px; background: var(--panel3);
+/* 进度条轨道。原来写 --panel3（= card 混 12% text），浅色主题下 card 是纯白，
+   混出来的轨道和卡片底差三个色阶，等于没有轨道——截图里就是一根绿条悬在空中。
+   改成从 --border 混，浅色是淡紫灰、深色是 #41434b，两边都看得出「条有多长」。 */
+.minibar { width: 140px; height: 6px; border-radius: 3px;
+           background: color-mix(in srgb, var(--border) 85%, var(--text) 15%);
            overflow: hidden; }
-.minibar i { display: block; height: 6px; background: var(--success); }
+.minibar i { display: block; height: 6px; background: var(--success);
+             transition: width .2s ease; }
 .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 .dot.c { background: var(--cyan); }  .dot.g { background: var(--success); }
 .dot.a { background: var(--amber); } .dot.d { background: var(--dim2); }
@@ -470,6 +475,7 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
 .mhead { position: sticky; top: 0; z-index: 2; display: grid;
          grid-template-columns: 26px minmax(0, 1fr) 86px 66px 152px;
          gap: 12px; align-items: center; height: 30px;
+         padding-right: 8px;   /* 别让「总条数」的千位数字贴着滚动条 */
          font-size: 11.5px; letter-spacing: .04em; color: var(--dim2);
          background: var(--bg);
          border-bottom: 1px solid var(--border); }
@@ -481,7 +487,7 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
 .mgrp { border-bottom: 1px solid var(--border); }
 .grp.mod { display: grid;
            grid-template-columns: 26px minmax(0, 1fr) 86px 66px 152px;
-           gap: 12px; height: 40px; padding: 0;
+           gap: 12px; height: 40px; padding: 0 8px 0 0;   /* 右内距同 .mhead */
            border-bottom: 0; background: transparent; }
 .mgrp:nth-child(odd) > .grp.mod { background: var(--row-alt); }
 .grp.mod:hover { background: var(--hover); }
