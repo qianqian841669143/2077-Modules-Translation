@@ -44,6 +44,23 @@ class Cancelled(Exception):
 # ---------------------------------------------------------------- 候选
 
 
+# 汉化包自己也会被 Vortex 解压进 staging。它里面带着我们的运行时目录，
+# 一旦被当成模组跑，翻译器就在翻译自己的产物 —— 2026-11-21 实测一次
+# 复制了 682 个文件、加载耗掉 48 秒，而且产物会再被递归打进 zip。
+_OWN_PACK_MARKS = (
+    os.path.join("bin", "x64", "plugins", "cyber_engine_tweaks", "mods",
+                 "zzz_CP2077_Localization"),
+    os.path.join("bin", "x64", "plugins", "cyber_engine_tweaks", "mods",
+                 "zzz_mod_text_override"),
+    os.path.join("bin", "x64", "plugins", "cyber_engine_tweaks", "mods",
+                 "zzz_mcm_label_override"),
+)
+
+
+def _is_own_output(root):
+    return any(os.path.isdir(os.path.join(root, m)) for m in _OWN_PACK_MARKS)
+
+
 def list_dirs(staging):
     """列出一个根目录下的一级子目录，作为候选 mod。"""
     if not staging or not os.path.isdir(staging):
@@ -51,7 +68,7 @@ def list_dirs(staging):
     out = []
     for name in sorted(os.listdir(staging), key=lambda s: s.lower()):
         p = os.path.join(staging, name)
-        if os.path.isdir(p):
+        if os.path.isdir(p) and not _is_own_output(p):
             out.append({"key": safe_name(name), "name": name, "root": p})
     return out
 
