@@ -246,7 +246,8 @@ TrueFirstPersonCamera 与 CTO 的 `.reds` 全部走账本。
   （前一个：`10701b4 fix(runtime): MCM 设置项在 cat.settings 里，不是 cat.items`）
 - `dist\2077ModTranslator.exe`：14,103,597 字节，2026-11-20 12:08:08，
   SHA256 前 32 位 `849BE07CB31FC17CEE1DF98177516890`
-  备份 `dist\2077ModTranslator.exe.bak-20261120-1208`
+  备份 `dist\2077ModTranslator.exe.bak-20261120-1207`（12:07 那版 14,102,762 B；
+  再往前是 `bak-20261120-1154`，11:54 那版）
 - 从 exe 里读回：`init.lua` 13,083 B（`cat.settings` / `cat.items` 回退、
   `add("ledger/all.lua")`、`relPath`）、`imgui_hook.lua` 4,336 B
   （`kind ~= "userdata"`、`local seen = 0`）
