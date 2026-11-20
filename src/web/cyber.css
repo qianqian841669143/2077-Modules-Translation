@@ -278,6 +278,18 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .trow.filled { background: #101a14; }
 .trow.filled:nth-child(odd) { background: #111d16; }
 .trow.sel { background: var(--select); }
+/* 选中行要一眼看得出来。以前只有「底色换成 --select(#16222c)」，
+   和卡片底 #111219 差几度，等于没有；文字那条 .trow.sel .td 又被下面
+   同权重的 .trow .td.orig / .td.trans 盖掉了。这里用左侧黄色亮条 +
+   提亮一档的灰，文字靠 .tbody 前缀拿到更高特异性再压回亮色。 */
+.trow.sel,
+.trow.sel.filled,
+.trow.sel:nth-child(odd) {
+  background: #262b38;
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+.tbody .trow.sel .td { color: #f2f5ff; }
+.tbody .trow.sel .td:not(.skip) { opacity: 1; }
 .trow .td.file, .trow .td.line {
   font-family: Consolas, "Cascadia Mono", monospace; font-size: 11.5px;
 }
