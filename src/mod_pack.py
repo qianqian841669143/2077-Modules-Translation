@@ -280,6 +280,16 @@ def _group_by_file(rows):
     return files
 
 
+def _disk_reds(mod_root, rel):
+    """该 .reds 所在目录里所有的 .reds 文件名（小写）。读不到返回空集。"""
+    d = os.path.dirname(os.path.join(mod_root, rel))
+    try:
+        return {n.lower() for n in os.listdir(d)
+                if n.lower().endswith(".reds")}
+    except OSError:
+        return set()
+
+
 def build_pack(mod_root, rows, extra_files=None, log=None):
     """把 rows 里该进包的文件做成一份待合并清单。
 
@@ -304,19 +314,39 @@ def build_pack(mod_root, rows, extra_files=None, log=None):
     ok = fail = 0
     errors = []
 
-    for rel, pairs in _group_by_file(rows).items():
+    grouped = _group_by_file(rows)
+    # 本次要投递的 .reds 按目录归堆：只有整目录的脚本都在范围内，
+    # 投递才不会在游戏里留下孤立的编译单元。
+    reds_in_pack = {}
+    for _rel in grouped:
+        if _rel.lower().endswith(".reds"):
+            _d = os.path.dirname(_rel).replace("\\", "/").lower()
+            reds_in_pack.setdefault(_d, set()).add(
+                os.path.basename(_rel).lower())
+
+    for rel, pairs in grouped.items():
         src = os.path.join(mod_root, rel)
         if not os.path.isfile(src):
             errors.append("%s: 源文件不存在" % rel)
             fail += len(pairs)
             continue
-        # 兜底闸门：逻辑 / UI 脚本绝不出现在包里（route 那边已经拦过一道）。
-        # 漏一个进去就可能在游戏里留下「半个模块」，代价是游戏启动不了。
+        # 兜底闸门：逻辑 / UI 脚本默认不进包。以前这里一刀切，MapSwitcher
+        # 那种「整个 mod 只有一个 .reds」的也被拦，它的地图地名永远进不去。
+        # 现在按目录判：目录里的脚本**全部**在本次投递范围内才放行 —— 模组
+        # 被卸载/升级后，游戏里剩下的仍是一套完整编译单元，不会 UNRESOLVED_IMPORT。
         if rel.lower().endswith(".reds") and not is_localization_package(src):
-            errors.append("%s: 跳过（redscript 逻辑文件不投递）" % rel)
-            _log("跳过 %s：不是本地化包，文案只进账本" % rel)
-            fail += len(pairs)
-            continue
+            _d = os.path.dirname(rel).replace("\\", "/").lower()
+            disk = _disk_reds(mod_root, rel)
+            pack = reds_in_pack.get(_d) or set()
+            if not disk or disk != pack:
+                errors.append(
+                    "%s: 跳过（目录内还有 %d 个脚本不在本次范围）"
+                    % (rel, max(0, len(disk) - len(pack))))
+                _log("跳过 %s：目录内脚本不完整（%d/%d 在范围内）"
+                     % (rel, len(pack), len(disk)))
+                fail += len(pairs)
+                continue
+            _log("投递 %s：目录内 %d 个脚本全部在范围内" % (rel, len(disk)))
         dst = os.path.join(temp, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         try:
