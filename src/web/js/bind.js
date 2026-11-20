@@ -381,7 +381,7 @@ function bind() {
     translateRows(originalIndicesForRow(row));
   };
   // 机翻期间这个按钮被遮罩挡住，停止入口在遮罩里（btn-tr-stop）。
-  $("btn-tr-all").onclick = () => translateRows(null);
+  $("btn-tr-all").onclick = () => translateVisibleUnfilled();
   // 遮罩上的这颗按钮是两个流程共用的出口：机翻走 stop_translate，批量走
   // batch_cancel（由 enterBatchMask 切 data-mode）。
   $("btn-tr-stop").onclick = async () => {

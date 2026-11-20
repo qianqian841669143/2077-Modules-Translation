@@ -1117,6 +1117,31 @@ function syncClearedRows(indices) {
   return _transSync;
 }
 
+/* 「翻译全部未填」以前翻的是整个模组里所有未填行——左栏点了某个文件、
+   搜索框里填了词、筛选选了「未填译文」，全都不算数，它照旧把几千行一次
+   发出去。现在按当前看得见的范围来：左栏点一个文件就只翻那个文件，搜索
+   了就只翻命中的，跳过的行不算。合并视图下一行代表同一句的好几处，按
+   原始索引展开，别只翻其中一条。 */
+function translateVisibleUnfilled() {
+  const list = filtered().filter(
+    (r) => !r.skip && !String(r.trans || "").trim());
+  if (!list.length) {
+    toast(state.onlyFile
+      ? T("这个文件里没有未填的行。")
+      : T("当前筛选范围里没有未填的行。"), "err");
+    return;
+  }
+  const ids = [];
+  const seen = new Set();
+  list.forEach((row) => {
+    originalIndicesForRow(row).forEach((i) => {
+      const n = Number(i);
+      if (Number.isInteger(n) && !seen.has(n)) { seen.add(n); ids.push(n); }
+    });
+  });
+  translateRows(ids, false);
+}
+
 /* force=true 是「重新翻译」：手上已有的译文不算数，后端也不许查基线。
    普通机翻要跳过已填的行，重翻则相反——要的正是把那几行重新发出去。 */
 async function translateRows(indices, force) {
