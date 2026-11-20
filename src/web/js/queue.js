@@ -3,7 +3,8 @@
    2026-11-20 从 app.js 原样拆出，只搬运不改逻辑。
    ============================================================ */
 function openQueue() {
-  if (state.mbRunning) { showBatchPanel(); return; }  // 跑着的时候遮罩在最上层
+  // 跑着的时候遮罩盖在最上层，入口点不到；万一被程序化调用，就只提示一句。
+  if (state.mbRunning) { toast(T("批量翻译正在进行，进度显示在遮罩上")); return; }
   openModal("modal-queue");
   refreshQueueInfo();
   if (state.mbItems.length) renderQueue();
@@ -13,8 +14,12 @@ function openQueue() {
 /* 批量遮罩：和机翻同一个思路，跑的时候整块界面盖住，停止入口在遮罩里。
  *
  * 遮罩永远在最上层（style.css 里 .overlay 的 z-index 是 400，比 .mask.top 的
- * 300 还高）。批量面板本身是 .mask，跑起来会被遮罩盖住——要看列表就点遮罩上
- * 的「显示面板」，遮罩临时收起；面板一关，遮罩立刻回来接着挡。
+ * 300 还高）。2026-11-20 去掉了遮罩上的「显示面板」入口：那个口子一开就回不来
+ * （openQueue 在跑着时只会再收一次遮罩），界面在半锁状态（state.busy 还是 true）
+ * 下能被随便点。现在遮罩一旦盖上就盖到跑完，进度全靠遮罩自己说：
+ *   第几行：模组级进度（17 / 40 个模组）—— 队列写
+ *   进度条：模组级 —— 队列写
+ *   第三行：当前模组名 + 该模组内部的条数进度 —— queue 写名字，events 写条数
  */
 function enterBatchMask() {
   const ov = $("overlay");
@@ -23,10 +28,11 @@ function enterBatchMask() {
   const t = $("overlay-text");
   if (t) t.textContent = T("批量翻译进行中…");
   const cnt = $("ov-count");
-  if (cnt && !state.mbIndex) cnt.textContent = "0 / " + Number(state.mbTotal || 0);
+  if (cnt && !state.mbIndex) cnt.textContent = "0 / " + Number(state.mbTotal || 0) + " " + T("个模组");
+  const now = $("ov-now");
+  if (now) { now.textContent = ""; delete now.dataset.name; }
   const st = $("btn-tr-stop");
   if (st) { st.dataset.mode = "batch"; st.textContent = T("停止批量"); st.disabled = false; }
-  if ($("btn-ov-panel")) $("btn-ov-panel").style.display = "";
   const app = document.querySelector("main.app");
   if (app) app.inert = true;
   state.busy = true;
@@ -38,21 +44,11 @@ function exitBatchMask() {
   if (ov) ov.classList.remove("on", "batch");
   const st = $("btn-tr-stop");
   if (st) { delete st.dataset.mode; st.textContent = T("停止机翻"); st.disabled = false; }
-  if ($("btn-ov-panel")) $("btn-ov-panel").style.display = "none";
+  const now = $("ov-now");
+  if (now) { now.textContent = ""; delete now.dataset.name; }
   const app = document.querySelector("main.app");
   if (app) app.inert = false;
   state.busy = false;
-}
-
-/* 遮罩上的「显示面板」：面板现在是模组列表页里常显的一条，不用再开弹窗——
- * 收起遮罩、解掉 inert（面板在 main 里面，锁着就点不动），再切到那一页。 */
-function showBatchPanel() {
-  const ov = $("overlay");
-  if (ov) ov.classList.remove("on");
-  const app = document.querySelector("main.app");
-  if (app) app.inert = false;
-  switchPage("manage");
-  if (typeof syncModsBar === "function") syncModsBar();
 }
 
 async function pickMbOutDir() {
@@ -365,7 +361,7 @@ function onMbStart(e) {
   }
   $("q-summary").textContent = msg;
   enterBatchMask();
-  $("ov-count").textContent = "0 / " + Number(state.mbTotal || 0).toLocaleString();
+  $("ov-count").textContent = "0 / " + Number(state.mbTotal || 0).toLocaleString() + " " + T("个模组");
   syncQueueStart();
   try { if (typeof syncModsBar === "function") syncModsBar(); } catch (_) {}
 }
@@ -381,7 +377,14 @@ function onMbItem(e) {
     $("q-bar").style.width = Math.round(((e.index || 0) / total) * 100) + "%";
     $("ov-bar").style.width = Math.round(((e.index || 0) / total) * 100) + "%";
     $("ov-count").textContent = (Number(e.index || 0) + 1).toLocaleString()
-      + " / " + Number(e.total || 0).toLocaleString();
+      + " / " + Number(e.total || 0).toLocaleString() + " " + T("个模组");
+    // 遮罩第三行：当前模组名。名字存在 data-name 里，条数由 events.js 的
+    // progress 事件拼在后面——那边拿不到模组名。
+    const now = $("ov-now");
+    if (now) {
+      now.dataset.name = e.name || key;
+      now.textContent = now.dataset.name;
+    }
     $("q-summary").textContent = T("(%d/%d) 正在处理 %s")
       .replace("%d", (e.index || 0) + 1).replace("%d", e.total || 0)
       .replace("%s", e.name || key);
@@ -416,7 +419,10 @@ function onMbItem(e) {
   $("q-bar").style.width = Math.round(((e.done || 0) / total) * 100) + "%";
   $("ov-bar").style.width = Math.round(((e.done || 0) / total) * 100) + "%";
   $("ov-count").textContent = Number(e.done || 0).toLocaleString()
-    + " / " + Number(e.total || 0).toLocaleString();
+    + " / " + Number(e.total || 0).toLocaleString() + " " + T("个模组");
+  // 这个模组做完了：第三行只剩名字，等下一个模组的条数过来拼
+  const now = $("ov-now");
+  if (now && now.dataset.name) now.textContent = now.dataset.name;
 }
 
 function onMbDone(e) {

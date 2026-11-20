@@ -586,9 +586,11 @@
     <div class="ovbar"><div class="ovbar-fill" id="ov-bar"></div></div>
     <div class="ovrow">
       <span id="ov-count">0 / 0</span>
-      <button class="btn" id="btn-ov-panel" data-i18n="显示面板" style="display:none">显示面板</button>
       <button class="btn danger" id="btn-tr-stop" data-i18n="停止机翻">停止机翻</button>
     </div>
+    <!-- 当前在处理哪个模组 + 这个模组内部的条数进度。批量时由 queue.js
+         写前半段（模组名，存在 data-name 里）和 events.js 写后半段（条数）。 -->
+    <div class="ovnow" id="ov-now"></div>
   </div>
 </div>
 

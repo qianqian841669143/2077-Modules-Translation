@@ -136,10 +136,21 @@ function onEvt(e) {
     $("progress").classList.add("on");
     const pct = e.total ? Math.round((e.done / e.total) * 100) : 0;
     $("bar").style.width = pct + "%";
-    // 进度同时投到遮罩里：机翻时整块界面被盖住，只有遮罩上的这条看得见。
-    $("ov-bar").style.width = pct + "%";
-    $("ov-count").textContent =
-      Number(e.done || 0).toLocaleString() + " / " + Number(e.total || 0).toLocaleString();
+    const doneTxt = Number(e.done || 0).toLocaleString();
+    const totTxt = Number(e.total || 0).toLocaleString();
+    if (state.mbRunning) {
+      // 批量：进度条和 ov-count 归队列管（那两个说的是「第几个模组」），这里
+      // 只补遮罩第三行的当前模组条数。以前两边都写 ov-count / ov-bar，遮罩上
+      // 的数字每几百毫秒就在「第几个模组」和「第几条文本」之间来回跳。
+      const now = $("ov-now");
+      if (now) {
+        const nm = now.dataset.name || "";
+        now.textContent = (nm ? nm + " · " : "") + doneTxt + " / " + totTxt + " " + T("条");
+      }
+    } else {
+      $("ov-bar").style.width = pct + "%";
+      $("ov-count").textContent = doneTxt + " / " + totTxt;
+    }
     // note: 批次跳过、模型预热这类一次性说明，下一批进度会把它盖掉。
     const line = e.note || T("机翻中 %d / %d ...").replace("%d", e.done).replace("%d", e.total);
     setStatus(line);

@@ -710,6 +710,15 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
   border-color: color-mix(in srgb, var(--text) 20%, transparent);
   border-top-color: var(--primary);
 }
+/* 遮罩第三行：当前处理哪个模组 + 这个模组内部的条数进度。
+   以前靠「显示面板」跑去看列表，现在进度都摆在这一行。
+   min-height 占位，避免这一行空→有字时整个遮罩往上跳。 */
+.ovnow {
+  color: var(--muted); font-size: 12.5px;
+  text-align: center; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  min-height: 1.2em; max-width: 100%;
+}
 /* 遮罩里的「显示面板 / 停止批量」：浅色幕上白底白幕，得靠描边和一点阴影
    把边界立起来，否则看不出那儿有按钮 */
 .overlay .btn {

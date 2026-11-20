@@ -393,14 +393,9 @@ function bind() {
     if (mode === "batch") await pywebview.api.batch_cancel();
     else await pywebview.api.stop_translate();
   };
-  $("btn-ov-panel").onclick = () => showBatchPanel();
-
   const closeMask = (m) => {
     if (!m) return;
     m.classList.remove("on");
-    // 批量还在跑：面板一关就把遮罩放回去。遮罩永远在最上层，才是真正挡住
-    // 主界面的那一层；只靠面板会把「关掉面板还能点别的」这个口子留着。
-    if (m.id === "modal-queue" && state.mbRunning) enterBatchMask();
   };
   document.querySelectorAll("[data-close]").forEach((b) => {
     b.onclick = () => closeMask(b.closest(".mask"));
