@@ -150,29 +150,63 @@ selftest 本来就因为引用已删除的 `src\web\app.js` 跑不通，下次�
 **续跑**：`_mb_journal_read()` 现在把 `failed > 0` 的记录排除在「已完成」之外。
 否则修好写回之后，那批模组会被整块跳过，永远补不上。
 
-## 当前基线（2026-11-20 10:59）
+## 运行时接管 ImGui，自绘设置页也能翻（2026-11-20，提交 `7f66ca2`）
 
-- 最新提交：`d9fa20e fix(archive): 归档行改成走组包通道，重建 _zh-cn.archive 并进总包`
-- `dist\2077ModTranslator.exe`：14,092,814 字节，2026-11-20 10:59:09，
-  SHA256 前 32 位 `CE4C1B17D833BD12AAC61340EE22FA3A`
-- 这一版从 exe 里读回校验过：`mod_pack.classify` 有 `resource` 常量、
-  `mod_batch.finish` 调 `_apply_resource` / `_pack_pending_state` / 按 `kind`
-  分流、`web_app._mb_journal_read` 有 `missed` 变量
-- 10:46 那一版的批量遮罩修复仍生效：跑完不再被遮罩盖回来、遮罩第三行有
-  「已翻译 X / Y 条」
-- 更早的改造仍有效：撤销/还原已删、`revert_source` 不在包里、预扫描按文件记明细
-- **装上后要点一次「预扫描」**：老 `mods_scan.json` 只有条数没有 `perFile`，
-  304 个模组会被重扫一遍，展开才有文件列表
+现象：CTO（Complete Third Person Overhaul）装了单模组包、也 Deploy 了，游戏里
+设置页还是全英文。查下来不是部署也不是译文的问题：
 
-## 下一轮：重跑归档模组
+- 这个模组的设置页是**自己用 ImGui 画的**：`M.UI.check` = `ImGui.Checkbox`、
+  `M.UI.head` = `ImGui.TextColored`、`M.UI.tip` = `ImGui.SetTooltip`
+  （`...\mods\CompleteThirdPersonOverhaul\init.lua:6475-6481`）
+- 全包 4 个子模组搜 `nativeSettings` / `ModConfigurationMenu` / `addTab(`，
+  **一次都没有**
+- 而运行时 `init.lua` 只挂 `MCM.providers.*.listMods/loadMod`，全文没有一处
+  `ImGui` → 这类界面一条也替不到
 
-修好之后要真正补上那 4,387 条：
+改法：
 
-1. 换新 exe（`d9fa20e` 那版），点「开始批量翻译」
-2. 续跑会因为 `failed > 0` 自动重跑那 87 个模组，不用清空输出
-3. 归档组包慢（每个模组一次 WolvenKit pack），87 个模组预计多花十几分钟；
-   译文没变时 `_reuse_archive` 会命中缓存
-4. 跑完核对：日志里应出现 `stage <模组名> 归档`，`routes.archive` 不再是 0，
-   `E:\Vortex Mods\CP2077 Localization Pack.zip` 里出现 `archive/pc/mod/*.archive`
+- 新增 `src/pack/fix/imgui_hook.lua`：把「第一个参数是显示文字」的绘制函数
+  （`Text`/`TextWrapped`/`Checkbox`/`Button`/`Selectable`/`MenuItem`/
+  `SliderFloat`/`SliderInt`/`Combo`/`BeginCombo`/`CollapsingHeader`/
+  `BeginTabItem`/`TreeNode`/`RadioButton`/`InputText`/`SetTooltip` …）和
+  `TextColored`（文字在最后一位）包一层，调用前用账本的 `globalMap` 换整串。
+  **`Begin`/`End`/`BeginChild`/`PushID` 传的是 id，一律不碰**（改了会串窗口）。
+- `src/pack/fix/init.lua` 读完账本后 `loadfile` 钩子并 pcall 调用，日志写
+  `ImGui 钩子：接管 N 个绘制函数`。
+
+**排障第一个要看的是那行日志**：`N > 0` 说明接管成功；`N = 0` 说明 CET 的
+`ImGui` 表是只读的，这条路走不通，得改回「改字面量当覆盖文件」（风险大，
+445 KB 的脚本改错一处模组就废）。
+
+运行时现在**纳入仓库**了（`src/pack/fix/`）。以前只活在
+`userdata\pack\fix\`，没进版本控制、改完没 diff、没法回滚。`_patch_map()`
+以仓库这份为准，`userdata\pack\fix` 只补内置没有的文件。`spec` 里
+`collect(SRC/pack, "pack")` 把它当数据目录打进去。
+
+## 当前基线（2026-11-20 11:20）
+
+- 最新提交：`7f66ca2 feat(runtime): 运行时接管 ImGui 绘制函数，自绘设置页的模组也能出中文`
+- `dist\2077ModTranslator.exe`：14,099,945 字节，2026-11-20 11:20:05，
+  SHA256 前 32 位 `5736BE3E8B1C926F0054E7734DD58656`
+- 这一版从 exe 里读回：CArchive 有 `pack\fix\{init.lua,imgui_hook.lua,README.txt}`，
+  `init.lua` 正文含 `imgui_hook.lua` 的 loadfile 调用
+- 10:59 / 10:46 两版的修复仍在：归档行走进组包通道、批量跑完不被遮罩盖回来
+- **装上后**：`汉化包`页点「同步账本」就能把新运行时并进 `CP2077 Localization
+  Pack.zip`（`_sync_ledger_to_zip` 走 `_patch_map`），不必重跑整轮批量；
+  单模组的包要重新「应用」一次才有 `imgui_hook.lua`
+- 装完 zip 要在 Vortex 里 Deploy，然后重启游戏（CET 只在启动时读一次
+  `init.lua`）
+
+## 待办：产物名字会撞车
+
+`mod_ledger.folder_name()` 按「文本文件最多的子目录」投票。合集
+`CTO_takedowns-0.24.1_hotfix`（内含 4 个 CET 子模组）和主模组
+`Complete Third Person Overhaul 38266 …` **都会推成 `CompleteThirdPersonOverhaul`**
+（实测两个 root 都返回这个名）。后果：产物 zip 同名、`ledger/mods/<folder>.lua`
+同名、`all.lua` 里 `['CompleteThirdPersonOverhaul']` 是同一段 → 后写的挤掉先写的。
+
+改法：根目录下有多个 CET 子模组时改用 staging 目录名做 folder 键与产物名。
+**这轮没改**。
+
 
 
