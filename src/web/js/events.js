@@ -83,6 +83,7 @@ function onEvt(e) {
   if (e.type === "mb-start") { onMbStart(e); return; }
   if (e.type === "mb-item") { onMbItem(e); return; }
   if (e.type === "mb-done") { onMbDone(e); return; }
+  if (e.type === "mb-packing") { onMbPacking(e); return; }
   if (e.type === "mb-pack") { onMbPack(e); return; }
   if (e.type === "error" && (e.action === "mb" || e.action === "mb-scan")) {
     state.mbRunning = false;
@@ -143,7 +144,8 @@ function onEvt(e) {
       const now = $("ov-now");
       if (now) {
         const nm = now.dataset.name || "";
-        now.textContent = (nm ? nm + " · " : "") + doneTxt + " / " + totTxt + " " + T("条");
+        now.textContent = (nm ? nm + " · " : "") + doneTxt + " / " + totTxt + " " + T("条")
+          + (typeof mbGlobalTxt === "function" ? mbGlobalTxt() : "");
       }
     } else {
       $("ov-bar").style.width = pct + "%";

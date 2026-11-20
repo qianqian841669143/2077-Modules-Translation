@@ -120,7 +120,12 @@ function syncDeployBoxes() {
   dry.parentElement.style.opacity = dv.checked ? "" : ".5";
 }
 
-async function refreshQueueInfo() {
+/* noMask=true：调用方刚处理完 mb-done，这时候绝不能再把遮罩盖回来。
+ * 后端把 _mb_running 置 false 是在 _flush_pack()（并 zip、同步账本）之后，
+ * 比 mb-done 晚好几秒；「刚跑完」这一刻去问 running，回答仍然是 true。
+ * 2026-11-20 就是这里把遮罩重新盖上去的：309/309 跑完，界面却永远停在
+ * 「批量翻译进行中…」，退出只能关窗口。 */
+async function refreshQueueInfo(noMask) {
   try {
     const r = await pywebview.api.batch_info();
     if (!r || !r.ok) return;
@@ -129,7 +134,7 @@ async function refreshQueueInfo() {
     initDeployBoxes(r);
     initTodoFilter(r);
     syncQueueStart();
-    if (r.running) {
+    if (r.running && !noMask) {
       state.mbRunning = true;
       $("btn-q-cancel").style.display = "";
       // 面板开着的时候不要再把遮罩压上来（那会把自己盖住）
@@ -348,10 +353,24 @@ function onMbScanned(e) {
     .replace("%d", e.rows || 0);
 }
 
+/* 遮罩第三行尾部那截「已翻译 X / Y 条」。
+ * 数字来自每个模组的 mb-item 事件：rows 是这个模组的全部文本行，already 是
+ * 本来就已是中文的行，applied 是这一轮真写回去的行——后两者相加就是「这份
+ * 产物里已经是中文的条数」。所以这是「本轮涉及到的文本」的统计，不是整台
+ * 机器的全量（被续跑跳过的模组不会计入总文本数）。 */
+function mbGlobalTxt() {
+  const g = state.mbRowsStat;
+  if (!g || !g.total) return "";
+  return " ｜ " + T("已翻译") + " " + Number(g.hit).toLocaleString()
+    + " / " + Number(g.total).toLocaleString() + " " + T("条");
+}
+
 function onMbStart(e) {
   state.mbRunning = true;
   state.mbTotal = e.total || 0;
   state.mbIndex = 0;
+  // 本轮「已翻译 / 总文本数」的累计器，见 mbGlobalTxt()
+  state.mbRowsStat = { total: 0, hit: 0 };
   $("btn-q-cancel").style.display = "";
   $("q-progress").classList.add("on");
   $("q-bar").style.width = "0%";
@@ -415,14 +434,21 @@ function onMbItem(e) {
   if (e.seconds != null) bits.push(e.seconds + "s");
   if ((e.errors || []).length) bits.push(String(e.errors[0]));
   state.mbDone[key] = { state: st, text: txt, detail: bits.join(" · ") };
+  // 累计「已翻译 / 总文本数」：这个模组的总行数进 total，本来就是中文的
+  // （already）和这一轮写回去的（applied）进 hit。
+  const gstat = state.mbRowsStat;
+  if (gstat) {
+    gstat.total += Number(e.rows || 0);
+    gstat.hit += Number(e.already || 0) + Number(e.applied || 0);
+  }
   renderQueue();
   $("q-bar").style.width = Math.round(((e.done || 0) / total) * 100) + "%";
   $("ov-bar").style.width = Math.round(((e.done || 0) / total) * 100) + "%";
   $("ov-count").textContent = Number(e.done || 0).toLocaleString()
     + " / " + Number(e.total || 0).toLocaleString() + " " + T("个模组");
-  // 这个模组做完了：第三行只剩名字，等下一个模组的条数过来拼
+  // 这个模组做完了：第三行只剩名字 + 本轮累计，等下一个模组的条数过来拼
   const now = $("ov-now");
-  if (now && now.dataset.name) now.textContent = now.dataset.name;
+  if (now && now.dataset.name) now.textContent = now.dataset.name + mbGlobalTxt();
 }
 
 function onMbDone(e) {
@@ -450,11 +476,25 @@ function onMbDone(e) {
   if (e.cancelled) msg = T("已取消。") + " " + msg;
   $("q-summary").textContent = msg;
   toast(msg, err ? "err" : "ok");
-  refreshQueueInfo();
+  refreshQueueInfo(true);     // 刚收到 mb-done：只刷目录信息，别再盖遮罩
   syncQueueStart();     // 跑完了把「全选 / 反选 / 开始」重新放开
   // 状态变了：模组列表页那几条要重新读一遍，批量条的按钮也要跟着放开
   try { if (typeof refreshMods === "function" && _modsData) refreshMods(); } catch (_) {}
   try { if (typeof syncModsBar === "function") syncModsBar(); } catch (_) {}
+}
+
+/* 翻译全跑完、正在把覆盖文件并进汉化包的那几秒（本机实测 4 秒左右）。
+ * 这时候遮罩已经摘掉了（见 refreshQueueInfo 的 noMask），所以这句话写在
+ * 状态栏上。数字由后端从本轮结果里算，比前端累计准：前端漏掉了被续跑
+ * 跳过、没发 mb-item 的那些模组。 */
+function onMbPacking(e) {
+  const rows = Number(e.rows || 0);
+  const done = Number(e.done || 0);
+  const msg = T("正在把补丁并入汉化包…");
+  setStatus(rows
+    ? msg + " " + T("已翻译 %d / %d 条")
+      .replace("%d", done.toLocaleString()).replace("%d", rows.toLocaleString())
+    : msg);
 }
 
 function onMbPack(e) {

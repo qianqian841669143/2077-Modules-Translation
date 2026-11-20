@@ -388,8 +388,20 @@ function bind() {
     if (b) b.disabled = true;
     $("ov-count").textContent = T("正在停止...");
     setStatus(T("正在停止..."));
-    if (mode === "batch") await pywebview.api.batch_cancel();
-    else await pywebview.api.stop_translate();
+    if (mode === "batch") {
+      await pywebview.api.batch_cancel();
+      // batch_cancel 只是置个标志位就返回：worker 可能早就结束了（事件却已经
+      // 取完），那样不会有 mb-done 跟回来，遮罩就永远摘不掉。这里问一次真状态。
+      let info = null;
+      try { info = await pywebview.api.batch_info(); } catch (_) {}
+      if (info && info.ok && !info.running) {
+        state.mbRunning = false;
+        exitBatchMask();
+        $("q-summary").textContent = T("批量已经结束，遮罩已关闭。");
+        syncQueueStart();
+        setStatus(T("批量已经结束，遮罩已关闭。"));
+      }
+    } else await pywebview.api.stop_translate();
   };
   const closeMask = (m) => {
     if (!m) return;

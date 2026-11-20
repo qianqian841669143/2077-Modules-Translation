@@ -2740,6 +2740,17 @@ class Api(object):
                 self._mb_results = MB.run(ctx, items)
                 # 覆盖文件是边跑边攒的（collect），收尾一次性并进 zip，
                 # 顺带把账本 / 运行时 / 说明同步进去（见 _flush_pack）。
+                # 并 zip 要几秒，这段得让界面说清楚在干什么：mb-done 已经发过，
+                # 遮罩也摘了，所以给一句带准数的「正在并入汉化包」。
+                try:
+                    rs = self._mb_results or []
+                    self._mb_push({"type": "mb-packing",
+                                   "rows": sum(int(r.get("rows") or 0) for r in rs),
+                                   "done": sum(int(r.get("already") or 0)
+                                               + int(r.get("applied") or 0)
+                                               for r in rs)})
+                except Exception:
+                    pass
                 try:
                     flushed = self._flush_pack()
                     self._mb_push({"type": "mb-pack",
