@@ -858,6 +858,21 @@ def scan_source(text, lang):
             i += 1
             continue
         # ---- 注释
+        # Lua 块注释 `--[[ ... ]]` / `--[=[ ... ]=]` 必须先处理：当成行注释
+        # 截到换行，注释正文会被当代码继续扫，`[` 和引号一错就提前 break，
+        # 后面的整个文件都提取不到。2026-11-21：HUD Fixes 的 init.lua
+        # 开头就是 `--[[ DISCLAIMER:`，66 KB 文件只扫到 1000 个 token，
+        # `Click a button` 在 5284 字符处，一条都没进账本。
+        if lua and text.startswith("--[", i):
+            m = LONG_OPEN_RE.match(text, i + 2)
+            if m:
+                close = "]" + m.group(1) + "]"
+                j = text.find(close, m.end())
+                if j < 0:
+                    break
+                line += text.count("\n", i, j)
+                i = j + len(close)
+                continue
         if lua and text.startswith("--", i):
             j = text.find("\n", i)
             if j < 0:
