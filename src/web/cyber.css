@@ -53,6 +53,7 @@ html, html[data-theme="light"], html[data-theme="dark"] {
 }
 
 html, body { background: var(--bg); color: var(--text); }
+html { color-scheme: dark; }   /* 原生滚动条/输入框按深色画，别冒出浅灰条 */
 body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 
 /* ------------------------------------------------------- 标题条 / 顶栏 */
@@ -277,30 +278,39 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .statusbar { height: 34px; padding: 0 14px; border-top: 1px solid var(--border);
              font-size: 12px; color: var(--muted); }
 
-/* --------------------------------------------------------- 模组清单页 */
-.mtools { display: flex; align-items: center; gap: 8px; padding: 14px 20px 0;
-          overflow: hidden; }
-.mtools .input { height: 34px; }
-.mtools .chip { height: 30px; flex: none; }
-.mright { margin-left: auto; display: flex; align-items: center; gap: 14px;
-          font-size: 12.5px; color: var(--muted); white-space: nowrap; }
-.mright b { color: var(--text); }
-.minibar { width: 140px; height: 6px; border-radius: 3px; background: #232430;
-           overflow: hidden; }
-.minibar i { display: block; height: 6px; background: var(--success); }
-.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-.dot.c { background: var(--cyan); }  .dot.g { background: var(--success); }
-.dot.a { background: var(--amber); } .dot.d { background: #4a4c58; }
-
 /* --------------------------------------------------------- 模组列表页
-   对齐规则：工具条 / 批量条 / 设置条 / 列头 / 每一行，内容左边界一律
-   var(--pad)=20px；右侧多留 --sbw=8px 给列表滚动条，否则滚动条一出现，
-   表格就比上面的功能栏窄一截。 */
+   从上到下四行，内容左边界一律 var(--pad)=20px：
+     1) 两条路径 + 归档/贴图开关
+     2) 左「导出/清空」 右「全选 + 已选 + 开始批量翻译」
+     3) 搜索 + 筛选（紧贴表格）
+     4) 列头 + 列表
+   右侧多留 --sbw=8px 给列表滚动条，否则滚动条一出现表格就比上面窄一截。 */
+
+/* 1) 路径行 */
+.mpaths { display: flex; align-items: center; gap: 8px;
+          padding: 12px calc(var(--pad) + var(--sbw)) 0 var(--pad); }
+.mpaths .input { height: 32px; }
+.mpaths .btn { height: 32px; flex: none; }
+.mpaths .chk { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+
+/* 2) 操作行：左边导出/清空，右边勾选与开始 */
+.mactions { display: flex; align-items: center; gap: 10px; height: 40px;
+            margin: 2px calc(var(--pad) + var(--sbw)) 0 var(--pad); }
+.mcheck { display: flex; align-items: center; gap: 7px; font-size: 13px;
+          color: #9a9cb0; cursor: pointer; white-space: nowrap; }
+.mcheck input { accent-color: var(--primary); cursor: pointer; }
+.mseln { font-size: 12.5px; color: var(--dim2); white-space: nowrap; }
+.mseln b { color: var(--text); font-weight: 600; }
+.mactions .btn.primary { height: 28px; padding: 0 13px; font-size: 12.5px;
+                         border-radius: 14px; }
+.mactions .btn.primary:disabled { opacity: .45; }
+
+/* 3) 搜索 + 筛选：紧贴表格上方 */
 .mtools { display: flex; align-items: center; gap: 8px;
-          padding: 12px calc(var(--pad) + var(--sbw)) 0 var(--pad);
+          padding: 4px calc(var(--pad) + var(--sbw)) 8px var(--pad);
           overflow: hidden; }
-.mtools .input { height: 34px; }
-.mtools .chip { height: 30px; flex: none; }
+.mtools .input { height: 32px; }
+.mtools .chip { height: 28px; flex: none; }
 .mright { margin-left: auto; display: flex; align-items: center; gap: 14px;
           font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 .mright b { color: var(--text); }
@@ -311,13 +321,18 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .dot.c { background: var(--cyan); }  .dot.g { background: var(--success); }
 .dot.a { background: var(--amber); } .dot.d { background: #4a4c58; }
 
-/* 列表滚动容器：列头粘在顶上，和行共享同一份宽度 */
+/* 4) 列表滚动容器。列头粘在顶上、和行共享同一份宽度；滚动条用标准
+   scrollbar-width: thin（8px），细、暗、hover 才亮，不抢表格的视线。 */
 .mscroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
-           padding: 0 var(--pad); scrollbar-gutter: stable; }
-.mscroll::-webkit-scrollbar { width: var(--sbw); }
+           padding: 0 var(--pad); scrollbar-gutter: stable;
+           scrollbar-width: thin; scrollbar-color: #2f313d transparent; }
+/* style.css 里有一条全局 ::-webkit-scrollbar{width:10px}，一旦它存在
+   Chromium 就只认它、忽略 scrollbar-width，所以这里必须再钉一次 8px，
+   不然列表的槽比 --sbw 宽 2px，表头又会跟上面的功能栏差一点。 */
+.mscroll::-webkit-scrollbar { width: var(--sbw); height: var(--sbw); }
 .mscroll::-webkit-scrollbar-track { background: transparent; }
-.mscroll::-webkit-scrollbar-thumb { background: #2b2d38; border-radius: 4px; }
-.mscroll::-webkit-scrollbar-thumb:hover { background: #3d3f4d; }
+.mscroll::-webkit-scrollbar-thumb { background: #2f313d; border-radius: 4px; }
+.mscroll::-webkit-scrollbar-thumb:hover { background: #454754; }
 .groups { min-height: 0; }
 .grp { height: 44px; display: flex; align-items: center; gap: 12px;
        padding: 0; background: #0e0f14;
@@ -329,21 +344,6 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .grp .gt { font-size: 12.5px; color: var(--amber); }
 .grp .gd { font-size: 12.5px; color: var(--success); }
 .grp .go { font-size: 12.5px; color: var(--danger); }
-
-/* 批量条：一行说完「勾了什么、跑几个、输出到哪」。 */
-.mbar { display: flex; align-items: center; gap: 12px; height: 40px;
-        margin: 8px calc(var(--pad) + var(--sbw)) 0 var(--pad); padding: 0; }
-.mbar .mcheck { display: flex; align-items: center; gap: 7px; font-size: 13px;
-                color: #9a9cb0; cursor: pointer; white-space: nowrap; }
-.mbar .mcheck input { accent-color: var(--primary); cursor: pointer; }
-.mbar .mseln { font-size: 12.5px; color: var(--dim2); white-space: nowrap; }
-.mbar .mseln b { color: var(--text); font-weight: 600; }
-.mbar .btn.primary { height: 28px; padding: 0 13px; font-size: 12.5px;
-                     border-radius: 14px; }
-.mbar .btn.primary:disabled { opacity: .45; }
-.mbar .mpath { margin-left: auto; font-size: 11.5px; color: #5b5d6b;
-               overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-               max-width: 46%; }
 
 /* 列头：模组 / 状态 / 已填 / 总条数（跟着列表一起滚，粘顶） */
 .mhead { position: sticky; top: 0; z-index: 2; display: grid;
@@ -471,26 +471,9 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .setgroup { display: none; }
 .setgroup.on { display: block; }
 
-/* 批量翻译的设置：从弹窗搬进页面后完全平铺（不再折叠、不再有二级菜单），
-   左边和上面的功能栏对齐，右边同样避开滚动条。 */
-.mbpanel, .mbpanel.wide {
-  position: static; width: auto; max-width: none; max-height: none;
-  margin: 2px calc(var(--pad) + var(--sbw)) 0 var(--pad);
-  border: 0; border-radius: 0; background: transparent; box-shadow: none;
-}
-.mbpanel .modal-head { display: none; }
-.mbpanel .modal-body { overflow: visible; max-height: none; padding: 0; }
-.mbpanel .modal-body > .hint:first-child { display: none; }   /* 那段说明留到设置里 */
-.mbpanel .modal-body .row { padding: 4px 0 0; }
-.mbpanel .modal-body .row.gap { gap: 8px; }
-.mbpanel .modal-foot { display: none; }
-/* 全选 / 全不选 / 反选 那一整行也没用了（勾选在列表上），连行带空隙一起去掉 */
-.mbpanel .modal-body > .row:has(#q-sel-count) { display: none; }
-/* 勾选和开始都在上面那条批量条上，这里不再重复 */
-.mbpanel #btn-q-start, .mbpanel #btn-q-cancel, .mbpanel #btn-q-scan,
-.mbpanel #q-progress, .mbpanel #btn-q-all, .mbpanel #btn-q-none,
-.mbpanel #btn-q-invert, .mbpanel #q-sel-count, .mbpanel #q-list,
-.mbpanel #q-summary { display: none; }
+/* 批量里那些只剩状态用途的件（进度条 / 汇总 / 预扫列表）统一藏起来：
+   它们的 id 还在（queue.js 按 id 找），但界面由上面四行和遮罩负责。 */
+#mb-host { display: none; }
 
 /* ------------------------------------------------- 表格：5 列窄版布局 */
 /* 三栏之后中间只剩 600 出头，8 列挤不下（原来的 974px 要横向滚动）。

@@ -359,6 +359,13 @@ function renderMods() {
   box.innerHTML = parts.length ? parts.join("")
     : `<p class="hint" style="padding:14px 20px">${esc(T("没有匹配的模组。"))}</p>`;
   _modsRows = rows;
+  // 滚动条实际占多宽由浏览器定（style.css 有一条全局 10px 的 ::-webkit-scrollbar），
+  // 量一次写进 --sbw：上面的功能栏靠它知道右边该留多少，才能和表格右边界齐平。
+  const sc = box.closest(".mscroll");
+  if (sc) {
+    const g = sc.offsetWidth - sc.clientWidth;
+    if (g > 0) document.documentElement.style.setProperty("--sbw", g + "px");
+  }
   syncModsBar();
 
   // 右上角：已汉化 N / 总数 + 进度条
@@ -404,15 +411,6 @@ function syncModsBar() {
         : T("开始批量翻译");
     }
   }
-  const p = $("mods-path");
-  if (p) {
-    const s = state.settings || {};
-    const from = String(s.staging_dir || "").trim();
-    const qo = $("q-out");
-    const to = String((qo && qo.value) || s.batch_out_dir || "").trim();
-    p.textContent = from ? from + "   →   " + (to || T("（还没设输出目录）")) : "";
-    p.title = p.textContent;
-  }
 }
 
 /* 批量条的「开始」：勾了哪几个就跑哪几个。
@@ -425,9 +423,7 @@ async function startModsBatch() {
   const outDir = String((qo && qo.value)
     || (state.settings || {}).batch_out_dir || "").trim();
   if (!outDir) {
-    toast(T("请先设置批量输出目录（右下角 ⚙ 里）"), "err");
-    const host = $("mb-host");
-    if (host) host.hidden = false;
+    toast(T("请先在最上面填好批量输出目录"), "err");
     if (qo) qo.focus();
     return;
   }

@@ -264,19 +264,9 @@ function bind() {
       showSetGroup(b.getAttribute("data-sec"));
     };
   }
-  // ---- 批量面板就地嵌入模组列表页（不再走弹窗，DOM 只搬一次，id 全保留）----
-  // 现在整个设置条直接平铺在页面上，没有折叠开关，所以不再有 btn-queue。
-  const mbHost = $("mb-host"), qMask = $("modal-queue");
-  if (mbHost && qMask) {
-    const card = qMask.querySelector(".modal");
-    if (card) {
-      card.classList.add("mbpanel");
-      mbHost.appendChild(card);
-      qMask.style.display = "none";
-      try { openQueue(); } catch (_) {}   // 先把安装缓存 / 输出目录填好
-      qMask.classList.remove("on");
-    }
-  }
+  // ---- 批量翻译的输入/开关已经直接摆在模组列表页上（#mpaths / #mactions），
+  // 这里只把初值填一遍：安装缓存目录、输出目录、部署开关。 ----
+  try { refreshQueueInfo(); } catch (_) {}
   $("btn-q-pick").onclick = () => pickMbDir();
   $("btn-q-start").onclick = () => startQueue();
   $("btn-q-cancel").onclick = async () => {
