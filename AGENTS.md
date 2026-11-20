@@ -101,9 +101,15 @@ selftest 本来就因为引用已删除的 `src\web\app.js` 跑不通，下次�
 前端展开时**所有文件都列**，已翻完的也列，只是标「已翻完」；空列表按
 `orphan` / 未扫过 / 只有条数 / 账本里没有可翻文本四种情况分别给话。
 
-## 当前基线（2026-11-20 10:05）
+## 当前基线（2026-11-20 10:07）
 
-- 最新提交：`1177b86 refactor: 删掉「撤销上次应用」「还原翻译」，不再写撤销快照`
-- `dist\2077ModTranslator.exe`：**还是 09:45 那一版**，14,114,897 字节，
-  SHA256 前 32 位 `DD5B5DE1B6283DA49EEF29DC3C50A057`；上面两个提交
-  （预扫描文件明细、删撤销/还原）**都还没进 exe**，要重新打包才生效
+- 最新提交：`a441381 docs: 记下已删的撤销/还原与本轮预扫描明细的改法，更新基线`
+- `dist\2077ModTranslator.exe`：14,087,617 字节，2026-11-20 10:07:09，
+  SHA256 前 32 位 `76261E8C5521DF5763407C4A3D1EDE9B`
+  （比上一版小 27,280 字节，少的就是删掉的 `revert_source.py` 与撤销代码）
+- 这一版从 exe 里读回校验过：`web_app` 有 `_scan_files`/`_scan_need`、无
+  `undo_last`/`revert_mod`；`mod_batch` 有 `_per_file_rows`；`mod_deploy` 无
+  `undo_root`；`revert_source` 不在 PYZ；`dialogs.js` 有「只统计了条数」；
+  `table.js`/`index.html`/`apply.js`/`events.js`/`core.js` 无旧符号
+- **装上后要点一次「预扫描」**：老 `mods_scan.json` 只有条数没有 `perFile`，
+  304 个模组会被重扫一遍，展开才有文件列表
