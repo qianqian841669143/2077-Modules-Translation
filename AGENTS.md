@@ -203,9 +203,9 @@ selftest 本来就因为引用已删除的 `src\web\app.js` 跑不通，下次�
 - `src/pack/fix/init.lua` 读完账本后 `loadfile` 钩子并 pcall 调用，日志写
   `ImGui 钩子：接管 N 个绘制函数`。
 
-**排障第一个要看的是那行日志**：`N > 0` 说明接管成功；`N = 0` 说明 CET 的
-`ImGui` 表是只读的，这条路走不通，得改回「改字面量当覆盖文件」（风险大，
-445 KB 的脚本改错一处模组就废）。
+**排障第一个要看的是那行日志**：`N > 0` 说明接管成功。`N = 0` 时**不要**直接
+判成「只读」——2026-11-20 就吃过这个亏，真正原因是成员不是 Lua `function`
+而是 `__call` 对象，见下面「ImGui 钩子：第一道类型判断把路堵死了」。
 
 运行时现在**纳入仓库**了（`src/pack/fix/`）。以前只活在
 `userdata\pack\fix\`，没进版本控制、改完没 diff、没法回滚。`_patch_map()`
@@ -299,31 +299,60 @@ TrueFirstPersonCamera 与 CTO 的 `.reds` 全部走账本。
   （注意：staging 里存在的 `.xl` 不必在 `archive/pc/mod` 下——`ModSettings.archive.xl`
   就在 `red4ext\plugins\mod_settings\` 里，别按目录去判。）
 
-## 当前基线（2026-11-20 13:37）
+## ImGui 钩子：第一道类型判断把路堵死了（2026-11-20，提交 `29bcc43`）
 
-- 最新提交：`ccc0430 fix(ledger): 账本合并写 + 钩子收 log + extend 目标校验`
-  （前一个：`21bc928 feat(batch): 批量遮罩按「条」显示进度，不再只报模组个数`）
-- `dist\2077ModTranslator.exe`：14,105,087 字节，2026-11-20 13:37:32，
-  SHA256 前 32 位 `A9054F19BFA08FAC96F92212D2369C2B`
-  唯一备份 `dist\2077ModTranslator.exe.bak-20261120-1350`（12:46 那版
-  14,103,676 B，`4D81AB05…`；更早的 `bak-20261120-1246` / `1207` 已被清掉）
+13:40:35 那次游戏内日志（已经是新包、带 `log` 的诊断）：
+
+```
+ImGui 钩子：读到 0 个绘制函数，但一个都写不回去（ImGui 是只读的）
+ImGui 钩子：接管 0 个绘制函数
+```
+
+**别被那句话骗了**：`seen == 0` 的真实含义是 24 个名字一个都不是
+`type(v) == "function"` —— 赋值从头到尾没试过，所以根本不是「只读」。
+CET 的 ImGui 成员是 sol2 绑出来的可调用对象（userdata / table，靠
+`__call` 调用），`type()` 不是 `"function"`。
+
+现在：
+
+- 新增 `isCallable()`：`function` 直接算；`userdata` / `table` 看
+  `getmetatable` 的 `__call`。`mtOf()` 对受保护的 metatable 做了 pcall 兜底
+- 启动打一行诊断：`ImGui=…，ImGui.Text=…，metatable=…，__index=…，__newindex=…`
+- 写回失败的报错原文不再被 pcall 吞掉；全失败/部分失败分别打
+  `读到 N 个绘制函数，但一个都写不回去：<报错>` /
+  `N 个里有 M 个写不回去（名字…）`
+- `seen == 0` 时改说「N 个名字里一个都没读到可调用对象」
+
+自证方式（不用进游戏）：`python -m pip install --target _tmp\_lua lupa`，用
+lupa 起真 Lua 跑四种 ImGui 形状 —— 普通函数表 / 成员是 `__call` 表 /
+`__newindex` 抛错 / 成员是 string。实测 25 / 25 / 0 / 0 接管，
+且前两种里 `Text('Hello')` 真的返回了「你好」。
+
+**下一步看日志就知道卡在哪**：下一版启动会打出 ImGui 到底是什么类型；
+若 `wrapped` 仍为 0，看那句报错原文决定是走「代理全局 ImGui」（只在
+全局表可替换时有效）还是彻底放弃这条路。
+
+## 当前基线（2026-11-20 13:48）
+
+- 最新提交：`29bcc43 fix(runtime): ImGui 成员是 __call 对象，只认 function 导致一个都没接管`
+  （前两个：`ccc0430 fix(ledger): 账本合并写 + 钩子收 log + extend 目标校验`、
+  `37ce073 docs: 基线换到 13:37 版`）
+- `dist\2077ModTranslator.exe`：14,106,162 字节，2026-11-20 13:48:35，
+  SHA256 前 32 位 `BF17FBBF02DF714BDF153BDBF8ECB4F4`
+  备份：`bak-20261120-1348`（13:37 那版 14,105,087 B，`A9054F19…`）、
+  `bak-20261120-1350`（12:46 那版 14,103,676 B，`4D81AB05…`）
 - 从新 exe 里读回并**逐函数比对过字节码**（`co_code` / `co_names` /
-  `co_varnames` / 常量）：`web_app`（入口，235 个函数）、`mod_ledger`（28 个）、
-  `localization.pipeline`（55 个）与 `src\` 当前内容**零差异**；
-  `mod_ledger` 有 `_merge_entries` / `_read_entries`，`pipeline` 有
-  `is_file` + 常量「extend 目标 %s 不存在，改成独立配置」，入口
-  `Api.batch_start` 仍有 `textTotal`
-- 从 exe 里读回：`pack\fix\init.lua` 13,197 B sha1[:12] `4492ce92600e`
-  （含 `pcall(install, function(t) return globalMap[t] end, log)`）、
-  `imgui_hook.lua` 4,336 B `9687cd81f65c`、`README.txt` 2,174 B，三者与
-  `src\pack\fix\` 同名文件 sha1 一致
+  `co_varnames` / 常量）：`mod_ledger`（28 个函数）、`localization.pipeline`
+  （55 个）与 `src\` 当前内容**零差异**
+- 从 exe 里读回：`pack\fix\imgui_hook.lua` 6,588 B sha1[:12] `290149e09b98`
+  （含 `isCallable` / `mtOf` / `ImGui=%s` 诊断 / 「一个都没读到可调用对象」）、
+  `init.lua` 13,197 B `4492ce92600e`，与 `src\pack\fix\` 同名文件 sha1 一致
 - 从新 exe 里读回：`web\js\queue.js` 26,294 B（`renderMaskCount` ×6、
   `Math.max(est, real)`、`已翻译 %d / %d 条`）、`web\js\events.js` 12,666 B
   （`renderMaskCount` ×3）、`mod_batch` 有 `textTotal`、入口有 `textTotal`；
   `mbGlobalTxt` 两处都是 0
 - 从 exe 里读回：`init.lua`（`cat.settings` / `cat.items` 回退、
-  `add("ledger/all.lua")`、`relPath`）、`imgui_hook.lua`
-  （`kind ~= "userdata"`、`local seen = 0`）
+  `add("ledger/all.lua")`、`relPath`）
 - 11:54 那版的两条修复都在：`.reds` 只投本地化包、账本走裸相对路径
 - **MCM 文本链**：MCM UI 读 `ModConfigurationMenuAPI`，API 的 provider 来自三个
   bridge（`native_settings` / `ms` / `rcf`），**设置项一律放在
@@ -332,17 +361,29 @@ TrueFirstPersonCamera 与 CTO 的 `.reds` 全部走账本。
 - 账本覆盖率：Codeware「原生设置」的 2,540 个 displayName/description 里，
   1,559 条（61.4%）能在账本里查到原文；没命中的多是数字与含引号嵌套的串
 - 装上新包后：`sync` 一次 → Vortex 重装 zip → Deploy → 重启游戏；
-  日志应见 `账本 ledger/all.lua：N 条` + `ImGui 钩子：接管 M 个绘制函数`
-  （M=0 时新版会打出「读到 K 个绘制函数，但一个都写不回去」，据此判断
-  是类型不对还是只读）
+  日志应见 `账本 ledger/all.lua：N 条` + `ImGui 钩子：ImGui=…` 诊断 +
+  `ImGui 钩子：接管 M 个绘制函数`
 
-## 待办：产物名字会撞车
+## 待办：产物名字会撞车（已确认造成真实丢失）
 
 `mod_ledger.folder_name()` 按「文本文件最多的子目录」投票。合集
 `CTO_takedowns-0.24.1_hotfix`（内含 4 个 CET 子模组）和主模组
 `Complete Third Person Overhaul 38266 …` **都会推成 `CompleteThirdPersonOverhaul`**
 （实测两个 root 都返回这个名）。后果：产物 zip 同名、`ledger/mods/<folder>.lua`
 同名、`all.lua` 里 `['CompleteThirdPersonOverhaul']` 是同一段 → 后写的挤掉先写的。
+
+**2026-11-20 查到实证**（这就是 Bounty Contracts 设置项全英文的原因）：
+
+- 预扫描 `BountyContracts 2.2.1 - Eddies only 37879 …` 有 **8,070 条 / 5 个文件**
+- 但 `ledger\mods\BountyContracts.lua` 里只有 1 条，`mod = 'NCPD Dispatch Phone
+  (optional add-on) …'`，12:57:53 写入 —— 两个模组都推成 `BountyContracts`，
+  后者把前者整份盖了
+- 同样的撞车：`Much Better Netrunning - Unnetworked Enemies Fix`（预扫 293 条）
+  → 记进 `BetterNetrunning`（主模组 281 条）；`Immersive First Person - ITP
+  Compatibility` → `ImmersiveFirstPerson`；`Immersive Night City Fixes` 的子包
+  → `INCF-CORE`；`Slots Slots Slots` 两份 → `SlotsSlotsSlots`
+- 合并写（`ccc0430`）之后这种撞车**不再丢条目**（两份合进同一个文件，运行时
+  按原文查表，两边都能替），但**已经丢的要重跑对应模组**才回来
 
 改法：根目录下有多个 CET 子模组时改用 staging 目录名做 folder 键与产物名。
 **这轮没改**。
