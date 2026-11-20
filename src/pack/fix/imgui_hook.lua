@@ -96,8 +96,21 @@ return function(lookup, log)
     end
 
     memoN = memoN + 1
-    local zh = lookup(base)
-    if type(zh) ~= "string" or zh == "" or zh == base then
+    -- 先查整串：像 ImGui.Begin("Character Preset Manager (CET)##CPM2") 这种把
+    -- ## 写在字面量里的，账本存的就是整串，切掉之后再查永远 miss。
+    -- Checkbox 那种「标题 .. '##id'」是运行时拼的，整串查不到，才轮到底下按
+    -- 切掉 ## 的 base 查。
+    local zh = nil
+    if tail ~= "" then
+      local whole = lookup(s)
+      if type(whole) == "string" and whole ~= "" and whole ~= s then
+        zh = whole
+      end
+    end
+    if not zh then
+      zh = lookup(base)
+    end
+    if type(zh) ~= "string" or zh == "" or zh == base or zh == s then
       zh = nil
     end
     if not zh then
@@ -134,7 +147,9 @@ return function(lookup, log)
     end
     if zh then
       local out = zh
-      if tail ~= "" then
+      -- 尾巴（##控件id）必须原样留住，否则 Checkbox 的 id 就变了。但整串命中时
+      -- 账本那份译文本身可能就带着这段尾巴，别拼第二遍。
+      if tail ~= "" and out:sub(-#tail) ~= tail then
         out = zh .. tail
       end
       memo[s] = out
@@ -206,8 +221,44 @@ return function(lookup, log)
     end
   end
 
-  -- 只收「第一个参数是给人看的文字」的那些；Begin / End / BeginChild / PushID
-  -- 之类传的是 id，改了会串窗口，一律不碰。
+  -- 窗口标题（ImGui.Begin 的第一个参数）也是给人看的：CTO / Immersive First
+  -- Person 的设置窗口标题就是它（init.lua 的 ImGui.Begin("Immersive First
+  -- Person")）。以前整条 Begin 都不碰 —— 同一个字符串既是标题又是窗口 id，
+  -- 换掉它等于换了个窗口，大小 / 位置 / 折叠状态全重置。
+  -- 用 ImGui 的 ### 语法把 id 钉在原文上：显示中文，id 从 ### 之后那段算，
+  -- 每帧拼出来的串都一样，所以 id 稳定（只是跟原来那个 id 不同：
+  -- 这个窗口的位置和折叠状态会重置一次，之后不再变）。
+  local function wrapWindow()
+    local okr, f = pcall(function() return ImGui.Begin end)
+    if not okr or not isCallable(f) then
+      return
+    end
+    seen = seen + 1
+    local ok, err = pcall(function()
+      ImGui.Begin = function(name, ...)
+        -- 以 ## 开头的标题是「只有 id、没有可见文字」的窗口（##tooltip /
+        -- ##BountyHud 这种），一个字节都不能动：显示文字是空的，改了只会换 id。
+        if type(name) == "string" and name ~= "" and name:sub(1, 2) ~= "##" then
+          local zh = tr(name)
+          if zh then
+            name = zh .. "###" .. name
+          end
+        end
+        return f(name, ...)
+      end
+    end)
+    if ok then
+      wrapped = wrapped + 1
+    else
+      failed[#failed + 1] = "Begin"
+      if writeErr == nil then
+        writeErr = tostring(err)
+      end
+    end
+  end
+
+  -- 只收「第一个参数是给人看的文字」的那些；BeginChild / PushID 之类传的是
+  -- id、不显示，一律不碰。Begin 例外：它既显示又是 id，单独包（wrapWindow）。
   local first = {
     "Text", "TextWrapped", "TextDisabled", "TextUnformatted", "BulletText",
     "Checkbox", "Button", "SmallButton", "Selectable", "MenuItem",
@@ -219,12 +270,13 @@ return function(lookup, log)
     wrapFirst(first[i])
   end
   wrapTextColored()
+  wrapWindow()
 
   if log and wrapped == 0 then
     if seen == 0 then
       log(string.format(
         "ImGui 钩子：%d 个名字里一个都没读到可调用对象（成员类型见上面那行诊断）",
-        #first + 1))
+        #first + 2))
     else
       log(string.format("ImGui 钩子：读到 %d 个绘制函数，但一个都写不回去：%s",
         seen, tostring(writeErr)))
