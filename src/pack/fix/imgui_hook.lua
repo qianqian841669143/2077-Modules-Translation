@@ -16,7 +16,15 @@
 local unpack = unpack or table.unpack   -- LuaJIT 是 5.1，只有全局 unpack
 
 return function(lookup, log)
-  if type(ImGui) ~= "table" then
+  local kind = type(ImGui)
+
+  -- CET 的 ImGui 是 sol2 绑定的 **userdata**，type() 返回 "userdata"。
+  -- 2026-11-20 第一版只判 "table"，于是每次启动都停在「接管 0 个绘制函数」，
+  -- CTO 那类自绘设置页一个字都没换（日志里就是这个 0）。
+  if kind ~= "table" and kind ~= "userdata" then
+    if log then
+      log(string.format("ImGui 钩子：ImGui 的类型是 %s，没法接管", kind))
+    end
     return 0
   end
 
@@ -46,6 +54,7 @@ return function(lookup, log)
   end
 
   local wrapped = 0
+  local seen = 0        -- 读到过几个绘制函数：用来区分「读不到」和「写不回去」
 
   -- 第一个参数就是显示文字的：签名不变，只是把那一格换掉再转给原函数。
   -- 不用 {...} + unpack 转发：ImGui.Text 一帧要调几百次，别每次都建表。
@@ -54,6 +63,7 @@ return function(lookup, log)
     if type(f) ~= "function" then
       return
     end
+    seen = seen + 1
     local ok = pcall(function()
       ImGui[name] = function(label, ...)
         if type(label) == "string" then
@@ -107,7 +117,8 @@ return function(lookup, log)
   wrapTextColored()
 
   if log and wrapped == 0 then
-    log("ImGui 钩子：一个函数都没接上（CET 的 ImGui 表是只读的？）")
+    log(string.format(
+      "ImGui 钩子：读到 %d 个绘制函数，但一个都写不回去（ImGui 是只读的）", seen))
   end
   return wrapped
 end
