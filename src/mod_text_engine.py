@@ -3765,22 +3765,36 @@ def apply_json_ex(path, pairs):
         ending = ""
     body = raw[:len(raw) - len(ending)] if ending else raw
 
-    # 探测排版：缩进（1/2/4/制表符/紧凑）× ASCII 转义开关。
+    # 探测排版：缩进 × 分隔符 × 换行 × ASCII 转义。
+    #
+    # 2026-11-21：以前只试 indent / ensure_ascii 两个维度，凡是
+    # `"key":value`（冒号后没空格）或 CRLF 换行的数据表一律被拒 ——
+    # Missing Persons 464 条、Pacifica Typhoon 141 条、MCM 298 条
+    # 就是这么整份写不进去的。这里把 separators 和换行也纳入重建条件：
+    # 仍然要求逐字节一致，只是允许更多合法的排版组合。
     style = None
-    for ind in (1, 2, 4, "\t", None):
-        for ea in (False, True):
-            try:
-                if json.dumps(obj, indent=ind, ensure_ascii=ea) == body:
-                    style = (ind, ea)
+    for sep in (None, (",", ":")):
+        for ind in (1, 2, 4, "\t", None):
+            for ea in (False, True):
+                try:
+                    built = json.dumps(obj, indent=ind, ensure_ascii=ea,
+                                       separators=sep)
+                except Exception:
+                    continue
+                if built == body:
+                    style = (ind, ea, sep, "\n")
                     break
-            except Exception:
-                continue
+                if built.replace("\n", "\r\n") == body:
+                    style = (ind, ea, sep, "\r\n")
+                    break
+            if style:
+                break
         if style:
             break
     if not style:
-        return fail("这份 JSON 的排版无法原样重建（缩进/转义/键序与标准序列化不一致），"
-                    "为避免改坏整份文件，已拒绝写回")
-    ind, ea = style
+        return fail("这份 JSON 的排版无法原样重建（缩进/分隔符/换行/转义"
+                    "与标准序列化不一致），为避免改坏整份文件，已拒绝写回")
+    ind, ea, sep, nl = style
 
     changed, fails = 0, []
     for idx, (ptr, orig, trans) in enumerate(pairs):
@@ -3799,7 +3813,10 @@ def apply_json_ex(path, pairs):
     if not changed:
         return 0, fails
 
-    out = json.dumps(obj, indent=ind, ensure_ascii=ea) + ending
+    out = json.dumps(obj, indent=ind, ensure_ascii=ea, separators=sep)
+    if nl != "\n":
+        out = out.replace("\n", nl)
+    out += ending
     try:
         json.loads(out)
     except Exception:
