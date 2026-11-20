@@ -204,15 +204,18 @@ function renderSide() {
   });
   const items = [
     '<div class="fitem' + (state.onlyFile ? "" : " on") + '" data-file="">' +
-    '<div class="n">' + esc(T("全部文件")) + '<span class="cnt">' + rows.length +
+    '<div class="n"><span class="nm">' + esc(T("全部文件")) +
+    '</span><span class="cnt">' + rows.length +
     "</span></div><div class=\"d\">" + map.size + " " + esc(T("个文件")) +
     "</div></div>",
   ];
   [...map.entries()].sort((a, b) => b[1].n - a[1].n).forEach(([name, g]) => {
     const on = state.onlyFile === name ? " on" : "";
     const done = g.f === g.n;
-    items.push('<div class="fitem' + on + '" data-file="' + esc(name) + '">' +
-      '<div class="n">' + esc(name) + '<span class="cnt">' + g.n + "</span></div>" +
+    items.push('<div class="fitem' + on + '" data-file="' + esc(name) +
+      '" title="' + esc(name) + '">' +
+      '<div class="n"><span class="nm">' + esc(name) +
+      '</span><span class="cnt">' + g.n + "</span></div>" +
       '<div class="d">' + esc(T(g.type || "")) + " · " +
       '<span class="' + (done ? "g" : "") + '">' + g.f + "/" + g.n + "</span></div></div>");
   });

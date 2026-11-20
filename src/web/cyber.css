@@ -49,13 +49,20 @@ html, html[data-theme="light"], html[data-theme="dark"] {
   --head-h:        44px;
   --nav-h:         48px;
   --pad:           20px;   /* 页面左右内容线的基准，所有横条/表头/行都对齐到它 */
-  --sbw:           8px;    /* 列表滚动条宽度，右侧留白要算上它 */
+  --sbw:           6px;    /* 列表滚动条宽度，右侧留白要算上它 */
   --edge:          10px;   /* 窗口右边缘的拖拽死区：滚动条不能贴着窗口边，
                               否则想拖窗口改宽度时鼠标先抓到了滚动条 */
 }
 
 html, body { background: var(--bg); color: var(--text); }
 html { color-scheme: dark; }   /* 原生滚动条/输入框按深色画，别冒出浅灰条 */
+
+/* 所有内部滚动条统一：6px、暗色、悬停才亮一点。
+   style.css 那条是 10px + var(--border)，在文件列表这种窄栏里太占地方。 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #30323e; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4a4c59; }
 body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 
 /* ------------------------------------------------------- 标题条 / 顶栏 */
@@ -171,12 +178,18 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 .fitem {
   border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px;
   margin-bottom: 8px; background: var(--panel); cursor: pointer;
+  overflow: hidden;   /* 长文件名不许冲出圆角 */
 }
 .fitem:hover { border-color: var(--line2); }
 .fitem .n { font-size: 14px; color: #eef0f8; display: flex; align-items: center;
-            gap: 8px; }
-.fitem .n .cnt { margin-left: auto; font-size: 12px; color: var(--dim2); }
-.fitem .d { font-size: 12px; color: var(--dim2); margin-top: 3px; }
+            gap: 8px; min-width: 0; }
+/* 文件名一律单行省略：路径能长到一屏装不下，撑开卡片比截断难看得多
+   （完整路径挂在卡片和这一行的 title 上，悬停能看） */
+.fitem .n .nm { flex: 1; min-width: 0; overflow: hidden;
+                text-overflow: ellipsis; white-space: nowrap; }
+.fitem .n .cnt { flex: none; margin-left: 8px; font-size: 12px; color: var(--dim2); }
+.fitem .d { font-size: 12px; color: var(--dim2); margin-top: 3px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fitem .d .g { color: var(--success); }
 .fitem.on { border-color: #3f9fd0; background: #131a22; }
 .side .sfoot { margin-top: 8px; font-size: 12px; color: var(--dim2);
@@ -488,18 +501,24 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
   gap: 10px;
 }
 .trow { min-height: 46px; }
+/* .td 自己是 flex + align-items:center（style.css 里给单元格居中用的），
+   这里改成 stretch：不然 .frow 只按内容宽度长，168px 的格子能被撑到 812px，
+   省略号永远出不来。 */
 .trow .td.file { display: flex; flex-direction: column; justify-content: center;
-                 gap: 2px; min-width: 0; }
+                 align-items: stretch; gap: 2px; min-width: 0; }
 .trow .td.file .frow { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.trow .td.file .fname { overflow: hidden; text-overflow: ellipsis;
-                        white-space: nowrap; }
+/* 文件名必须能收缩：flex 子项默认 min-width:auto，路径一长就把整格撑破、
+   省略号根本画不出来（实测 168px 的格子被撑到 812px） */
+.trow .td.file .fname { flex: 1; min-width: 0; overflow: hidden;
+                        text-overflow: ellipsis; white-space: nowrap; }
 .trow .td.file .fsub { display: flex; align-items: center; gap: 6px;
-                       font-size: 10.5px; color: var(--dim2); }
+                       font-size: 10.5px; color: var(--dim2);
+                       overflow: hidden; white-space: nowrap; }
 .ftype { font-size: 10px; border: 1px solid var(--line2); border-radius: 4px;
          padding: 0 4px; color: var(--muted); white-space: nowrap; }
 .ftype.t-long { color: var(--amber); border-color: rgba(240,180,41,.4); }
 .trow .td.orig { display: flex; flex-direction: column; justify-content: center;
-                 gap: 3px; min-width: 0; }
+                 align-items: stretch; gap: 3px; min-width: 0; }
 .trow .td.orig .otext { overflow: hidden; text-overflow: ellipsis;
                         white-space: nowrap; }
 .trow .td.orig .osub { font-family: Consolas, monospace; font-size: 10.5px;

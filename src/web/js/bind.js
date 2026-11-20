@@ -557,7 +557,8 @@ function initSplitters() {
       const w0 = el.getBoundingClientRect().width;
       const move = (ev) => {
         const dx = (k === "side") ? ev.clientX - x0 : x0 - ev.clientX;
-        const w = Math.max(150, Math.min(640, Math.round(w0 + dx)));
+        // 150px 的时候文件卡里的路径只剩「en-us.j…」，太窄了，最少留 200
+        const w = Math.max(200, Math.min(640, Math.round(w0 + dx)));
         root.style.setProperty(vkey(k), w + "px");
       };
       const up = () => {
