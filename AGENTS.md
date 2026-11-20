@@ -332,21 +332,52 @@ lupa 起真 Lua 跑四种 ImGui 形状 —— 普通函数表 / 成员是 `__cal
 若 `wrapped` 仍为 0，看那句报错原文决定是走「代理全局 ImGui」（只在
 全局表可替换时有效）还是彻底放弃这条路。
 
-## 当前基线（2026-11-20 13:48）
+### 装上了、在翻译，但 Checkbox 一行没翻：`##控件id`（2026-11-20，提交 `fc7a67f`）
 
-- 最新提交：`29bcc43 fix(runtime): ImGui 成员是 __call 对象，只认 function 导致一个都没接管`
-  （前两个：`ccc0430 fix(ledger): 账本合并写 + 钩子收 log + extend 目标校验`、
-  `37ce073 docs: 基线换到 13:37 版`）
-- `dist\2077ModTranslator.exe`：14,106,162 字节，2026-11-20 13:48:35，
-  SHA256 前 32 位 `BF17FBBF02DF714BDF153BDBF8ECB4F4`
-  备份：`bak-20261120-1348`（13:37 那版 14,105,087 B，`A9054F19…`）、
-  `bak-20261120-1350`（12:46 那版 14,103,676 B，`4D81AB05…`）
+13:51:48 的日志：`ImGui=table，ImGui.Text=userdata，metatable=无` +
+`接管 25 个绘制函数` —— 钩子真的生效了，`ImGui.Text` 画的标题全成中文
+（「任务自动追踪选项：」「音频选项：」…），但同一个窗口里 Checkbox 全是英文。
+
+根因（Untrack Quest Ultimate `init.lua:2599`）：
+
+```lua
+ImGui.Checkbox(title .. '##preventUntrackedMainQuests.', ...)
+```
+
+ImGui 的 `##` / `###` 是「显示文字 / 控件 id」分隔符，传给 ImGui 的是
+`"Prevent Main Quest Re-tracking.##preventUntrackedMainQuests."`，
+账本里只有前半截，整串查必然 miss。这个模组 20 多个 Checkbox 全是这个写法。
+
+`tr()` 现在：
+
+- 查表前切掉第一个 `##` 之后的部分，命中后把尾巴**原样拼回去**（控件 id 一个字
+  不动，勾选状态不会串）
+- 整串 miss 时去掉句尾 `.` / `:` / `：` 再查一次
+- 反过来也补一次：界面文字不带句号、账本那份带（nativeSettings 的文案常这样）
+- 不认识的串一个字节都不换
+
+对照：`Immersive First Person` 传的是裸字面量（`ImGui.Checkbox("GigaV", …)`），
+所以它的勾选项能翻；`Bounty Contracts` 也传裸字面量，界面还全英文纯粹因为
+**它的账本被同名文件夹覆盖了**（见「待办：产物名字会撞车」），跟钩子无关。
+
+## 当前基线（2026-11-20 13:58）
+
+- 最新提交：`fc7a67f fix(runtime): ImGui 标签带 ##控件id，整串查表查不到`
+  （前几个：`29bcc43` ImGui 类型判断、`ccc0430` 账本合并写、
+  `7516fc0` docs）
+- `dist\2077ModTranslator.exe`：14,106,546 字节，2026-11-20 13:58:56，
+  SHA256 前 32 位 `DED94C0D66022BB825D69243F71FFABD`
+  备份：`bak-20261120-1355`（13:48 那版 14,106,162 B，`BF17FBBF…`）、
+  `bak-20261120-1348`（13:37 版 14,105,087 B，`A9054F19…`）、
+  `bak-20261120-1350`（12:46 版 14,103,676 B，`4D81AB05…`）
 - 从新 exe 里读回并**逐函数比对过字节码**（`co_code` / `co_names` /
   `co_varnames` / 常量）：`mod_ledger`（28 个函数）、`localization.pipeline`
   （55 个）与 `src\` 当前内容**零差异**
-- 从 exe 里读回：`pack\fix\imgui_hook.lua` 6,588 B sha1[:12] `290149e09b98`
-  （含 `isCallable` / `mtOf` / `ImGui=%s` 诊断 / 「一个都没读到可调用对象」）、
-  `init.lua` 13,197 B `4492ce92600e`，与 `src\pack\fix\` 同名文件 sha1 一致
+- 从 exe 里读回：`pack\fix\imgui_hook.lua` 8,288 B sha1[:12] `4e718df43038`
+  （`isCallable` / `mtOf` / `ImGui=%s` 诊断 / `s:find("##", 1, true)` /
+  `base .. "."` / 「切掉 ## 之后的部分」）、`init.lua` 13,197 B
+  `4492ce92600e`、`README.txt` 2,174 B `1efbaf8e6380`，与 `src\pack\fix\`
+  同名文件 sha1 一致
 - 从新 exe 里读回：`web\js\queue.js` 26,294 B（`renderMaskCount` ×6、
   `Math.max(est, real)`、`已翻译 %d / %d 条`）、`web\js\events.js` 12,666 B
   （`renderMaskCount` ×3）、`mod_batch` 有 `textTotal`、入口有 `textTotal`；
