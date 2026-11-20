@@ -207,7 +207,7 @@ textarea.input { height: auto; min-height: var(--ctl-h); max-height: 76px; paddi
 }
 .menu .btn:hover { background: var(--primary-soft); color: var(--primary); }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
-/* 危险操作（还原翻译）在菜单里单独标红，别和「清空当前译文」并排同色 */
+/* 危险操作（停止机翻）在菜单里单独标红，别和普通项并排同色 */
 .btn.danger { color: #d14343; }
 .btn.danger:hover { background: #fdeaea; border-color: #d14343; }
 

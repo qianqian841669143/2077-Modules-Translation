@@ -313,7 +313,7 @@ def forget_in(mod_root, memory, lang):
 # ------------------------------------------------------------------ 部署
 
 
-def deploy_mod(src_dir, dst_dir, undo_root=None, dry_run=False,
+def deploy_mod(src_dir, dst_dir, dry_run=False,
                label="批量部署", pairs_list=None, done=None, log=None):
     """把 `src_dir` 里有的文件覆盖到 `dst_dir`，返回报告。
 
@@ -336,14 +336,6 @@ def deploy_mod(src_dir, dst_dir, undo_root=None, dry_run=False,
     if _inside(src, dst) or _inside(dst, src):
         return dict(rep, ok=False, error="副本与原目录互相包含，拒绝部署")
 
-    tx = None
-    if not dry_run and undo_root:
-        try:
-            import undo_store
-            tx = undo_store.ApplyTransaction(undo_root, label)
-        except Exception:
-            tx = None
-
     for dirpath, dirnames, filenames in os.walk(src):
         dirnames[:] = [d for d in dirnames if d.lower() != ".git"]
         rel_dir = os.path.relpath(dirpath, src)
@@ -364,8 +356,6 @@ def deploy_mod(src_dir, dst_dir, undo_root=None, dry_run=False,
                     if why:
                         rep["notes"].append({"path": rel, "why": why})
                     if not dry_run:
-                        if tx is not None:
-                            tx.snapshot(dp)
                         os.makedirs(os.path.dirname(dp) or dst, exist_ok=True)
                         shutil.copy2(sp, dp)
                     rep["overwritten"] += 1
@@ -381,14 +371,6 @@ def deploy_mod(src_dir, dst_dir, undo_root=None, dry_run=False,
                 rep["notes"].append({"path": rel, "why": "写入失败: %s" % ex})
                 if log:
                     log("部署失败 %s: %s" % (rel, ex))
-
-    if tx is not None:
-        try:
-            uid = tx.commit()
-            if uid:
-                rep["undoId"] = uid
-        except Exception:
-            tx.discard()
 
     if not dry_run and rep["files"]:
         record(dst, files=rep["files"], pairs_list=pairs_list, done=done)

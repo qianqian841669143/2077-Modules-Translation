@@ -485,9 +485,8 @@ def finish(ctx, cand, prep, r):
         return
     if items:
         # 批量写的是输出根里的副本：这份副本接下来会被整个部署进游戏目录，
-        # 所以不要 `.bak` 也不要撤销记录（两种情况都是 127 份冗余，实测
-        # 19 MB / 112 MB）。写错了重跑一次批量即可，撤销在这里没有落脚点。
-        res = w._do_apply(items, keep_backup=False, make_undo=False)
+        # 所以不要 `.bak`（127 份冗余，实测 19 MB）。写错了重跑一次批量即可。
+        res = w._do_apply(items, keep_backup=False)
         r["baks"] = drop_backups(dst)
         r["applied"] = int(res.get("ok") or 0)
         r["settled"] = int(res.get("settled") or 0)
@@ -501,7 +500,6 @@ def finish(ctx, cand, prep, r):
             reasons[why] = reasons.get(why, 0) + 1
         r["failReasons"] = dict(sorted(reasons.items(),
                                        key=lambda kv: -kv[1])[:8])
-        r["undoId"] = res.get("undoId") or ""
         if res.get("archive"):
             r["archive"] = res.get("archive")
             r["xl"] = res.get("xl") or ""
@@ -536,7 +534,7 @@ def _deploy_one(ctx, cand, dst, items, r=None):
     try:
         import mod_deploy
         got = mod_deploy.deploy_mod(
-            dst, root, undo_root=root, dry_run=ctx.deploy_dry,
+            dst, root, dry_run=ctx.deploy_dry,
             pairs_list=[(x.get("orig"), x.get("trans")) for x in (items or [])],
             done=stats)
         rep["ok"] = bool(got.get("ok"))
@@ -587,7 +585,7 @@ def run(ctx, cands):
                  "untouched": 0, "untranslated": 0, "untranslatedSample": [],
                  "failReasons": {}, "deploy": None, "skippedDone": "",
                  "prepSeconds": 0.0, "workSeconds": 0.0,
-                 "undoId": "", "empty": False, "archive": "", "xl": "", "baks": 0}
+                 "empty": False, "archive": "", "xl": "", "baks": 0}
             try:
                 if pending is not None and pending[0] == i:
                     prep = pending[1].result()

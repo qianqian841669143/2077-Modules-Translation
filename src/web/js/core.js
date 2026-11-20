@@ -17,7 +17,7 @@ const state = {
   page: 1, pageSize: 200, raw: [], merged: false,
   hidden: new Set(), onlyFile: null, transMode: "",
   localeFiles: [], localeTargets: [], applyErrors: [],
-  resMode: false, resResult: null, revertUndo: false,
+  resMode: false, resResult: null,
   // 批量（单模组功能）：候选来自 staging 目录，逐 mod 复制后翻译
   mbItems: [], mbSel: new Set(), mbDone: {}, mbRunning: false,
   // 把「无需翻译」的目录折起来（todo == 0）。状态不随扫描重置。

@@ -386,10 +386,6 @@ class Api(object):
         # 资源模式（.archive / CR2W）的会话与产物；源码模式下保持 None
         self.l10n_session = None
         self.l10n_result = None
-        # 上一次资源应用落在哪个 mod 根（撤销时用；单独打开归档时 self.root 为空）
-        self.l10n_undo_root = ""
-        # 还原预览的缓存：确认框点过之后直接复用，不再重扫一遍下载目录
-        self._revert_cache = None
         # pywebview 启动时会递归遍历 js_api 的所有公开属性并注入到 JS。
         # 窗口对象必须保存为 _window；若保存成公开的 window，会被当成
         # 可递归对象继续遍历 WebView2 COM 属性，导致启动卡死/界面不刷新。
@@ -1062,7 +1058,6 @@ class Api(object):
         # 切回源码模式：丢掉资源模式的会话，避免误装上一次的产物
         self.l10n_session = None
         self.l10n_result = None
-        self.l10n_undo_root = ""
         self.archive = ""
         root = path
         if path and os.path.isfile(path) and path.lower().endswith(".zip"):
@@ -1563,7 +1558,8 @@ class Api(object):
         r"""从 .archive 的绝对路径反推 mod 根目录。
 
         归档通常躺在 <mod>\archive\pc\mod\ 下，往上找到名为 archive 的那层，
-        它的上一级就是模组根——撤销事务要把产物路径记在模组根之下才能还原。
+        它的上一级就是模组根。撤销功能删掉之后暂时没有调用者，但它是
+        「这个归档属于哪个模组」的唯一判断依据，留着给定位产物用。
         """
         p = str(archive_path or "")
         if not p:
@@ -1704,7 +1700,6 @@ class Api(object):
 
         self.l10n_session = sess
         self.l10n_result = None
-        self.l10n_undo_root = ""
         self.rows = rows
         meta = sess.meta
         meta["filtered"] = skipped
@@ -1829,7 +1824,7 @@ class Api(object):
         except Exception:       # noqa: BLE001
             pass
 
-    def _apply_resource(self, items, tx=None):
+    def _apply_resource(self, items):
         """资源模式的「应用」= 组包，产物写进 mod 目录里归档的旁边。"""
         from localization import verifier as Lverify
 
@@ -1842,21 +1837,6 @@ class Api(object):
         if not outdir:
             return {"ok": 0, "fail": len(items), "mode": "resource",
                     "errors": [self._tr("输出目录不可用")]}
-
-        # 产物落进 mod 目录以后就是实打实的文件了：撤销必须能把它们删掉。
-        # 以前它们躺在 userdata\output，删不删无所谓，所以资源模式没有事务。
-        #
-        # 混合批次由一个事务管两层（见 _apply_mixed）：那种情况下 tx 是传进来的，
-        # 这里只往里记快照，提交/丢弃由调用方负责。
-        undo_root = self._archive_mod_root(
-            getattr(getattr(sess, "target", None), "archive_path", "") or "")
-        own_tx = tx is None
-        if own_tx and undo_root:
-            try:
-                import undo_store
-                tx = undo_store.ApplyTransaction(undo_root, "生成翻译 mod")
-            except Exception:
-                tx = None
 
         applied = []
         # 归档行靠 entryId 定位条目；缺主键时按 (file, 原文) 反查补齐，
@@ -1872,8 +1852,6 @@ class Api(object):
         # 格式串守卫拦下的条目：归到本次应用（Session 可能被复用，按增量取）。
         fmt_skips = list(sess.format_skips[skips_before:])
         if not n:
-            if own_tx and tx is not None:
-                tx.discard()
             errors = self._fmt_skip_errors(fmt_skips)
             errors.append(self._tr("没有可提交的译文"))
             return {"ok": 0, "fail": len(items), "mode": "resource",
@@ -1882,8 +1860,6 @@ class Api(object):
         # 内容与归档里已有的完全一致 -> 不重建。以前这里照样重打包一遍：
         # 字节、时间戳、Vortex 部署状态全变，玩家看到的东西一个都没变。
         if not sess.changed():
-            if own_tx and tx is not None:
-                tx.discard()
             prev_archive = prev_xl = ""
             try:
                 from localization import builder as Lbuild
@@ -1901,7 +1877,6 @@ class Api(object):
                         prev_archive) else "",
                     "xl": prev_xl if os.path.exists(prev_xl) else "",
                     "outdir": str(outdir), "resources": [],
-                    "undoId": "", "undoAvailable": False,
                     "canInstall": False, "memorySaved": 0}
 
         # 归档产物复用（v2.52.0）：源归档与译文对都没变、上次打的包还在，
@@ -1909,32 +1884,13 @@ class Api(object):
         # 带归档的模组吃掉整轮 87% 的时间，而其中绝大多数模组一条译文都没变。
         reuse = self._reuse_archive(sess, items, outdir)
         if reuse:
-            if own_tx and tx is not None:
-                tx.discard()
             return {"ok": n, "fail": len(fmt_skips), "mode": "resource",
                     "unchanged": True,
                     "reused": True, "errors": self._fmt_skip_errors(fmt_skips),
                     "archive": reuse.get("archive", ""),
                     "xl": reuse.get("xl", ""),
                     "outdir": str(outdir), "resources": [],
-                    "undoId": "", "undoAvailable": False,
                     "canInstall": False, "memorySaved": 0}
-
-        # 产物路径能提前算出来（名字固定是 <mod>_zh-cn），先在写之前拍快照，
-        # 撤销时按「本来不存在」把它们删掉；同名旧产物会被还原成覆盖前的内容。
-        if tx is not None:
-            try:
-                from localization import builder as Lbuild
-                names = set()
-                for one in getattr(sess, "sessions", [sess]):
-                    names.add(Lbuild.default_output_name(
-                        getattr(getattr(one, "target", None), "name", ""),
-                        getattr(one, "lang", "zh-cn") or "zh-cn"))
-                for out_name in sorted(names):
-                    for suffix in (".archive", ".archive.xl"):
-                        tx.snapshot(os.path.join(outdir, out_name + suffix))
-            except Exception:
-                pass
 
         try:
             result = sess.build(outdir=outdir)
@@ -1942,8 +1898,6 @@ class Api(object):
             import traceback
             traceback.print_exc()
             self._log_failure("apply-resource", traceback.format_exc())
-            if own_tx and tx is not None:
-                tx.discard()
             return {"ok": 0, "fail": len(items), "mode": "resource",
                     "errors": [str(ex)]}
 
@@ -1972,22 +1926,12 @@ class Api(object):
                 report = Lverify.verify_build(result, sess.last_spec, sess.cli,
                                               sess.workdir)
         except Exception as ex:
-            if own_tx and tx is not None:
-                tx.discard()
             return {"ok": n, "fail": len(items) - n, "mode": "resource",
                     "errors": [self._tr("产物校验异常: %s") % ex],
                     "archive": str(result.archive or ""),
                     "xl": str(result.xl_path or "")}
 
         self.l10n_result = result
-        self.l10n_undo_root = undo_root
-        undo_id = ""
-        if own_tx and tx is not None:
-            try:
-                undo_id = tx.commit()
-            except Exception:
-                tx.discard()
-                undo_id = ""
         problems = list(report.problems)
         if missed_files:
             problems.insert(0, self._tr(
@@ -2013,8 +1957,6 @@ class Api(object):
             "warnings": list(result.warnings),
             "report": report.as_dict(),
             "outdir": str(outdir),
-            "undoId": undo_id,
-            "undoAvailable": bool(undo_id),
             "canInstall": report.ok,
             "memorySaved": saved,
         }
@@ -4011,7 +3953,7 @@ class Api(object):
         # 产物随后并进汉化包 zip 的 archive/pc/mod/ 下。
         if cls.get("archive"):
             try:
-                ar = self._do_apply(cls["archive"], make_undo=not standalone,
+                ar = self._do_apply(cls["archive"],
                                     keep_backup=not standalone)
                 out["ok"] += int(ar.get("ok") or 0)
                 out["fail"] += int(ar.get("fail") or 0)
@@ -4578,15 +4520,15 @@ class Api(object):
         except Exception:
             pass
 
-    def _do_apply(self, items, allow_soft=False, keep_backup=True, make_undo=True):
+    def _do_apply(self, items, allow_soft=False, keep_backup=True):
         """按行的来源分流：归档资源行走组包，其余写回明文源文件。
 
         一个模组可能两层都有（.reds 里有硬编码文案，.archive 里有本地化表），
         必须各走各的路径，不能让一层的产物把另一层顶掉。
 
-        keep_backup / make_undo 只在批量里关掉：批量把整个模组复制到输出根、
-        在副本上写，写完这份副本就是交付物。留 633 个 `.bak`（19 MB）和 127 条
-        指向副本的撤销记录，既进不了游戏又白占磁盘；改错了重跑一遍就行。
+        keep_backup 只在批量里关掉：批量把整个模组复制到输出根、在副本上写，
+        写完这份副本就是交付物。留 633 个 `.bak`（19 MB）既进不了游戏又白占
+        磁盘；改错了重跑一遍就行。
         """
         if not items:
             return {"ok": 0, "fail": 0, "errors": []}
@@ -4594,33 +4536,18 @@ class Api(object):
         src = [it for it in items if (it.get("kind") or "") != "resource"]
         if res and src:
             return self._apply_mixed(res, src, allow_soft=allow_soft,
-                                     keep_backup=keep_backup,
-                                     make_undo=make_undo)
+                                     keep_backup=keep_backup)
         if res:
             return self._apply_resource(res)
         return self._do_apply_source(src, allow_soft=allow_soft,
-                                     keep_backup=keep_backup,
-                                     make_undo=make_undo)
+                                     keep_backup=keep_backup)
 
     def _apply_mixed(self, res_items, src_items, allow_soft=False,
-                     keep_backup=True, make_undo=True):
-        """两层同时提交：资源层出新归档，源码层回写文件，结果分别上报。
-
-        两层共用一个撤销事务。以前各建各的：一次混合应用留下两条记录，用户
-        得连按两次撤销；只撤到其中一条时，另一层已经改过却还在「已应用」的
-        状态里。现在只要是同一次点击写下去的，就一定能一次退干净。
-        """
+                     keep_backup=True):
+        """两层同时提交：资源层出新归档，源码层回写文件，结果分别上报。"""
         out = {"ok": 0, "fail": 0, "errors": [], "layers": {}, "mode": "mixed"}
-        root = (src_items[0].get("root") if src_items else "") or self.root
-        tx = None
-        if root:
-            try:
-                import undo_store
-                tx = undo_store.ApplyTransaction(root, "应用到模组")
-            except Exception:
-                tx = None
         try:
-            r1 = self._apply_resource(res_items, tx=tx)
+            r1 = self._apply_resource(res_items)
         except Exception as ex:
             r1 = {"ok": 0, "fail": len(res_items), "errors": [str(ex)]}
         out["ok"] += int(r1.get("ok") or 0)
@@ -4636,9 +4563,8 @@ class Api(object):
             out["canInstall"] = True
 
         try:
-            r2 = self._do_apply_source(src_items, tx=tx, allow_soft=allow_soft,
-                                       keep_backup=keep_backup,
-                                       make_undo=make_undo)
+            r2 = self._do_apply_source(src_items, allow_soft=allow_soft,
+                                       keep_backup=keep_backup)
         except Exception as ex:
             r2 = {"ok": 0, "fail": len(src_items), "errors": [str(ex)]}
         out["ok"] += int(r2.get("ok") or 0)
@@ -4647,19 +4573,6 @@ class Api(object):
         out["layers"]["source"] = {
             "ok": r2.get("ok", 0), "fail": r2.get("fail", 0)}
 
-        # 两层都动完了才提交。只要有一个文件被写过，这条记录就得留下——
-        # 哪怕另一层失败了，已经落盘的那部分也必须能撤回来。
-        undo_id = ""
-        if tx is not None:
-            try:
-                undo_id = tx.commit()
-            except Exception as ex:
-                out["errors"].append("撤销记录创建失败: %s" % ex)
-                tx.discard()
-                undo_id = ""
-        if undo_id:
-            out["undoId"] = undo_id
-            out["undoAvailable"] = True
         out["failed"] = r2.get("failed") or []
         out["failedTotal"] = r2.get("failedTotal", 0)
         out["settled"] = int(r2.get("settled") or 0)
@@ -4716,11 +4629,9 @@ class Api(object):
         except OSError:
             pass
 
-    def _do_apply_source(self, items, tx=None, allow_soft=False,
-                         keep_backup=True, make_undo=True):
+    def _do_apply_source(self, items, allow_soft=False, keep_backup=True):
         import locale_pack
         import mod_text_engine as E
-        import undo_store
 
         modroot = items[0].get("root") or self.root
         # 语言包行必须带回条目名, 否则写回会退回按行号(会错位)
@@ -4731,13 +4642,6 @@ class Api(object):
         prepared_providers = []
         failed = []
         backup = getattr(E, "backup_file", None) if keep_backup else None
-        # 混合批次由 _apply_mixed 建一个事务、两层共用；单独走源码模式时自己建。
-        own_tx = tx is None and make_undo
-        if own_tx:
-            try:
-                tx = undo_store.ApplyTransaction(modroot, "应用到模组")
-            except Exception:
-                tx = None
         pair_cache = {}
 
         def default_target_code():
@@ -4761,13 +4665,6 @@ class Api(object):
                     pairs = []
                 pair_cache[code] = {p["source"]: p for p in pairs}
             return pair_cache[code].get(src_rel)
-
-        def snapshot(path):
-            if tx is not None:
-                try:
-                    tx.snapshot(path)
-                except Exception:
-                    pass
 
         def add_fail(it, reason, level="hard"):
             failed.append({
@@ -4842,8 +4739,6 @@ class Api(object):
                     ok += len(group)
                     settled += len(group)
                     continue
-            snapshot(dst)
-            snapshot(dst + ".bak")
             mapping = {k: it["trans"] for k, it in group.items()}
             try:
                 if os.path.exists(dst) and backup:
@@ -4877,8 +4772,6 @@ class Api(object):
                 ok += len(group)
                 settled += len(group)
                 continue
-            snapshot(dst_path)
-            snapshot(dst_path + ".bak")
             made = False
             if tgt != src and not os.path.exists(dst_path):
                 try:
@@ -5001,13 +4894,6 @@ class Api(object):
             # 字节，没变就撤掉，别把 20 MB 的垃圾一起部署进游戏目录。
             self._drop_bak_if_same(dst_path)
 
-        undo_id = ""
-        if own_tx and tx is not None:
-            try:
-                undo_id = tx.commit()
-            except Exception as ex:
-                errors.append("撤销记录创建失败: %s" % ex)
-
         # 写回成功的行记进翻译记忆，来源按行上的 transSrc 如实记录。
         #
         # 以前这里只要不是官方就一律记 manual，等于把每条机翻结果都升到最高
@@ -5064,147 +4950,15 @@ class Api(object):
         return {"ok": ok, "fail": fail, "errors": errors[:20],
                 "created": sorted(set(created)),
                 "providers": sorted(set(prepared_providers)),
-                "undoId": undo_id, "undoAvailable": bool(undo_id),
                 "manualSaved": manual, "candidates": candidates,
                 "settled": settled,
                 "failed": failed[:2000], "failedTotal": len(failed)}
 
-    def undo_last(self, root=""):
-        """异步撤销当前模组最近一次应用到模组。"""
-        import undo_store
-        if self._busy:
-            return {"ok": False, "error": "busy"}
-        # 资源模式的产物落在归档所在的 mod 目录，源码模式落在 self.root。
-        # 单独打开归档时 self.root 是空的，得记住那次应用的根。
-        root = root or getattr(self, "l10n_undo_root", "") or self.root or ""
-        if not root or not os.path.isdir(root):
-            return {"ok": False, "error": self._tr("没有可用于撤销的模组目录")}
-        if not undo_store.latest(root):
-            return {"ok": False, "error": self._tr("没有可撤销的应用记录")}
-        self._busy = True
-        self._emit({"type": "busy", "on": True, "text": i18n.tr("正在撤销上次应用 ...")})
-        threading.Thread(target=self._undo_work, args=(root,), daemon=True).start()
-        return {"ok": True, "started": True}
-
-    def _undo_work(self, root):
-        import undo_store
-        try:
-            r = undo_store.undo_last(root)
-            if r.get("ok"):
-                self._emit(dict(r, type="undone"))
-            else:
-                self._emit({"type": "error", "action": "undo",
-                            "message": r.get("error", "")})
-        except Exception as ex:
-            import traceback
-            traceback.print_exc()
-            self._emit({"type": "error", "action": "undo", "message": str(ex)})
-        finally:
-            self._busy = False
-            self._emit({"type": "busy", "on": False})
-
-    def undo_status(self, root=""):
-        """返回当前模组可撤销的写回次数和最近一次信息。"""
-        import undo_store
-        root = root or getattr(self, "l10n_undo_root", "") or self.root or ""
-        items = undo_store.list_transactions(root, 20) if root else []
-        return {"ok": True, "count": len(items),
-                "last": items[0] if items else None}
-
     # ------------------------------------------------------------ 还原翻译
     #
-    # 「撤销」退一步，「还原」退到底：把这个模组里所有被本工具碰过的文件，
-    # 按下载包里的原件恢复，本工具新建的文件删掉。原版文件就躺在 Vortex 的
-    # 下载目录里，比本地快照更权威，也不占额外磁盘。
-
-    def revert_plan(self, root=""):
-        """还原预览：从哪取、恢复几个、删几个、哪些对不上。"""
-        import revert_source
-        import undo_store
-
-        root = root or getattr(self, "l10n_undo_root", "") or self.root or ""
-        files, first_at, count = undo_store.whitelist(root)
-        plan = revert_source.build_plan(
-            root, files, (self.settings.get("downloads_dir") or "").strip(),
-            snapshots=undo_store.earliest_snapshots(root))
-        plan["firstAt"] = first_at
-        plan["records"] = count
-        # 预览要遍历下载目录、还要对每个包跑一遍 tar 列表，几秒钟。确认之后
-        # 真执行时直接复用这份结果，别让用户对着同一个进度条等两遍。
-        self._revert_cache = plan
-        return plan
-
-    def revert_mod(self, root=""):
-        """异步执行还原翻译。"""
-        if self._busy:
-            return {"ok": False, "error": "busy"}
-        plan = self._revert_cache
-        root = root or getattr(self, "l10n_undo_root", "") or self.root or ""
-        if not plan or os.path.normcase(plan.get("root") or "") != \
-                os.path.normcase(os.path.abspath(root or "")):
-            plan = self.revert_plan(root)
-        self._revert_cache = None
-        if not plan.get("ok"):
-            return {"ok": False,
-                    "error": plan.get("error") or self._tr("没有可还原的内容")}
-        self._busy = True
-        self._emit({"type": "busy", "on": True,
-                    "text": i18n.tr("正在还原模组文件 ...")})
-        threading.Thread(target=self._revert_work, args=(plan,),
-                         daemon=True).start()
-        return {"ok": True, "started": True}
-
-    def _revert_work(self, plan):
-        import revert_source
-        import undo_store
-
-        root = plan.get("root") or ""
-        try:
-            # 先拍一张「还原前」的快照：还原点错了还能用「撤销上次应用」退回来。
-            # 快照必须在写之前拍，所以放在 run_plan 前头。
-            tx = None
-            try:
-                tx = undo_store.ApplyTransaction(root, "还原翻译前")
-                targets = [x["rel"] for x in plan.get("restore") or []]
-                targets += list(plan.get("remove") or [])
-                for rel in targets:
-                    try:
-                        tx.snapshot(os.path.join(root, rel.replace("/", os.sep)))
-                    except Exception:
-                        pass
-            except Exception:
-                tx = None
-
-            rep = revert_source.run_plan(plan)
-            undo_id = ""
-            if tx is not None:
-                try:
-                    undo_id = tx.commit() if (rep["files"] or rep["errors"]) else ""
-                    if not undo_id:
-                        tx.discard()
-                except Exception:
-                    tx.discard()
-                    undo_id = ""
-            # 产物已经没了，可安装的对象也就不存在了
-            self.l10n_result = None
-            self._emit({"type": "reverted", "ok": bool(rep.get("ok")),
-                        "files": rep.get("files", 0),
-                        "restored": rep.get("restored") or [],
-                        "removed": rep.get("removed") or [],
-                        "errors": rep.get("errors") or [],
-                        "skipped": plan.get("skip") or [],
-                        "source": plan.get("source") or "",
-                        "undoId": undo_id,
-                        "undoAvailable": bool(undo_id),
-                        "root": root})
-        except Exception as ex:
-            import traceback
-            traceback.print_exc()
-            self._log_failure("revert", traceback.format_exc())
-            self._emit({"type": "error", "action": "revert", "message": str(ex)})
-        finally:
-            self._busy = False
-            self._emit({"type": "busy", "on": False})
+    # 已删除（2026-11-20）：产物现在是独立 zip，要退直接在 Vortex 里卸掉
+    # 那个包。留在模组目录里恢复散文件的「撤销 / 还原」只会让人以为工具还在
+    # 管着原目录，反而危险。
 
     # ------------------------------------------------------------ Excel
     def export_xlsx(self, path, rows):

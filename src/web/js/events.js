@@ -74,8 +74,6 @@ function onEvt(e) {
   if (e.type === "trans-report") { onTransReport(e); return; }
   if (e.type === "loaded") { onLoaded(e); return; }
   if (e.type === "applied") { onApplied(e); return; }
-  if (e.type === "undone") { onUndone(e); return; }
-  if (e.type === "reverted") { onReverted(e); return; }
   if (e.type === "official-built") { onOfficialBuilt(e); return; }
   if (e.type === "mb-scan") { onMbScan(e); return; }
   if (e.type === "mb-scanned") { onMbScanned(e); return; }
@@ -168,14 +166,6 @@ function onEvt(e) {
     // 先关遮罩：下面几个分支会提前 return，放后面就关不掉了。
     if (state.busy) exitTransMask();
     toast(e.message, "err");
-    if (e.action === "undo") {
-      setStatus(T("撤销失败: %s").replace("%s", e.message));
-      return;
-    }
-    if (e.action === "revert") {
-      setStatus(T("还原失败: %s").replace("%s", e.message));
-      return;
-    }
     // 应用失败与机翻失败是两码事：以前一律按「机翻失败」报，状态栏文字
     // 会把用户指到错误的方向。
     if (e.action === "apply") {

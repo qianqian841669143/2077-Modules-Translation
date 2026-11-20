@@ -26,14 +26,12 @@ function bind() {
   };
   $("btn-load").onclick = () => loadMod();
   $("btn-apply").onclick = () => applyAll();
-  $("btn-undo").onclick = () => undoLastApply();
   $("btn-export").onclick = () => exportXlsx();
   $("btn-import").onclick = () => importXlsx();
   $("btn-report").onclick = () => showReport();
   $("btn-clear-trans").onclick = () => clearCurrentTranslations();
   $("btn-clear-rows").onclick = () => clearCurrentRows();
   $("btn-clear-scope").onclick = () => clearScope();
-  $("btn-revert").onclick = () => revertMod();
   bindMoreMenu();
   document.addEventListener("contextmenu", (e) => {
     // 模组行的右键：作用对象是这一个模组，菜单项走 data-mact 那条分支

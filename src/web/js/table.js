@@ -95,10 +95,9 @@ function onLoaded(r) {
   $("btn-pack").style.display = state.archive ? "" : "none";
   state.meta = r.meta || {};
   state.resMode = r.mode === "resource";
-  // 换了一份数据，上一次的产物就与当前表格无关了：撤销与「安装到游戏」
-  // 都必须收回，否则会去装上一批译文打包出来的归档。
+  // 换了一份数据，上一次的产物就与当前表格无关了：「安装到游戏」得收回，
+  // 否则会去装上一批译文打包出来的归档。
   state.resResult = null;
-  state.revertUndo = false;
   state.raw = (r.rows || []).map((x, i) => ({ ...x, _i: i }));
   state.rows = state.raw;
   state.merged = false;
@@ -220,16 +219,11 @@ function baseName(p) {
   return String(p || "").split(/[\\/]/).pop();
 }
 
-/* 两种模式的界面差异集中在这里：资源模式没有行号、没有撤销、没有 zip 打包。 */
+/* 两种模式的界面差异集中在这里：资源模式没有行号、没有 zip 打包。 */
 function applyModeUi() {
   const on = !!state.resMode;
   $("btn-l10n-out").style.display = on ? "" : "none";
   $("btn-l10n-install").style.display = (on && state.resResult) ? "" : "none";
-  // 资源模式过去没有撤销（产物在 userdata\output，删不删无所谓）。现在产物
-  // 落到 mod 目录里成了实打实的文件，必须有办法撤掉，且只在真产出了才亮。
-  $("btn-undo").style.display =
-    (!on || (state.resResult && state.resResult.undoAvailable) || state.revertUndo)
-      ? "" : "none";
   $("btn-pack").style.display = (!on && state.archive) ? "" : "none";
   const th = $("thead").querySelector(".th.line");
   if (th) th.textContent = on ? T("条目 ID") : T("行号");

@@ -6,7 +6,7 @@
     cache        归档目录扫描结果（archive_toc.json）
     work         WolvenKit 解包、组包的中间产物
     batch/out    批量翻译的输出副本（下次跑批量会重新生成）
-    undo         「撤销上次应用」用的文件快照（删了就不能撤销）
+    undo         旧版「撤销上次应用」留下的文件快照（功能已移除，纯占地方）
     corpus       官方语料导出（重建官方语料时重新生成）
     logs/reports 日志与报告
 
@@ -28,8 +28,10 @@ SCOPES = (
     {"key": "batch", "dirs": ("batch/out",), "label": "批量输出副本",
      "note": "下次批量会重新生成，续跑记录与上一轮报告一并删除",
      "files": ("batch/run.jsonl", "batch/last-run.json")},
-    {"key": "undo", "dirs": ("undo",), "label": "撤销记录",
-     "note": "删了就不能再「撤销上次应用」"},
+    # 「撤销上次应用」已经删掉了，但老版本在 userdata\undo 里留下的快照还在：
+    # 没有这个入口用户就只能手动摸到那个目录去删，所以留着项、改掉说明。
+    {"key": "undo", "dirs": ("undo",), "label": "旧撤销记录",
+     "note": "「撤销上次应用」已移除，这些快照只占空间，可以全删"},
     {"key": "corpus", "dirs": ("corpus",), "label": "官方语料导出",
      "note": "重建官方语料时重新生成，需要游戏目录"},
     {"key": "logs", "dirs": ("logs", "reports"), "label": "日志与报告",
