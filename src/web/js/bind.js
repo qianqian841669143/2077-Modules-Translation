@@ -36,6 +36,19 @@ function bind() {
   $("btn-revert").onclick = () => revertMod();
   bindMoreMenu();
   document.addEventListener("contextmenu", (e) => {
+    // 模组行的右键：作用对象是这一个模组，菜单项走 data-mact 那条分支
+    const mg = e.target.closest("#mods-list .grp.mod");
+    if (mg) {
+      const mi = parseInt(mg.getAttribute("data-i"), 10);
+      const mm = _modsRows[mi];
+      if (mm) {
+        e.preventDefault();
+        showModCtxMenu(e.clientX, e.clientY, mm);
+      } else {
+        closeCtxMenu();
+      }
+      return;
+    }
     const row = e.target.closest(".trow");
     if (!row) return;
     e.preventDefault();
@@ -48,10 +61,20 @@ function bind() {
     if (e.key === "Escape") closeCtxMenu();
   });
   $("tbody").addEventListener("scroll", closeCtxMenu, { passive: true });
+  const mscroll = document.querySelector(".mscroll");
+  if (mscroll) mscroll.addEventListener("scroll", closeCtxMenu, { passive: true });
   window.addEventListener("scroll", closeCtxMenu, { passive: true });
   document.addEventListener("click", (e) => {
     const item = e.target.closest("#ctxmenu .item");
     if (!item) { closeCtxMenu(); return; }
+    // 模组行菜单：data-mact 的项作用在 _modsCtx 上，和表格行那套没关系
+    if (item.dataset.mact) {
+      const mod = _modsCtx;
+      closeCtxMenu();
+      if (!mod || item.classList.contains("disabled")) return;
+      onModCtxAct(item.dataset.mact, mod);
+      return;
+    }
     const r = _ctxTarget;
     const cell = _ctxCell;
     const act = item.dataset.act;
@@ -64,6 +87,11 @@ function bind() {
         label ? T("已复制%s").replace("%s", label) : T("已复制"));
       return;
     }
+    if (act === "copy-orig") {
+      copyToClipboard(r.orig || "", T("已复制原文"));
+      return;
+    }
+    if (act === "mark-code") { markRowAsCode(r); return; }
     if (act === "open") {
       if (r.archive) pywebview.api.open_archive_dir(r.archive);
       else pywebview.api.open_dir(state.root || state.modPath, r.file);
@@ -153,7 +181,9 @@ function bind() {
       const g = e.target.closest(".grp");
       if (!g) return;
       const i = parseInt(g.getAttribute("data-i"), 10);
-      const m = (_modsData && _modsData.mods || [])[i];
+      // 下标是「当前筛选后的那一行」，不是 _modsData.mods 的下标：
+      // 一搜索/一筛，两边就对不上，点开的会是另一个模组。
+      const m = _modsRows[i];
       if (!m) return;
       if (_modsOpen.has(m.name)) _modsOpen.delete(m.name);
       else _modsOpen.add(m.name);
@@ -186,6 +216,8 @@ function bind() {
       syncModsBar();
     };
   }
+  const mScan = $("btn-prescan");
+  if (mScan) mScan.onclick = () => modsPrescan();
   const mStart = $("btn-mods-start");
   if (mStart) mStart.onclick = () => startModsBatch();
   $("btn-pack-sync").onclick = async () => {
@@ -309,6 +341,10 @@ function bind() {
 
   document.querySelectorAll(".chip").forEach((c) => {
     if (c.closest("#vmap-filters")) return;   // 映射面板的 chip 有自己的处理
+    // 模组列表那 5 个筛选 chip 也带 .chip，但它们在 141 行已经绑过自己的
+    // onclick。这里再绑一遍会把筛选整片覆盖掉——点了没反应，还往
+    // state.opts[undefined] 里塞脏数据。
+    if (c.closest(".mtools")) return;
     c.onclick = () => {
       c.classList.toggle("on");
       state.opts[c.dataset.opt] = c.classList.contains("on");

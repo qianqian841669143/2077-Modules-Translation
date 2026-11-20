@@ -2446,6 +2446,133 @@ class Api(object):
         self._audit_cache = (now, out)
         return out
 
+    def _scan_cache_path(self):
+        """预扫描条数缓存：``userdata\\mods_scan.json``。"""
+        import appconfig
+        return os.path.join(appconfig.data_dir(), "mods_scan.json")
+
+    def _scan_cache_read(self, staging):
+        """读回上次预扫描的条数：{目录名: {entries, filled, ...}}。
+
+        staging 换了就整份作废——缓存里的目录名是相对某一个安装缓存根说的，
+        换了根之后同名的目录是另一个模组，拿旧条数填进去比「未分析」更糟。
+        """
+        try:
+            with open(self._scan_cache_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:            # noqa: BLE001 - 缓存坏了当没扫过
+            return {}
+        if str(data.get("staging") or "") != str(staging or ""):
+            return {}
+        mods = data.get("mods")
+        return mods if isinstance(mods, dict) else {}
+
+    def _scan_cache_write(self, staging, mods):
+        """原子写回缓存。写不了（只读盘 / 权限）就静默放弃，不拖垮扫描。"""
+        p = self._scan_cache_path()
+        tmp = p + ".tmp"
+        data = {"version": 1, "staging": staging, "ts": int(time.time()),
+                "mods": mods}
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(tmp, p)
+            return True
+        except Exception:            # noqa: BLE001 - 缓存是加速，不是必需品
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return False
+
+    def mods_prescan(self, staging="", force=False):
+        """异步：把还没有账本的模组真扫一遍，条数落进 ``userdata\\mods_scan.json``。
+
+        模组列表上那些「未分析」的，就是 staging 里有目录、账本里没记录的模组：
+        从来没提取过，所以条数是「不知道」而不是 0。这里用和批量翻译同一套
+        提取器（``mod_batch.probe_text``）数一遍，只写缓存，不复制、不翻译、
+        不改模组目录里任何一个字节。
+
+        默认只补「没账本、也没扫过」的目录：已经知道条数的不用再花一分钟。
+        force=True 才全量重扫（模组更新之后条数可能变了）。
+        """
+        import locale_pack
+        if self._mb_running:
+            return {"ok": False, "error": self._tr("批量正在运行")}
+        if self._mb_scanning:
+            return {"ok": False, "error": self._tr("已经在扫描了")}
+        root = (staging or self.settings.get("staging_dir") or "").strip()
+        if not root or not os.path.isdir(root):
+            return {"ok": False,
+                    "error": self._tr("请先在设置里指定 Vortex 安装缓存目录")}
+        target = locale_pack.target_code(self.settings.get("target_lang", "简体中文"))
+        self._mb_scanning = True
+
+        def work():
+            try:
+                import mod_batch as MB
+                items = MB.list_dirs(root)
+                cache = self._scan_cache_read(root)
+                # 账本里已经有记录的不用扫：它的条数是提取时数出来的，比再数一遍准。
+                have = set()
+                ldir = self._ledger_dir() or ""
+                try:
+                    with open(os.path.join(ldir, "index.json"),
+                              "r", encoding="utf-8") as f:
+                        idx = json.load(f)
+                    for m in (idx.get("mods") or []):
+                        if isinstance(m, dict):
+                            k = str(m.get("staging") or m.get("folder") or "")
+                            if k:
+                                have.add(k)
+                except Exception:    # noqa: BLE001 - 没账本就是全都要扫
+                    pass
+                todo = [it for it in items
+                        if force or (it["name"] not in have
+                                     and it["name"] not in cache)]
+                total = len(todo)
+                if not total:
+                    self._mb_push({"type": "mods-scanned", "total": len(items),
+                                   "scanned": 0, "staging": root, "rows": 0})
+                    return
+                for i, it in enumerate(todo):
+                    if self._mb_cancel.is_set():
+                        break
+                    info = MB.probe_text(it["root"], target, measure=True)
+                    loc = int(info.get("localeRows") or 0)
+                    src = int(info.get("sourceRows") or 0)
+                    already = int(info.get("alreadyRows") or 0)
+                    cache[it["name"]] = {
+                        "entries": loc + src + already,
+                        "filled": already,
+                        "fileCount": int(info.get("files") or 0),
+                        "bytes": int(info.get("bytes") or 0),
+                        "error": str(info.get("error") or ""),
+                    }
+                    if i % 3 == 0 or i == total - 1:
+                        self._mb_push({"type": "mods-scan", "done": i + 1,
+                                       "total": total, "name": it["name"]})
+                    # 每 10 个落一次盘：中途关窗口也不用从头再来
+                    if i and i % 10 == 0:
+                        self._scan_cache_write(root, cache)
+                self._scan_cache_write(root, cache)
+                self._mb_push({"type": "mods-scanned", "total": len(items),
+                               "scanned": len(cache), "staging": root,
+                               "rows": sum(int(v.get("entries") or 0)
+                                           for v in cache.values())})
+            except Exception as ex:  # noqa: BLE001 - 报给界面，别让线程静默死
+                import traceback
+                traceback.print_exc()
+                self._mb_push({"type": "error", "action": "mb-scan",
+                               "message": str(ex)})
+            finally:
+                self._mb_scanning = False
+
+        self._mb_cancel.clear()
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True, "started": True}
+
     def batch_scan(self, staging=""):
         """异步：列出 staging 下的一级目录并预扫行数。不复制、不翻译。"""
         import locale_pack
@@ -3978,6 +4105,9 @@ class Api(object):
             return str(v or "").strip().strip('"').strip("'")
 
         staging = _clean(self.settings.get("staging_dir"))
+        # 预扫描落盘的条数（userdata\mods_scan.json）：没有账本的模组靠它把
+        # 「未分析」变成一个真实数字。没扫过就是空字典，一切照旧。
+        scan = self._scan_cache_read(staging)
 
         # 账本索引：staging 目录名 -> {folder, entries, filled, mtime}
         led = {}
@@ -4035,10 +4165,20 @@ class Api(object):
                 seen.add(name)
                 hit = led.get(name)
                 if not hit:
-                    # 没账本 = 新装的、还没提取过
-                    rows.append({"name": name, "folder": "", "entries": 0,
-                                 "filled": 0, "hasLedger": False,
-                                 "orphan": False, "status": "todo"})
+                    # 没账本 = 新装的、还没提取过。扫过就用缓存里的真实条数，
+                    # 没扫过 entries 只能是 0（前端据此显示「未分析」）。
+                    sc = scan.get(name) or {}
+                    e2 = int(sc.get("entries") or 0)
+                    f2 = int(sc.get("filled") or 0)
+                    rows.append({"name": name, "folder": "", "entries": e2,
+                                 "filled": f2, "hasLedger": False,
+                                 "orphan": False, "scanned": bool(sc),
+                                 "files": [], "fileCount": int(
+                                     sc.get("fileCount") or 0),
+                                 "scanError": str(sc.get("error") or ""),
+                                 # 扫过且一条都没有，是「确实没文本」，不是未知
+                                 "status": ("empty" if (sc and e2 <= 0)
+                                            else "todo")})
                     continue
                 entries = int(hit["entries"] or 0)
                 filled = int(hit["filled"])

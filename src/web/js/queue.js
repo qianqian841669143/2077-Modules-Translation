@@ -159,6 +159,61 @@ async function scanQueue() {
   else startMbPoll();
 }
 
+// 模组列表的「预扫描」：只补条数，不复制、不翻译。结果由后端落进
+// userdata\mods_scan.json，扫完 list_mods() 读回，"未分析" 就变成真实数字。
+async function modsPrescan() {
+  const btn = $("btn-prescan");
+  if (!btn || btn.disabled) return;
+  if (state.mbRunning) {
+    toast(T("批量正在运行，先等它跑完"), "err");
+    return;
+  }
+  const el = $("q-staging");
+  const dir = el ? String(el.value || "").trim() : "";
+  btn.disabled = true;
+  btn.textContent = T("正在预扫描 ...");
+  let r = null;
+  try {
+    r = await pywebview.api.mods_prescan(dir);
+  } catch (ex) {
+    // 老后端没有这个方法（源码新、exe 还是旧的）：别把按钮永远卡在禁用态
+    r = { ok: false,
+          error: T("预扫描接口不可用（要重新打包程序才生效）：")
+            + String(ex || "error") };
+  }
+  if (!r || !r.ok) {
+    btn.disabled = false;
+    btn.textContent = T("预扫描");
+    toast((r && r.error) || "error", "err");
+    return;
+  }
+  startMbPoll();        // 进度和「扫完了」都从事件通道来，别在这里傻等
+}
+
+function onModsScan(e) {
+  const btn = $("btn-prescan");
+  if (!btn) return;
+  btn.textContent = T("预扫描 %d/%d")
+    .replace("%d", Number(e.done || 0))
+    .replace("%d", Number(e.total || 0));
+}
+
+function onModsScanned(e) {
+  const btn = $("btn-prescan");
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = T("预扫描");
+  }
+  const n = Number(e.scanned || 0);
+  if (!n) {
+    toast(T("没有需要预扫描的模组"));
+  } else {
+    toast(T("预扫描完成：%d 个模组，合计 %d 条")
+      .replace("%d", n).replace("%d", Number(e.rows || 0)));
+  }
+  try { refreshMods(); } catch (_) {}
+}
+
 function mbUsable(it) {
   return !!(it && it.todo);
 }

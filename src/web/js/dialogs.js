@@ -263,6 +263,7 @@ let _modsHideOrphan = false;
 const _modsOpen = new Set();     // 展开着的模组（按目录名记）
 const _modsSel = new Set();      // 勾选着的模组（按目录名记，就是 batch_start 的 key）
 let _modsRows = [];              // 上一次渲染出来的行（全选只作用在当前筛选上）
+let _modsCtx = null;             // 右键菜单当前作用的那一个模组
 
 /* Viewer 目录名带着版本和哈希：Appearance Menu Mod 790 2.15.1 2026-10-25T12-38Z ebPkbzzu3
    清单里没必要显示这些，能剥就剥，剥不出来就原样显示。 */
@@ -330,6 +331,66 @@ async function refreshMods() {
   }
   _modsData = r;
   renderMods();
+}
+
+/* 模组行的右键：作用对象是这一个模组，不是整批。
+   只放不需要动账本的几项——打开目录、载入到翻译页、复制路径、展开收起。
+   「重新提取」「删除这个模组的汉化」要改账本，等后端接口单独做。 */
+function showModCtxMenu(x, y, m) {
+  const el = $("ctxmenu");
+  if (!el || !m) return;
+  _modsCtx = m;
+  _ctxTarget = null;              // 别让表格那套点击逻辑把这一下当成行操作
+  _ctxCell = null;
+  // 筛选/搜索时列表本来就强制全展开（见 renderMods 的 autoOpen），
+  // 这时候给「展开/收起」按钮等于给一个点了没反应的开关。
+  const search = ($("mods-search") || {}).value || "";
+  const autoOpen = _modsFilter !== "all" || !!String(search).trim();
+  const open = autoOpen || _modsOpen.has(m.name);
+  el.innerHTML =
+    `<div class="ctxgroup">${esc(prettyName(m.name))}</div>` +
+    `<div class="item" data-mact="open">${esc(T("打开目录"))}</div>` +
+    `<div class="item" data-mact="load">${esc(T("载入到翻译页"))}</div>` +
+    `<div class="item" data-mact="copy">${esc(T("复制目录路径"))}</div>` +
+    (autoOpen ? "" :
+      `<div class="sep"></div>` +
+      `<div class="item" data-mact="toggle">${esc(
+        open ? T("收起文件列表") : T("展开文件列表"))}</div>`);
+  el.classList.add("on");
+  const rect = el.getBoundingClientRect();
+  el.style.left = Math.max(6, Math.min(x, window.innerWidth - rect.width - 8)) + "px";
+  el.style.top = Math.max(6, Math.min(y, window.innerHeight - rect.height - 8)) + "px";
+}
+
+function modCtxPath(m) {
+  const root = String((_modsData && _modsData.staging) || "")
+    .replace(/[\\/]+$/, "");
+  return (root && m && m.name) ? root + "\\" + m.name : "";
+}
+
+function onModCtxAct(act, m) {
+  if (!m) return;
+  if (act === "toggle") {
+    if (_modsOpen.has(m.name)) _modsOpen.delete(m.name);
+    else _modsOpen.add(m.name);
+    renderMods();
+    return;
+  }
+  const full = modCtxPath(m);
+  if (!full) { toast(T("还没有设置模组目录"), "err"); return; }
+  if (act === "copy") {
+    copyToClipboard(full, T("已复制目录路径"));
+    return;
+  }
+  if (act === "open") {
+    try { pywebview.api.open_dir(full, ""); } catch (_) { /* 没有后端就静默 */ }
+    return;
+  }
+  if (act === "load") {
+    $("path").value = full;
+    switchPage("translate");
+    loadMod();
+  }
 }
 
 function renderMods() {

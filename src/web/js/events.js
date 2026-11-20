@@ -79,6 +79,9 @@ function onEvt(e) {
   if (e.type === "official-built") { onOfficialBuilt(e); return; }
   if (e.type === "mb-scan") { onMbScan(e); return; }
   if (e.type === "mb-scanned") { onMbScanned(e); return; }
+  // 模组列表的预扫描（只数条数，不进批量队列）
+  if (e.type === "mods-scan") { onModsScan(e); return; }
+  if (e.type === "mods-scanned") { onModsScanned(e); return; }
   if (e.type === "mb-start") { onMbStart(e); return; }
   if (e.type === "mb-item") { onMbItem(e); return; }
   if (e.type === "mb-done") { onMbDone(e); return; }

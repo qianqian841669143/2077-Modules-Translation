@@ -605,6 +605,7 @@ function ctxCellInfo(row, cell) {
 
 function showCtxMenu(x, y, row, cell) {
   _ctxTarget = row;
+  _modsCtx = null;              // 表格菜单打开时，模组菜单的作用对象要清掉
   _ctxCell = ctxCellInfo(row, cell);
   const m = $("ctxmenu");
   const file = row.file || "";
@@ -618,7 +619,6 @@ function showCtxMenu(x, y, row, cell) {
   // 目标。没选中就整组置灰，让「点一行再动手」这件事在菜单里看得见。
   const hasSel = state.sel >= 0 && !!state.rows[state.sel];
   const selRow = hasSel ? state.rows[state.sel] : null;
-  const dis1 = hasSel ? "" : " disabled";
   const skipLabel = selRow && selRow.skip ? T("恢复选中的行") : T("跳过选中的行");
 
   // 复制：整张表除「跳过」列外任意单元格都能复制；没落在格子上（行内空白、
@@ -645,31 +645,66 @@ function showCtxMenu(x, y, row, cell) {
   const hasFiltered = filtered().length > 0;
 
   m.innerHTML =
+    `<div class="ctxgroup">${esc(T("这一行"))}</div>` +
     copyItem +
-    `<div class="item${hasFiltered ? "" : " disabled"}" data-act="retrans-filtered">${esc(
-      T("重新翻译已筛选的行"))}</div>` +
+    (row.orig ? `<div class="item" data-act="copy-orig">${esc(T("复制原文"))}</div>` : "") +
+    // 归档层的行没有磁盘路径，排除表是按（相对路径, 原文）记的，标不了
+    (row.archive ? "" : `<div class="item" data-act="mark-code">${esc(
+      T("标记为代码（以后不再当候选）"))}</div>`) +
     `<div class="sep"></div>` +
-    `<div class="ctxgroup${hasSel ? "" : " disabled"}">${esc(T("左键选中"))}</div>` +
-    `<div class="item${dis1}" data-act="locate">${esc(T("定位到已选择的行"))}</div>` +
-    `<div class="item${dis1}" data-act="toggle-skip">${esc(skipLabel)}</div>` +
-    `<div class="item${dis1}" data-act="clear-row-trans">${esc(T("清空选中的行译文"))}</div>` +
-    `<div class="item${dis1}" data-act="retrans">${esc(T("重新翻译选中的行"))}</div>` +
-    `<div class="sep"></div>` +
+    // 没选中行时这一组整组不渲染：菜单短一截，也不用看一堆灰项
+    (hasSel
+      ? `<div class="ctxgroup">${esc(T("左键选中"))}</div>` +
+        `<div class="item" data-act="locate">${esc(T("定位到已选择的行"))}</div>` +
+        `<div class="item" data-act="toggle-skip">${esc(skipLabel)}</div>` +
+        `<div class="item" data-act="clear-row-trans">${esc(T("清空选中的行译文"))}</div>` +
+        `<div class="item" data-act="retrans">${esc(T("重新翻译选中的行"))}</div>` +
+        `<div class="sep"></div>`
+      : "") +
+    `<div class="ctxgroup">${esc(T("这个文件"))}</div>` +
     `<div class="item" data-act="skip-file">${esc(
       allSkipped ? T("恢复此文件所有行") : T("跳过此文件所有行"))}</div>` +
     `<div class="item" data-act="hide">${esc(T("隐藏此文件的行"))}</div>` +
     restoreItem +
     `<div class="item" data-act="only">${esc(isOnly ? T("显示所有文件") : T("只显示此文件"))}</div>` +
+    `<div class="item" data-act="open">${esc(
+      row.archive ? T("打开归档所在目录") : T("打开文件所在目录"))}</div>` +
+    `<div class="sep"></div>` +
+    `<div class="ctxgroup">${esc(T("视图"))}</div>` +
     `<div class="item" data-act="hide-trans">${esc(hideLabel)}</div>` +
     `<div class="item" data-act="only-trans">${esc(onlyLabel)}</div>` +
     mergeItem +
     `<div class="sep"></div>` +
-    `<div class="item" data-act="open">${esc(
-      row.archive ? T("打开归档所在目录") : T("打开文件所在目录"))}</div>`;
+    `<div class="item${hasFiltered ? "" : " disabled"}" data-act="retrans-filtered">${esc(
+      T("重新翻译已筛选的行"))}</div>`;
   m.classList.add("on");
   const rect = m.getBoundingClientRect();
   m.style.left = Math.max(6, Math.min(x, window.innerWidth - rect.width - 8)) + "px";
   m.style.top = Math.max(6, Math.min(y, window.innerHeight - rect.height - 8)) + "px";
+}
+
+// 右键「标记为代码」：把（相对路径, 原文）记进排除表，以后提取时直接不当候选。
+// 后端已经写盘，这里只把当前表格里的同一行就地标成跳过，不重新加载整个模组。
+async function markRowAsCode(row) {
+  if (!row || !row.file) return;
+  let r = null;
+  try {
+    r = await pywebview.api.mark_as_code(row.file, row.orig || "");
+  } catch (ex) {
+    toast(String(ex || "error"), "err");
+    return;
+  }
+  if (!r || !r.ok) { toast((r && r.error) || "error", "err"); return; }
+  const f = String(row.file || "");
+  const o = String(row.orig || "");
+  const mark = (x) => {
+    if (String(x.file || "") === f && String(x.orig || "") === o) x.skip = 1;
+  };
+  (state.rows || []).forEach((x) => { mark(x); (x.dups || []).forEach(mark); });
+  (state.raw || []).forEach(mark);
+  state.dirty = true;
+  render();
+  toast(T("已标记为代码：以后不再作为候选出现。"), "ok");
 }
 
 function closeCtxMenu() { $("ctxmenu").classList.remove("on"); }
