@@ -529,7 +529,13 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
                      font-size: 12px; }
 .mfile .fnum { color: var(--dim2); white-space: nowrap; }
 .mfile .fnum.need { color: var(--amber); }
-.mfile.empty { color: var(--dim2); font-size: 12px; height: 22px; }
+.mfile.empty { color: var(--dim2); font-size: 12px; height: 22px;
+               /* .empty 是 style.css 里表格空状态用的通用类：绝对定位、铺满
+                  整个表格、内容居中。文件列表的说明行也叫 empty，会连坐——
+                  文字被拉到列表中央，.mfiles 的高度还塌成只剩 padding。
+                  这里把定位掰回普通文档流，左对齐、占一行。 */
+               position: static; inset: auto; justify-content: flex-start;
+               pointer-events: none; }
 
 .mrow { height: 50px; display: grid;
         grid-template-columns: 1fr 1.5fr 116px 108px; gap: 16px;
