@@ -124,25 +124,55 @@ selftest 本来就因为引用已删除的 `src\web\app.js` 跑不通，下次�
 `applied`（这轮真写回去）的定义一致。前端那行是**本轮涉及**的累计（被续跑
 跳过的模组不会计入），并包那句用后端从 `_mb_results` 算的准数。
 
-## 当前基线（2026-11-20 10:46）
+## 归档层曾经整批写不进去（2026-11-20，提交 `d9fa20e`）
 
-- 最新提交：`83f6be9 fix(batch): 批量跑完不再被遮罩盖回来，遮罩新增「已翻译 / 总文本数」`
-- `dist\2077ModTranslator.exe`：14,091,193 字节，2026-11-20 10:46，
-  SHA256 前 32 位 `03F318A5DA988CD633CEEF0FE6D42E13`
-- 这一版从 exe 里读回校验过 13 项：`queue.js` 有 `noMask` / `mbGlobalTxt` /
-  `onMbPacking`，`events.js` 分发 `mb-packing`，`bind.js` 有「批量已经结束」，
-  `web_app` 推 `mb-packing`（入口脚本在 CArchive 里，用 `marshal.loads` 读，
-  不在 PYZ）
-- 上一版（10:07）的改造仍然有效：撤销/还原已删、`revert_source` 不在包里、
-  预扫描按文件记明细
+10:09 那轮 `archive=True`，309 个模组里 **87 个、4,387 条归档文本被机翻完就丢**。
+日志症状是 `base\yv\localization\*.json: 源文件不存在`——这 132 个路径磁盘上一个
+都没有，它们是**归档内部**的路径（WolkenKit 解开后落在
+`userdata\work\<模组>\raw\<内部路径>`）。
+
+链条，别再犯：
+
+- `localization/cr2w.py` 给归档行打的 `kind = "resource"`，`file` 是归档内路径
+- `mod_pack.route()` **只看扩展名和路径串**，`localization/` 命中 `_LOCAL_HINTS`
+  就判成 `pack`
+- `build_pack()` 于是去模组目录找那个文件 → 不存在 → 整批计入 fail
+- `route()` 只对 `.archive`/`.xl` 返回 `"archive"`，而行永远不带这种扩展名，
+  所以 `classify()["archive"]` **恒为空**：`_apply_all` 里重建归档的分支、
+  `_do_apply` 里按 `kind` 分流的代码，全都是死代码——批量和单模组「应用」
+  都写不进去
+
+现在：`classify()` 见 `kind == "resource"` 直接进 `archive` 通道；批量把它交给
+`w._apply_resource()` 重建 `<名字>_zh-cn.archive` + `.xl`，产物塞进
+`_pack_pending_state()`，由 `_flush_pack` 跟覆盖文件一起并进 zip（不要每个模组
+单独 `_merge_archive_into_zip`，那等于把总包重写 87 遍）。
+
+**续跑**：`_mb_journal_read()` 现在把 `failed > 0` 的记录排除在「已完成」之外。
+否则修好写回之后，那批模组会被整块跳过，永远补不上。
+
+## 当前基线（2026-11-20 10:59）
+
+- 最新提交：`d9fa20e fix(archive): 归档行改成走组包通道，重建 _zh-cn.archive 并进总包`
+- `dist\2077ModTranslator.exe`：14,092,814 字节，2026-11-20 10:59:09，
+  SHA256 前 32 位 `CE4C1B17D833BD12AAC61340EE22FA3A`
+- 这一版从 exe 里读回校验过：`mod_pack.classify` 有 `resource` 常量、
+  `mod_batch.finish` 调 `_apply_resource` / `_pack_pending_state` / 按 `kind`
+  分流、`web_app._mb_journal_read` 有 `missed` 变量
+- 10:46 那一版的批量遮罩修复仍生效：跑完不再被遮罩盖回来、遮罩第三行有
+  「已翻译 X / Y 条」
+- 更早的改造仍有效：撤销/还原已删、`revert_source` 不在包里、预扫描按文件记明细
 - **装上后要点一次「预扫描」**：老 `mods_scan.json` 只有条数没有 `perFile`，
   304 个模组会被重扫一遍，展开才有文件列表
 
-## 待办：成批「源文件不存在」导致重翻白跑
+## 下一轮：重跑归档模组
 
-批量日志里大量模组是 `applied=0 failed=N`，错误
-`base\yv\localization\*.json: 源文件不存在`（`mod_pack.py:238`），例如
-`void_Shirt_Jacket` 20 条机翻一条都没写回去、`They Will Remember` 422 条只
-写进 54 条。**这轮只修了遮罩，没碰这里**，下一轮单独查
-`mod_pack.build_pack` 的取源路径。
+修好之后要真正补上那 4,387 条：
+
+1. 换新 exe（`d9fa20e` 那版），点「开始批量翻译」
+2. 续跑会因为 `failed > 0` 自动重跑那 87 个模组，不用清空输出
+3. 归档组包慢（每个模组一次 WolvenKit pack），87 个模组预计多花十几分钟；
+   译文没变时 `_reuse_archive` 会命中缓存
+4. 跑完核对：日志里应出现 `stage <模组名> 归档`，`routes.archive` 不再是 0，
+   `E:\Vortex Mods\CP2077 Localization Pack.zip` 里出现 `archive/pc/mod/*.archive`
+
 
