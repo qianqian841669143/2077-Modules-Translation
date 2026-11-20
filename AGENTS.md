@@ -269,20 +269,60 @@ TrueFirstPersonCamera 与 CTO 的 `.reds` 全部走账本。
 `账本 ledger/all.lua：N 条` 和 `ImGui 钩子：接管 M 个绘制函数`；
 还打「找不到账本」就是路径又不对。
 
-## 当前基线（2026-11-20 12:46）
+## 账本曾经越跑越瘦（2026-11-20，提交 `ccc0430`）
 
-- 最新提交：`21bc928 feat(batch): 批量遮罩按「条」显示进度，不再只报模组个数`
-  （前一个：`cf51a8e fix(runtime): ImGui 是 userdata，判 table 导致钩子一个都没接上`）
-- `dist\2077ModTranslator.exe`：14,103,676 字节，2026-11-20 12:46:34，
-  SHA256 前 32 位 `4D81AB059E2BA3E921C6391DDA03D48D`
-  备份 `dist\2077ModTranslator.exe.bak-20261120-1246`（12:08 那版 14,103,597 B；
-  再往前是 `bak-20261120-1207`）
+现象：账本从 32,505 条缩到 31,334，再缩到 27,740 条；CTO 那个合集从 671 条
+掉到 166 条，而且是「修好了写入」之后才掉的。
+
+根因是 `mod_ledger.write()` **整份覆盖** `mods/<folder>.lua`：只要某一轮对某个
+模组只提取到一部分原文（换了目录、只翻了部分文件、归档这次没解出来），其余
+条目就被整块抹掉，`all.lua` 跟着缩。
+
+现在 `write()` 是**合并写**：
+
+- 先 `_read_entries(path)` 读回旧文件（只认本工具写的
+  `{ t = .., o = .., z = .., f = .. }` 格式）
+- `_merge_entries(old, fresh)` 按**原文 o** 合并：这一轮没提取到的旧条目原样
+  留下，同一原文以这轮译文为准、行号跟着更新
+- 有一条日志可查：`账本 <folder>：本轮 N 条，合并后 M 条（新增 / 更新 / 保留旧）`
+
+**它只防以后，不补旧账**：已经丢掉的那几千条要重跑相应模组才会按原文重新
+提取回来（提取到就重新成为「更新」）。
+
+## 同一轮的另外两处（提交 `ccc0430`）
+
+- `init.lua` 调 `imgui_hook` 时把 `log` 一起传（`pcall(install, lookup, log)`）。
+  以前只传 lookup，钩子里的诊断全静默——日志里只剩「接管 0 个」，看不出是
+  ImGui 类型不对还是只读写不回去。
+- `Session.build()` 生成 `.xl` 前检查 extend 目标文件**真的存在**；不存在就退回
+  独立配置并把原因写进 warnings，避免 ArchiveXL 报目标找不到、整批译文不生效。
+  （注意：staging 里存在的 `.xl` 不必在 `archive/pc/mod` 下——`ModSettings.archive.xl`
+  就在 `red4ext\plugins\mod_settings\` 里，别按目录去判。）
+
+## 当前基线（2026-11-20 13:37）
+
+- 最新提交：`ccc0430 fix(ledger): 账本合并写 + 钩子收 log + extend 目标校验`
+  （前一个：`21bc928 feat(batch): 批量遮罩按「条」显示进度，不再只报模组个数`）
+- `dist\2077ModTranslator.exe`：14,105,087 字节，2026-11-20 13:37:32，
+  SHA256 前 32 位 `A9054F19BFA08FAC96F92212D2369C2B`
+  唯一备份 `dist\2077ModTranslator.exe.bak-20261120-1350`（12:46 那版
+  14,103,676 B，`4D81AB05…`；更早的 `bak-20261120-1246` / `1207` 已被清掉）
+- 从新 exe 里读回并**逐函数比对过字节码**（`co_code` / `co_names` /
+  `co_varnames` / 常量）：`web_app`（入口，235 个函数）、`mod_ledger`（28 个）、
+  `localization.pipeline`（55 个）与 `src\` 当前内容**零差异**；
+  `mod_ledger` 有 `_merge_entries` / `_read_entries`，`pipeline` 有
+  `is_file` + 常量「extend 目标 %s 不存在，改成独立配置」，入口
+  `Api.batch_start` 仍有 `textTotal`
+- 从 exe 里读回：`pack\fix\init.lua` 13,197 B sha1[:12] `4492ce92600e`
+  （含 `pcall(install, function(t) return globalMap[t] end, log)`）、
+  `imgui_hook.lua` 4,336 B `9687cd81f65c`、`README.txt` 2,174 B，三者与
+  `src\pack\fix\` 同名文件 sha1 一致
 - 从新 exe 里读回：`web\js\queue.js` 26,294 B（`renderMaskCount` ×6、
   `Math.max(est, real)`、`已翻译 %d / %d 条`）、`web\js\events.js` 12,666 B
   （`renderMaskCount` ×3）、`mod_batch` 有 `textTotal`、入口有 `textTotal`；
   `mbGlobalTxt` 两处都是 0
-- 从 exe 里读回：`init.lua` 13,083 B（`cat.settings` / `cat.items` 回退、
-  `add("ledger/all.lua")`、`relPath`）、`imgui_hook.lua` 4,336 B
+- 从 exe 里读回：`init.lua`（`cat.settings` / `cat.items` 回退、
+  `add("ledger/all.lua")`、`relPath`）、`imgui_hook.lua`
   （`kind ~= "userdata"`、`local seen = 0`）
 - 11:54 那版的两条修复都在：`.reds` 只投本地化包、账本走裸相对路径
 - **MCM 文本链**：MCM UI 读 `ModConfigurationMenuAPI`，API 的 provider 来自三个
