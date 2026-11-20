@@ -81,6 +81,51 @@ html { color-scheme: dark; }   /* 原生滚动条/输入框按深色画，别冒
 }
 body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
 
+/* ------------------------------------------------------- 原生控件（勾选框） */
+/* 勾选框、滚动条这类原生控件的样式是浏览器按 color-scheme 画的，accent-color
+   只管「选中之后」填什么色。上面那行 color-scheme: dark 是为了滚动条，副作用
+   就是浅色主题下所有勾选框仍被画成黑底方块——CSS 没法从「底色是浅紫」推出
+   「控件该用浅色画」。所以这里干脆全部自绘，只吃变量，浅深主题都成立。
+   全站勾选框都是 14px，这里统一，不要去改各个 .check/.mcheck 的尺寸。 */
+input[type="checkbox"] {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; flex: none;
+  margin: 0; padding: 0; position: relative;
+  border: 1px solid var(--line2);
+  border-radius: 3px;
+  background: var(--panel2);
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+input[type="checkbox"]:hover { border-color: var(--primary); }
+input[type="checkbox"]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 55%, transparent);
+  outline-offset: 1px;
+}
+input[type="checkbox"]:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+input[type="checkbox"]:checked::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 3px; height: 7px;
+  border: solid var(--on-primary); border-width: 0 2px 2px 0;
+  transform: translate(-50%, -58%) rotate(45deg);
+}
+/* 半选（全选只勾了一部分）：一条横杠。必须写在 :checked 之后，
+   两者特异性相同，靠顺序压住对勾。 */
+input[type="checkbox"]:indeterminate {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+input[type="checkbox"]:indeterminate::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 7px; height: 2px; border-radius: 1px;
+  background: var(--on-primary);
+  transform: translate(-50%, -50%);
+}
+input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
+
 /* ------------------------------------------------------- 标题条 / 顶栏 */
 /* 原来那条 34px 的系统标题条已经去掉（窗口按钮并进顶栏右端） */
 .titlebar { display: none; }
