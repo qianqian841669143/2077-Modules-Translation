@@ -56,60 +56,54 @@ git diff --stat
 - 源码损坏的恢复路径：`git checkout HEAD -- src/<文件>`
 - `mod_translate_gui.py` 不参与打包，入口是 `web_app.py`
 
-## 待办（用户已批准，下次改动时一并做）
-
-### 删掉「还原翻译」和「撤销应用」（2026-11-20 用户授权）
+## 已完成：删掉「还原翻译」和「撤销应用」（2026-11-20）
 
 用户原话：「还原翻译 和撤销应用都可以删除了，下次修改的时候一起改即便我没提，
-你改完说一声就行。」——**不用再申请批准，动手时顺手一并删，删完汇报即可。**
+你改完说一声就行。」——已按下面的清单做完，提交 `1177b86`。**别再「找回」这两个
+功能。** 现在要退一次应用，就是在 Vortex 里卸掉那个 `<模组名>_<语言>.zip`。
 
-这两个功能在同一条链上：`revert_source` 判断「哪些文件被本工具碰过」靠的正是
-`undo_store` 的快照，所以必须一起删，只摘按钮会留半截。
+删掉的东西（`git show 1177b86` 可查）：
 
-前端入口：
+- 前端：菜单里两个按钮、`bind.js` 两个 onclick、`apply.js` 111 行（
+  `undoLastApply` / `onUndone` / `revertMod` / `onReverted`）、`events.js` 的
+  `undone`/`reverted` 分发与两个失败分支、`table.js` 的 `btn-undo` 显示逻辑、
+  `core.js` 的 `state.revertUndo`
+- 后端：`web_app.py` 里 `undo_last` / `_undo_work` / `undo_status` /
+  `revert_plan` / `revert_mod` / `_revert_work`、`l10n_undo_root`、`_revert_cache`、
+  所有 `undoId` / `undoAvailable` 返回字段、`_apply_resource`/`_apply_mixed`/
+  `_do_apply_source` 的 `tx` 参数、`make_undo` 参数
+- `src/revert_source.py` 整个文件
+- 建快照的三处：`mod_deploy.deploy_mod`（`undo_root=` 参数没了）、
+  `_apply_mixed`、`_do_apply_source`
+- `cache_tools.py` 的「撤销记录」项**保留了**，改叫「旧撤销记录」——
+  `dist\userdata\undo\` 里的历史快照还在，得留个入口让用户清掉
 
-- `src/web/index.html:47`  `<button id="btn-undo">撤销上次应用</button>`
-- `src/web/index.html:57`  `<button id="btn-revert">还原翻译</button>`（danger 样式）
-- `src/web/js/bind.js:29`  `$("btn-undo").onclick = () => undoLastApply();`
-- `src/web/js/bind.js:36`  `$("btn-revert").onclick = () => revertMod();`
-- `src/web/js/apply.js:5`  `undoLastApply()` / `onUndone()`
-- `src/web/js/apply.js:44` `revertMod()` / `onReverted()`
-- `src/web/js/events.js:77`  `undone` 事件分发
-- `src/web/js/events.js:78`  `reverted` 事件分发
-- `src/web/js/events.js:171` undo 失败分支
-- `src/web/js/events.js:175` revert 失败分支
-- `src/web/js/table.js:230`  `$("btn-undo").style.display`
-- `src/web/js/core.js:20`   `revertUndo` 状态位（连带 `state.revertUndo` 全部引用）
+**保留** `src/undo_store.py`（模块在，只是没人调用）和 `dist\userdata\undo\`
+里的历史数据（铁律 4）。
 
-后端：
+**已知残留**：`tools\selftest.py` 里还有 4 处针对已删功能的断言
+（`check_revert_source` 整个函数、`undo_store.undo_last` 调用、
+`"def revert_plan" in src` 之类的源码文本断言），跑 selftest 会失败。
+selftest 本来就因为引用已删除的 `src\web\app.js` 跑不通，下次整理工具时一并清。
 
-- `src/web_app.py:5030`  `undo_last()` / `_undo_work()` / `undo_status()`
-- `src/web_app.py:5078`  `revert_plan()` / `revert_mod()` / `_revert_work()`
-- `src/web_app.py:390`   `l10n_undo_root`、`_revert_cache`
-- `src/revert_source.py` 整个模块（删文件）
-- `apply` 返回值里的 `undoId` / `undoAvailable` 字段
+## 预扫描现在会记文件明细（2026-11-20，提交 `9c1ddec`）
 
-创建快照的三处——不摘掉的话每应用一次就白写一份快照：
+模组清单展开时列出的文件，有两个来源：有账本的读账本（`mod_ledger.file_stats`），
+没账本的读预扫描缓存 `userdata\mods_scan.json`。后者以前只存总条数，展开只能显示
+一句空话（`没有未填的条目`）——跟左边 `0 / 215` 自相矛盾。
 
-- `src/mod_deploy.py:340`  部署时建 undo 事务（`undo_root=` 参数）
-- `src/web_app.py:4576`    `_apply_mixed()` 里建事务
-- `src/web_app.py:4696`    `_do_apply_source()` 里建事务
-- `src/mod_batch.py:455`   已经传 `make_undo=False`，确认没有别处漏网
+现在 `mod_batch.probe_text()` 多返回一个 `perFile`（`[{file, total, todo}]`，
+按待翻条数降序），`mods_prescan` 存成 `[路径, 总条数, 待翻条数]` 三元组，
+`Api._scan_files()` 读回来给前端。`_scan_need()` 顺带补扫旧缓存：**只有条数、
+没有 `perFile` 的条目会被重扫**，所以升级后点一次「预扫描」就能把 304 个模组的
+文件列表补齐（要跑几分钟，属正常）。
 
-一起摘掉：
+前端展开时**所有文件都列**，已翻完的也列，只是标「已翻完」；空列表按
+`orphan` / 未扫过 / 只有条数 / 账本里没有可翻文本四种情况分别给话。
 
-- `src/cache_tools.py:31-32`  「撤销记录」清理项（功能没了它永远是空的）
-- `src/locales/*.json` 的撤销/还原词条可以留着（`T()` 会回退原文，不影响）
+## 当前基线（2026-11-20 10:05）
 
-**不删** `src/undo_store.py` 文件本身，也不删 `dist\userdata\undo\` 里的历史数据
-（铁律 4：用户的东西不动）。只是不再往里写。
-
-### 当前基线（2026-11-20 09:45）
-
-- 最新提交：`d1811d7 feat(apply): 单模组应用改成产出独立 zip，不再往 staging 里写产物`
-- `dist\2077ModTranslator.exe`：14,114,897 字节，2026-11-20 09:45:45，
-  SHA256 前 32 位 `DD5B5DE1B6283DA49EEF29DC3C50A057`
-- 这一版含：单模组应用出独立 zip（`<模组名>_<目标语言>.zip`）、批量遮罩去掉
-  「显示面板」并显示当前模组与条数、勾选框自绘、进度条与「已填/总条数」合并成一列、
-  列表滚动条自绘、处理中遮罩跟随主题
-- 已知残留：归档模式下点应用会留一条指向临时目录的 undo 事务记录（删撤销功能时自然消失）
+- 最新提交：`1177b86 refactor: 删掉「撤销上次应用」「还原翻译」，不再写撤销快照`
+- `dist\2077ModTranslator.exe`：**还是 09:45 那一版**，14,114,897 字节，
+  SHA256 前 32 位 `DD5B5DE1B6283DA49EEF29DC3C50A057`；上面两个提交
+  （预扫描文件明细、删撤销/还原）**都还没进 exe**，要重新打包才生效
