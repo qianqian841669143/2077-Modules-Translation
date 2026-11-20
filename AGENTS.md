@@ -419,5 +419,68 @@ ImGui 的 `##` / `###` 是「显示文字 / 控件 id」分隔符，传给 ImGui
 改法：根目录下有多个 CET 子模组时改用 staging 目录名做 folder 键与产物名。
 **这轮没改**。
 
+## 模组名只认一种注册写法（2026-11-20，提交 `5c81fa8`）
+
+现象：CET / MCM 的模组列表里一半名字还是英文，`names.lua` 只有 **55 条**。
+
+三个 bridge 给 `mod.id` 的形状**完全不同**，而工具只扫了第一种：
+
+| 框架 | 注册写法 | `listMods` 里的 id |
+|---|---|---|
+| ms | `@runtimeProperty("ModSettings.mod", "X")` | `X` |
+| rcf | `DVRCF.Register(game, "MonowireE3", "Monowire Rework", …)` | `MonowireE3` |
+| nativeSettings | `nativeSettings.addTab("/ENC", "Enemy Cyberware Control")` | `/ENC` |
+
+外加「扫到了也没翻成」：一次把 90 个名字丢给模型、要一个等长 JSON 数组，
+长度对不上 `parse_json_array` 就整批作废，而批量那条路调 `mod_ledger.write`
+时**没传 log**，失败连日志都没有。
+
+现在：
+
+- `mod_ledger.scan_name_pairs(root)` 三种写法都扫，返回 `[(键, 英文名)]`；
+  `addSubcategory` 不收（那是页签里的分类）、注释里的示例不收、已经是中文的不收
+- `names.lua` **键和英文名各写一份**：init.lua 的 `lookupName` 先按 id 查、
+  查不到按 `mod.name` / `schema.name` 再查一次
+- `translate_names`：每批 25 个，整批空手就劈半重试、再逐个补，每批进日志
+- `web_app.refresh_names()`：只扫注册写法补名字（**实测 310 个目录 1.1 秒**，
+  不重译正文），批量开跑前、以及「同步账本 / 重新打包」都会先跑一遍 ——
+  已经翻完的模组不会被重新处理，不这样它们的名字永远补不上
+- `mod_batch.Ctx` 多一个 `log`，批量里的账本/名字日志不再静默
+
+实测：staging 101 处注册 / 90 把键，`names.lua` 55 → 90 条，55 条旧键一条不丢，
+第二次跑 `added=0`。**这只管 MCM 里的名字**：CET 覆盖层自己的 mod 列表读的是
+文件夹名，运行时改不到。
+
+## 单模组「应用」也并进总包（2026-11-20，提交 `338e8f2`）
+
+用户原话：「单模组翻译之后应用是生成单一的压缩包是吧，重新打包没有把这单一的
+模组重新加入或者更新进全量包」。两件事都成立，而且是两个独立的坑：
+
+- `_apply_all` 的单模组分支**刻意**不碰 `CP2077 Localization Pack.zip`
+- 工具栏「重新打包」走的是 `pack_zip()`：弹保存框、把当前模组目录整份打成
+  `*_translated.zip` —— 那是「覆盖文件」时代的东西，跟总包毫无关系
+  （`bind.js` 上面那句注释写的却是「把当前所有译文重新并进汉化包 zip」）
+
+现在：`_sync_ledger_to_zip(extra=None)` 多收一份要并进总包的文件；单模组应用
+在打完独立 zip 之后，把这一轮的覆盖文件 + 归档产物 + 账本 + 运行时一起并进
+总包（merge，旧条目保留）；「重新打包」改调 `sync_pack()`。
+
+自测（`_tmp\probe_pack_union.py`）：单模组应用后总包 5 条（覆盖文件 /
+`ledger/mods/*.lua` / `all.lua` / `init.lua`）；再应用第二个模组，总包 7 条，
+第一份覆盖文件与账本都在（`保留 1`）。
+
+**注意**：单模组 zip 与总包投的是同一批路径（`zzz_CP2077_Localization/…`），
+Vortex 里同时装会冲突。总包现在是全量的，装它一个就够。
+
+## 多行 tooltip：真换行 vs 字面 `\n`（2026-11-20，提交 `d892863`）
+
+账本里存的是**源码里的转义**（两个字符：反斜杠 + n），运行时 ImGui 拿到的是
+**真换行**（0x0A），整串查表必然 miss。账本里 **339 条**是这种形状。
+
+`imgui_hook.tr()` 现在多一条兜底：真换行换回字面 `\n` 再查一次。顺手把长度
+上限从 200 提到 **1600**（最长的多行 tooltip 1456 字符，129 条超过 200 ——
+卡在 200 时这些长句连查都不会去查）。
+
+
 
 
