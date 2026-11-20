@@ -183,19 +183,82 @@ selftest 本来就因为引用已删除的 `src\web\app.js` 跑不通，下次�
 以仓库这份为准，`userdata\pack\fix` 只补内置没有的文件。`spec` 里
 `collect(SRC/pack, "pack")` 把它当数据目录打进去。
 
-## 当前基线（2026-11-20 11:20）
+## 汉化包不再投递逻辑脚本（2026-11-20，提交 `9e61d31`）
 
-- 最新提交：`7f66ca2 feat(runtime): 运行时接管 ImGui 绘制函数，自绘设置页的模组也能出中文`
-- `dist\2077ModTranslator.exe`：14,099,945 字节，2026-11-20 11:20:05，
-  SHA256 前 32 位 `5736BE3E8B1C926F0054E7734DD58656`
-- 这一版从 exe 里读回：CArchive 有 `pack\fix\{init.lua,imgui_hook.lua,README.txt}`，
-  `init.lua` 正文含 `imgui_hook.lua` 的 loadfile 调用
-- 10:59 / 10:46 两版的修复仍在：归档行走进组包通道、批量跑完不被遮罩盖回来
-- **装上后**：`汉化包`页点「同步账本」就能把新运行时并进 `CP2077 Localization
-  Pack.zip`（`_sync_ledger_to_zip` 走 `_patch_map`），不必重跑整轮批量；
-  单模组的包要重新「应用」一次才有 `imgui_hook.lua`
-- 装完 zip 要在 Vortex 里 Deploy，然后重启游戏（CET 只在启动时读一次
-  `init.lua`）
+11:28 那次启动，RedRequire 弹「您的模组脚本未编译」，redscript 报 214 条错，
+一条都进不了游戏。查下来是**我们自己**造成的：
+
+- 包里有 301 个 `.reds`，全是「某个模块的一部分编译单元」
+- 游戏目录里 7 个目录（TrueFirstPersonCamera / BetterNetrunning /
+  DigitalVixenCore / ITP_TFPC_Compat / EnemyMultiplierRS / TakedownSystem /
+  immersive_third_person）**只剩我们的副本，模组原件一个都没部署**
+- 于是 `module X` 的声明文件不在 → `UNRESOLVED_IMPORT` → 整条依赖链崩
+- 对话框里那句「TakedownSystem 被安装了两次」也是：用户根本没启用独立
+  TakedownSystem，是我们投了它的 `Playback.reds`，撞上 CTO 自带的
+  `XnTdProbe.reds`（`SYM_REDEFINITION`）
+
+现在 `.reds` 分两类：
+
+| 类型 | 判据 | 处置 |
+|---|---|---|
+| Codeware 本地化包 | 内容含 `ModLocalizationPackage` / `ModLocalizationProvider` | 允许进包 |
+| 逻辑 / UI 脚本 | 其余全部 | 一条都不投，文案只进账本 |
+
+- `mod_pack.is_localization_text/path()`：判据就这两个基类，别再加
+- `classify()` 先**按目录**预扫（`lang_dirs`）：整目录都是本地化包才放行，
+  单文件判不够 —— 目录里还有 `LocalizationProvider` 之类没被翻的兄弟
+- `build_pack()` 有兜底闸门，非本地化包的 `.reds` 直接跳过并记 error
+- `_sync_ledger_to_zip()` 会调 `_bad_reds_names()` 把 zip 里**旧的**逻辑
+  `.reds` 删掉（不删的话重装一次 zip 又全回来了）
+
+**批量与单模组「应用」共用 `classify()`**，所以两条路一起生效；单模组产物由
+`_build_standalone_zip()` 每次全量重写，不会残留旧条目。
+
+代价（量化过）：包里 `.reds` 去重中文串 14,148 条，其中 12,632 条（89.3%）
+账本里也有对应条目；只剩 1,516 条只在 `.reds`，抽样看大半是 `log()`/`print()`
+的调试输出。实测分流：MuchBetterContracts 只放行 `Localization` 两个目录
+（12 个文件），BetterNetrunning 只放行 `Localization`（2 个），
+TrueFirstPersonCamera 与 CTO 的 `.reds` 全部走账本。
+
+## 运行时找不到账本：CET 沙箱只认裸相对路径（2026-11-20，提交 `dfcf0d3`）
+
+`scripting.log` 里三次 `[zzz_CP2077_Localization] 找不到账本…本 mod 不生效`
+（11:01:53 / 11:26:18 / 11:39:50），而 `ledger/all.lua` 明明在。两个实测结论：
+
+- CET 里 `tostring(package.path)` 是**空串**（02:27 那次旧 mod 的日志可查），
+  所以 `findLedger()` 靠 `package.path` 推路径那一段永远拿不到候选
+- CET 1.38 的 `io.open` 是沙箱：**只认「相对本 mod 目录」的路径**。带
+  `mods/`、`plugins/cyber_engine_tweaks/mods/` 前缀的相对路径会被拒
+  （`Tried to access invalid path 'plugins/…'`）；社区 mod 自己也这么写
+  （`NovaOptics` 用 `io.open("settings.json")`，文件就在 mod 目录里）
+
+改法：`findLedger()` 第一个候选是裸的 `"ledger/all.lua"`；新增
+`relPath(base, name)`，`base` 为空串时返回裸文件名（`names.lua` /
+`imgui_hook.lua` / `text_override.log` 全走它）。
+
+**排障先看 `scripting.log`**：改对了会打出
+`账本 ledger/all.lua：N 条` 和 `ImGui 钩子：接管 M 个绘制函数`；
+还打「找不到账本」就是路径又不对。
+
+## 当前基线（2026-11-20 11:54）
+
+- 最新提交：`dfcf0d3 fix(runtime): 账本改用 CET 沙箱认的相对路径`
+  （前一个：`9e61d31 fix(pack): redscript 逻辑文件不再投递`）
+- `dist\2077ModTranslator.exe`：14,102,447 字节，2026-11-20 11:54:10，
+  SHA256 前 32 位 `AF8197D9EDBBA708238622D2311E1BC0`
+  备份 `dist\2077ModTranslator.exe.bak-20261120-1154`
+- 这一版从 exe 里读回（CArchive 条目 85 个）：
+  `pack\fix\init.lua` 12,493 字节，含 `add("ledger/all.lua")`、`relPath`；
+  `mod_pack` 有 `is_localization_text` / `is_localization_package` /
+  `reds_lang_ok` / `lang_dirs`；`web_app` 有 `_bad_reds_names` / `drop_names`
+- 前十版的修复都在：归档行走进组包通道、批量跑完不被遮罩盖回来、
+  ImGui 钩子、`.reds` 只投本地化包
+- **装上后的顺序**：重新「应用」单模组包（产物会明显变小，`r6/scripts` 覆盖
+  全没了）→ `汉化包`页点「同步账本」（顺手删掉 zip 里旧的逻辑 `.reds`）→
+  Vortex 里把这两个 zip **重新安装**（别只点 Deploy：Vortex 不认 zip 内部
+  变了，旧文件不会自己消失）→ Deploy → 重启游戏
+- 验收：`scripting.log` 出现 `账本 ledger/all.lua：N 条` 和
+  `ImGui 钩子：接管 M 个绘制函数`；`RedRequire\report.txt` 不再出现
 
 ## 待办：产物名字会撞车
 
