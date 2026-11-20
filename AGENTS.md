@@ -240,25 +240,27 @@ TrueFirstPersonCamera 与 CTO 的 `.reds` 全部走账本。
 `账本 ledger/all.lua：N 条` 和 `ImGui 钩子：接管 M 个绘制函数`；
 还打「找不到账本」就是路径又不对。
 
-## 当前基线（2026-11-20 11:54）
+## 当前基线（2026-11-20 12:08）
 
-- 最新提交：`dfcf0d3 fix(runtime): 账本改用 CET 沙箱认的相对路径`
-  （前一个：`9e61d31 fix(pack): redscript 逻辑文件不再投递`）
-- `dist\2077ModTranslator.exe`：14,102,447 字节，2026-11-20 11:54:10，
-  SHA256 前 32 位 `AF8197D9EDBBA708238622D2311E1BC0`
-  备份 `dist\2077ModTranslator.exe.bak-20261120-1154`
-- 这一版从 exe 里读回（CArchive 条目 85 个）：
-  `pack\fix\init.lua` 12,493 字节，含 `add("ledger/all.lua")`、`relPath`；
-  `mod_pack` 有 `is_localization_text` / `is_localization_package` /
-  `reds_lang_ok` / `lang_dirs`；`web_app` 有 `_bad_reds_names` / `drop_names`
-- 前十版的修复都在：归档行走进组包通道、批量跑完不被遮罩盖回来、
-  ImGui 钩子、`.reds` 只投本地化包
-- **装上后的顺序**：重新「应用」单模组包（产物会明显变小，`r6/scripts` 覆盖
-  全没了）→ `汉化包`页点「同步账本」（顺手删掉 zip 里旧的逻辑 `.reds`）→
-  Vortex 里把这两个 zip **重新安装**（别只点 Deploy：Vortex 不认 zip 内部
-  变了，旧文件不会自己消失）→ Deploy → 重启游戏
-- 验收：`scripting.log` 出现 `账本 ledger/all.lua：N 条` 和
-  `ImGui 钩子：接管 M 个绘制函数`；`RedRequire\report.txt` 不再出现
+- 最新提交：`cf51a8e fix(runtime): ImGui 是 userdata，判 table 导致钩子一个都没接上`
+  （前一个：`10701b4 fix(runtime): MCM 设置项在 cat.settings 里，不是 cat.items`）
+- `dist\2077ModTranslator.exe`：14,103,597 字节，2026-11-20 12:08:08，
+  SHA256 前 32 位 `849BE07CB31FC17CEE1DF98177516890`
+  备份 `dist\2077ModTranslator.exe.bak-20261120-1208`
+- 从 exe 里读回：`init.lua` 13,083 B（`cat.settings` / `cat.items` 回退、
+  `add("ledger/all.lua")`、`relPath`）、`imgui_hook.lua` 4,336 B
+  （`kind ~= "userdata"`、`local seen = 0`）
+- 11:54 那版的两条修复都在：`.reds` 只投本地化包、账本走裸相对路径
+- **MCM 文本链**：MCM UI 读 `ModConfigurationMenuAPI`，API 的 provider 来自三个
+  bridge（`native_settings` / `ms` / `rcf`），**设置项一律放在
+  `categories[i].settings`**（不是 `items`），字段是 `label` / `description`。
+  改这段之前先看 `bridges/*/provider.lua`，别照老结构猜
+- 账本覆盖率：Codeware「原生设置」的 2,540 个 displayName/description 里，
+  1,559 条（61.4%）能在账本里查到原文；没命中的多是数字与含引号嵌套的串
+- 装上新包后：`sync` 一次 → Vortex 重装 zip → Deploy → 重启游戏；
+  日志应见 `账本 ledger/all.lua：N 条` + `ImGui 钩子：接管 M 个绘制函数`
+  （M=0 时新版会打出「读到 K 个绘制函数，但一个都写不回去」，据此判断
+  是类型不对还是只读）
 
 ## 待办：产物名字会撞车
 
