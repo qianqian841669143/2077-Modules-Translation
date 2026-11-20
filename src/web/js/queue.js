@@ -418,7 +418,8 @@ async function startQueue() {
   const keys = [...state.mbSel];
   if (!keys.length) { toast(T("请先勾选要翻译的 mod"), "err"); return; }
   const withArchive = $("q-archive").checked;
-  const skipAssets = !$("q-assets").checked;
+  // 「连同贴图/音频」那个开关已经删掉了：默认不复制贴图音频
+  const skipAssets = $("q-assets") ? !$("q-assets").checked : true;
   const doDeploy = $("q-deploy").checked;
   const doDry = $("q-deploy-dry").checked;
   let msg = T("将要处理 %d 个 mod：先复制到输出目录，再翻译、写回副本。\n同名目录会被覆盖。继续？")

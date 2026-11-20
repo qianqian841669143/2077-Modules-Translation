@@ -291,11 +291,12 @@ body { font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif; }
           padding: 12px calc(var(--pad) + var(--sbw)) 0 var(--pad); }
 .mpaths .input { height: 32px; }
 .mpaths .btn { height: 32px; flex: none; }
-.mpaths .chk { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 
-/* 2) 操作行：左边导出/清空，右边勾选与开始 */
+/* 2) 操作行：左边勾选，右边「归档层 + 开始 + 导出/清空」 */
 .mactions { display: flex; align-items: center; gap: 10px; height: 40px;
             margin: 2px calc(var(--pad) + var(--sbw)) 0 var(--pad); }
+.mactions .chk { font-size: 12.5px; color: var(--muted); white-space: nowrap;
+                 margin-right: 2px; }
 .mcheck { display: flex; align-items: center; gap: 7px; font-size: 13px;
           color: #9a9cb0; cursor: pointer; white-space: nowrap; }
 .mcheck input { accent-color: var(--primary); cursor: pointer; }
