@@ -102,12 +102,42 @@ end
 
 registerForEvent("onInit", function()
     local n = loadDict()
-    patch()
-    print(string.format("[CETZh] 词典 %d 条 / ImGui 挂载 %d 个函数 / 失败 %d 个",
-        n, patched, failed))
+    print(string.format("[CETZh] 词典 %d 条", n))
 end)
 
--- 兜底：万一 onInit 时 ImGui 还没建出来，第一次绘制时再试一次。
+-- ImGui 的表不是 mod 加载时就填好的：实测 onInit 里它已经是 table，但
+-- Text/Button 这些函数一个都还没有（挂载 0 个）。所以真正的挂载推迟到第一次
+-- 绘制，并且带一次结构探测，日志里能看出这一版 CET 把函数放在哪。
+local retry = 0
+local probed = false
+
+local function probe()
+    local names = { "Text", "TextWrapped", "TextColored", "Button", "Checkbox",
+                    "Selectable", "Begin", "BeginCombo", "InputText", "MenuItem" }
+    local parts = {}
+    for _, n in ipairs(names) do
+        parts[#parts + 1] = n .. ":" .. type(ImGui[n])
+    end
+    return string.format("ImGui=%s {%s}", type(ImGui), table.concat(parts, " "))
+end
+
 registerForEvent("onDraw", function()
-    if patched == 0 then patch() end
+    if patched > 0 then
+        return
+    end
+    if not probed then
+        probed = true
+        print("[CETZh] onDraw " .. probe())
+        patch()
+        print(string.format("[CETZh] onDraw 挂载 %d 个 / 失败 %d 个", patched, failed))
+        return
+    end
+    -- 第一次没挂上：隔 60 帧再试一次，最多试 20 次，别每帧刷日志。
+    retry = retry + 1
+    if retry % 60 == 0 then
+        patch()
+        if retry >= 1200 then
+            print("[CETZh] 挂载一直失败，放弃重试")
+        end
+    end
 end)

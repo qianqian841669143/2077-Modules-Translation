@@ -205,6 +205,37 @@ def collect(root, target_locale="", include_lua=True, loose=False):
                 continue
             bucket.setdefault(src, ctx)
 
+    # Codeware 的 Provider 语言包（r6/scripts/<Mod>/translations/**/English.reds）。
+    #
+    # `extract_root_ex` 只认「有 UI 位置证据」的调用，而
+    # `this.Text("key", "value")` 的价值全在第二个参数上，它一条都不收；
+    # 批量翻译那条路（locale_pack）认得，词典重建这条路不认。结果是
+    # 「memory 里有译文、词典里没有条目、界面上还是英文」—— 2026-11-21 在
+    # DigitalVixen 的热键面板上撞见：collect 拿到 13 条，locale_pack 有 5,552 条。
+    try:
+        import locale_pack as _lp
+        _lang = target_locale or "zh-CN"
+        _files = _lp.detect(root, parse=True, target=_lang)
+        _srcs = _lp.pick_sources(_files, _lang)
+        if _srcs:
+            _rows, _ = _lp.extract(root, _srcs, _lang)
+            _owners = {}
+            for _r in (_rows or []):
+                _s = _r.get("orig") or ""
+                if not _s or NOISE.hard_family(_s):
+                    continue
+                _rel = str(_r.get("file") or "")
+                if _rel not in _owners:
+                    _full = os.path.join(root, _rel.replace("/", os.sep))
+                    _owners[_rel] = (owner_key_of_file(_full)
+                                     if _rel.lower().endswith(".reds") else "")
+                if _is_skipped(_rel, _s):
+                    continue
+                fragments.setdefault(_owners[_rel], {}).setdefault(
+                    _s, _rel or "locale")
+    except Exception:            # noqa: BLE001 - 这一层失败不该让整个模组没词
+        pass
+
     return fragments, meta
 
 
