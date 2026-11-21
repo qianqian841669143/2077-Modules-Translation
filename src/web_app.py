@@ -429,9 +429,6 @@ class Api(object):
         # Vortex 三层映射（下载包 / 安装缓存 / 游戏部署）的扫描缓存。
         # 目录一变就作废；只读不写，不会影响 Vortex。
         self._vmap = None
-        # 部署清单巡检结果（被 Vortex 更新冲掉的模组）的短缓存：面板重开
-        # 不必把 100 多个模组的文件重新哈希一遍。
-        self._audit_cache = None
 
     # ------------------------------------------------------------ 延迟加载
     # 这两个属性也必须保持私有，避免 pywebview 在启动时触发磁盘加载
@@ -2279,47 +2276,6 @@ class Api(object):
         w._emit = lambda obj: None
         return w
 
-    def batch_audit(self, force=False):
-        """巡检部署清单：列出被 Vortex 更新（或解压还原）冲掉译文的模组。
-
-        只读清单 + 磁盘 sha1，不复制、不改任何文件。结果缓存 60 秒——面板
-        重开时不用把 100 多个模组的记录文件重新哈希一遍。配合
-        `mod_deploy.audit_mods()`：Vortex 更新会把模组目录整个重写，我们
-        新增的归档/语言包被删、改写的原文件被换回英文，这里负责把它们找出来。
-        """
-        now = time.time()
-        cache = self._audit_cache
-        if not force and cache and now - cache[0] < 60 and cache[1].get("ok"):
-            return cache[1]
-        try:
-            import mod_deploy
-            res = mod_deploy.audit_mods()
-        except Exception as ex:      # noqa: BLE001
-            return {"ok": False, "error": str(ex)}
-        # 和这次扫描到的队列对一下：能不能一键修，得看它在不在 _mb_items 里
-        by_root = {}
-        for it in (self._mb_items or []):
-            try:
-                by_root[os.path.normcase(os.path.abspath(it.get("root") or ""))] = it
-            except Exception:       # noqa: BLE001
-                continue
-        fixable = 0
-        for row in res.get("stale") or []:
-            try:
-                it = by_root.get(
-                    os.path.normcase(os.path.abspath(row.get("root") or "")))
-            except Exception:       # noqa: BLE001
-                it = None
-            row["scanned"] = it is not None
-            row["itemKey"] = (it or {}).get("key") or ""
-            row["todo"] = int((it or {}).get("todo") or 0)
-            if it is not None and row["todo"]:
-                fixable += 1
-        out = {"ok": True, "checked": res.get("checked", 0),
-               "stale": res.get("stale") or [], "fixable": fixable}
-        self._audit_cache = (now, out)
-        return out
-
     def _scan_cache_path(self):
         """预扫描条数缓存：``userdata\\mods_scan.json``。"""
         import appconfig
@@ -2497,22 +2453,16 @@ class Api(object):
                 import mod_batch as MB
                 items = MB.list_dirs(root)
                 total = len(items)
-                # 部署清单只读一次：127 个模组各读一遍那份（可能上千条 pairs 的）
-                # json 会把预扫拖慢好几秒。面板靠它决定要不要给「重译」按钮。
-                try:
-                    import mod_deploy
-                    dep = {k for k, v in (mod_deploy.load().get("mods") or {}).items()
-                           if (v or {}).get("pairs")}
-                except Exception:
-                    dep = set()
+                # 已经进过词典的模组：面板据此给「重译」（先丢记忆再翻）。
+                # 以前判据是部署清单，新架构不部署了，改看词典索引。
+                done_mods = set((self._dict_index_read().get("mods") or {}).keys())
                 keep = []
                 for i, it in enumerate(items):
                     if self._mb_cancel.is_set():
                         break
                     info = MB.probe_text(it["root"], target, measure=True)
                     it.update(info)
-                    it["deployed"] = (os.path.normcase(os.path.abspath(it["root"]))
-                                      in dep)
+                    it["deployed"] = it.get("name") in done_mods
                     keep.append(it)
                     if i % 5 == 0 or i == total - 1:
                         self._mb_push({"type": "mb-scan", "done": i + 1,

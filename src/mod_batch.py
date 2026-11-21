@@ -197,15 +197,6 @@ def copy_mod(src, dst, with_archive=False, skip_assets=True, cancel=None):
         raise IOError("源目录不存在: %s" % src)
     stat = {"files": 0, "bytes": 0, "skipped": 0, "own": 0}
     seen = 0
-    # 上一轮部署进这个模组的、我们自己新建的文件（语言的包、中文归档）。
-    # 只在「路径命中**且**内容没变」时跳过：用户解压还原之后 hash 变了，
-    # 它就得作为普通模组内容被读回来，不能因为路径还在清单里就永久跳过。
-    own = {}
-    try:
-        import mod_deploy
-        own = {k: v[0] for k, v in mod_deploy.deployed_files(src).items() if v[1]}
-    except Exception:
-        own = {}
     for dirpath, dirnames, filenames in os.walk(src):
         dirnames[:] = [d for d in dirnames if d.lower() != ".git"]
         rel = os.path.relpath(dirpath, src)
@@ -233,16 +224,6 @@ def copy_mod(src, dst, with_archive=False, skip_assets=True, cancel=None):
                 continue
             sp = os.path.join(dirpath, fn)
             dp = os.path.join(out_dir, fn)
-            key = (os.path.join(rel, fn) if rel != "." else fn).replace("/", "\\").lower()
-            want = own.get(key)
-            if want:
-                try:
-                    import mod_deploy
-                    if mod_deploy.file_sha1(sp) == want:
-                        stat["own"] += 1
-                        continue
-                except Exception:
-                    pass
             try:
                 shutil.copy2(sp, dp)
             except (OSError, shutil.Error):
