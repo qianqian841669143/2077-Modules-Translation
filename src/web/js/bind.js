@@ -283,6 +283,28 @@ function bind() {
   // 汉化包总包，打完刷一遍状态。以前这里调 pack_zip()，那是个保存框，把当前
   // 模组目录整份打成 *_translated.zip，跟总包一点关系都没有。
   // （菜单里原来的「打包为 zip」是归档模式用的，由 table.js 控制显隐，别混）
+  // 新架构唯一的产物出口：提取当前模组 → 合并进分片词典 → 带上内置插件打包
+  const elExportDict = $("btn-export-dict");
+  if (elExportDict) {
+    elExportDict.onclick = async () => {
+      const b = elExportDict;
+      const old = b.textContent;
+      b.disabled = true;
+      b.textContent = T("导出中 ...");
+      try {
+        const r = await pywebview.api.export_ui_dict();
+        if (!r || !r.ok) { toast((r && r.error) || "error", "err"); return; }
+        const msg = T("已导出: %s").replace("%s", r.zip)
+          + " · " + T("新增 %d 条").replace("%d", r.added || 0);
+        toast(msg, "ok");
+      } catch (e) {
+        toast(String(e), "err");
+      } finally {
+        b.disabled = false;
+        b.textContent = old || T("导出汉化包");
+      }
+    };
+  }
   $("btn-repack").onclick = async () => {
     const b = $("btn-repack");
     const old = b.textContent;

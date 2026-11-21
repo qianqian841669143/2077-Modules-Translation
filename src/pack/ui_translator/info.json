@@ -1,0 +1,7 @@
+{
+  "name": "CP2077 UI Translator",
+  "version": "1.0.0",
+  "description": "运行时把界面上的英文字面量换成中文。不改任何模组文件，所以模组重装、升级都不会丢译文。",
+  "author": "Module Translation",
+  "license": "personal"
+}

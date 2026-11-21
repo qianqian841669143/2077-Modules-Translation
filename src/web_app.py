@@ -4009,6 +4009,90 @@ class Api(object):
         self._batch_log("归档产物并入 zip：%d 个文件" % len(names))
 
     # ------------------------------------------------------------ 回填
+    UI_PACK_NAME = "CP2077 UI Translator.zip"
+
+    def export_ui_dict(self):
+        """把当前模组的译文整理成分片词典，带上内置插件打成一个包。
+
+        这是新架构的产物出口：不改模组文件、不写账本，只产出一个 zip。
+        插件和 config.ini 从 src\\pack\\ui_translator 走（已打进 exe），
+        所以每一份包的结构完全一致，跟用户本机装没装过插件无关。
+        """
+        import shutil
+
+        import ui_dict
+
+        root = (self.root or "").strip()
+        if not root:
+            return {"ok": False, "error": self._tr("还没有加载模组。")}
+
+        try:
+            frags, meta = ui_dict.collect(root)
+        except Exception as ex:
+            return {"ok": False,
+                    "error": self._tr("提取失败: %s").replace("%s", str(ex))}
+        if not frags:
+            return {"ok": False, "error": self._tr("这个模组没有提取到可翻文本。")}
+
+        translated = {}
+        for r in (self.rows or []):
+            s = str(r.get("orig") or "").strip()
+            d = str(r.get("trans") or "").strip()
+            if s and d and s != d:
+                translated[s] = d
+
+        try:
+            mem = ui_dict.load_memory(os.path.join(config_dir(), "memory.json"))
+        except Exception:
+            mem = {}
+
+        tpl = os.path.join(bundle_dir("pack"), "ui_translator")
+        if not os.path.isdir(tpl):
+            return {"ok": False, "error": self._tr("内置插件资源缺失。")}
+
+        work = os.path.join(config_dir(), "ui_pack")
+        if os.path.isdir(work):
+            shutil.rmtree(work, ignore_errors=True)
+        shutil.copytree(tpl, work)
+
+        dict_dir = os.path.join(work, "red4ext", "plugins",
+                                "CP2077UITranslator", "dict")
+        # 上一版词典取游戏里正在用的那份：单模组导出是增量合并，
+        # 不能把别的模组的条目冲掉（尤其所有模组共用的 _global.tsv）。
+        live = ""
+        try:
+            from localization import archive as Larch
+            game = Larch.find_game(self.settings.get("game_dir") or None)
+            if game:
+                live = os.path.join(game, "red4ext", "plugins",
+                                    "CP2077UITranslator", "dict")
+        except Exception:
+            live = ""
+        if live and os.path.isdir(live):
+            shutil.copytree(live, dict_dir)
+        else:
+            os.makedirs(dict_dir, exist_ok=True)
+
+        stats = ui_dict.merge_into(dict_dir, frags, mem, translated)
+
+        out_zip = os.path.join(os.path.dirname(self._pack_zip_path()),
+                               self.UI_PACK_NAME)
+        try:
+            os.makedirs(os.path.dirname(out_zip), exist_ok=True)
+            ui_dict.pack(out_zip, work)
+        except Exception as ex:
+            return {"ok": False,
+                    "error": self._tr("打包失败: %s").replace("%s", str(ex))}
+
+        return {
+            "ok": True,
+            "zip": out_zip,
+            "files": stats.get("files", 0),
+            "added": stats.get("added", 0),
+            "missing": stats.get("missing", 0),
+            "buckets": len(frags),
+        }
+
     def apply(self, items, force=False):
         """异步: 立刻返回, 结果通过 applied / error 事件回推"""
         if not items:
