@@ -1497,6 +1497,43 @@ def _ctx(text, pos, take=28):
     return seg[-take:]
 
 
+# ---------------------------------------------------------------- 纯字面量拼接
+#
+# `"line one " + "line two"` 这种**全是字面量**的加法，运行时的结果就是拼起来
+# 的整串 —— 玩家看到的是整串，dll 渲染时拿到的也是整串。所以词典里必须有这个
+# 整串：收两个片段没用，精确匹配永远不中。
+#
+# 只认「+ 两边全是字面量」这一种。带函数调用或变量的拼接（`"Unlocks the " +
+# ME3_PerkHighlight("…") + "."`，全库 4,338 处）静态**还原不了**，别在这里猜：
+# 那段只能靠运行时的 miss.tsv 收。
+_CONCAT_RE = re.compile(
+    r'("(?:[^"\\\n]|\\.){1,400}"(?:\s*\+\s*"(?:[^"\\\n]|\\.){1,400}")+)')
+
+
+def concat_literals(text):
+    """把 "a" + "b" [+ "c"] 求值成 "abc"，返回 [(行号, 类型, 上下文, 完整串)]。
+
+    多行拼接、`+` 前后任意空白都认。拼出来的串仍然要过 is_label_text 和
+    NOISE.soft_family，所以 `" " + " "` 这类碎片和调试拼串进不来。
+    """
+    out = []
+    for m in _CONCAT_RE.finditer(text):
+        seg = m.group(1)
+        parts = re.findall(r'"((?:[^"\\\n]|\\.){1,400})"', seg)
+        if len(parts) < 2:
+            continue
+        joined = "".join(parts)
+        if not is_label_text(joined):
+            continue
+        if NOISE.soft_family(joined):
+            continue
+        if is_spaced_loc_key(joined):
+            continue
+        line = text.count("\n", 0, m.start(1)) + 1
+        out.append((line, TYPE_LONG, "concat", joined))
+    return out
+
+
 # ---------------------------------------------------------------- Lua 提取
 def _enclosing_call(span, spans):
     """返回包含给定调用的最内层父调用, 没有则返回 None。"""
@@ -2471,9 +2508,12 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
                     continue
             take(lit, TYPE_LONG, callee)
 
-    return [(lit.line, taken[lit.start][0], taken[lit.start][1],
+    base = [(lit.line, taken[lit.start][0], taken[lit.start][1],
              visible_text(lit.inner))
             for lit in lits if lit.start in taken]
+    # 纯字面量拼接：运行时值就是拼起来的整串，片段进词典永远不中。
+    base.extend(concat_literals(text))
+    return base
 
 
 # ---------------------------------------------------------------- REDscript / XML
@@ -2734,6 +2774,8 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
             continue
         seen.add(lit.start)
         out.append((lit.line, typ, ctx, lit.inner))
+    # 纯字面量拼接按整串收，见 concat_literals 的说明。
+    out.extend(concat_literals(text))
     return out
 
 
