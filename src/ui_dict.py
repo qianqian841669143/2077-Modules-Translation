@@ -608,16 +608,22 @@ def write_mod_full(out_dir, fragments, memory, translated=None):
     return stats
 
 
-def merge_tsv_dir(src_dir, out_file):
+def merge_tsv_dir(src_dir, out_file, skip=()):
     """把 dict 目录下所有 tsv 合成一个文件，给 CET 那边的入口用。
 
     CET 的 ImGui 文本没有 module 归属（`ImGui.Text("Enable mod")` 里没有类名），
     分片对它没意义，所以要的是一张总表。但分片里有 `_global` 没有的条目，
     所以全部并进来，先到先得（`_global` 先读，和插件侧的合并顺序一致）。
 
+    skip：不参与合并的分片名（小写比较）。`_archive.tsv` 必须排除 —— 那是
+    模组归档里的对话/物品描述，只会出现在游戏原生 UI，ImGui 上一辈子不会显示，
+    并进来只是让 Lua 表白大一倍（实测多 634 KB）。
+
     返回写进去的条数。
     """
-    names = [n for n in sorted(os.listdir(src_dir)) if n.lower().endswith(".tsv")]
+    skip = {str(s).lower() for s in (skip or ())}
+    names = [n for n in sorted(os.listdir(src_dir))
+             if n.lower().endswith(".tsv") and n.lower() not in skip]
     names.sort(key=lambda n: (n != "_global.tsv", n))
     seen = {}
     for name in names:

@@ -3385,8 +3385,9 @@ class Api(object):
         if not ok:
             out["errors"].append(r.get("error") or "重建词典失败")
         else:
-            self._batch_log("词典重建：%d 片 / %d 条 → %s"
+            self._batch_log("词典重建：%d 片 / %d 条 / 归档 %d 条 → %s"
                             % (int(r.get("files") or 0), int(r.get("entries") or 0),
+                               int(r.get("archived") or 0),
                                os.path.basename(out["zip"])))
         return out
 
@@ -3417,7 +3418,11 @@ class Api(object):
             return 0
         try:
             import ui_dict
-            return int(ui_dict.merge_tsv_dir(dict_dir, os.path.join(dst, "dict.tsv")))
+            # _archive.tsv 不并进来：那是归档里的对话/物品描述，只走游戏原生
+            # localization 表，ImGui 上不会出现，并进来只是白占 Lua 内存。
+            return int(ui_dict.merge_tsv_dir(
+                dict_dir, os.path.join(dst, "dict.tsv"),
+                skip={"_archive.tsv"}))
         except Exception:        # noqa: BLE001 - 少了这一层不该挡住导出
             return 0
 
@@ -3662,6 +3667,179 @@ class Api(object):
             "warning": prev_error,
         }
 
+    # ------------------------------------------------------------ 归档层（批量）
+    def _archive_cache_path(self):
+        """归档提取结果的缓存：{归档路径: {"sig": 大小+时间, "rows": [[原文, 自带译文]]}}。"""
+        return os.path.join(config_dir(), "cache", "archive_rows.json")
+
+    def _archive_dict_pairs(self, staging, translated=None, say=None):
+        """扫 staging 下所有模组的归档，返回已经翻好的 {英文原文: 译文}。
+
+        为什么必须单开一条路：归档里的 localization 表由游戏 C++ 的
+        localizationPersistenceOnScreen 直接读，既不过 redscript 的取字函数，
+        也不进 ImGui。源码提取（collect 只看 .reds/.lua/.json）和运行时 miss
+        都收不到它 —— 2026-11-22 实测：306 个归档里 2,526 条英文，
+        全量词典一条都没进去，界面上照样是英文。
+
+        译文来源与源码行同一套优先级：模组自带的 zh-cn > 本轮新译 > memory。
+        两边都没有的不进词典 —— 英文 key 配空值等于「翻译成空串」，比不翻更糟，
+        所以这里只返回 value 含汉字的条目。
+
+        代价全在解包：每个归档两次 CLI 进程（unbundle、convert serialize），
+        306 个串行是十几分钟。所以抽出来的原文按归档落盘（大小+时间当版本号），
+        归档没动过就直接读缓存、只重新查一遍 memory —— 第二轮几乎不花时间。
+        缓存只留这次还在的归档，卸载模组后不会一直占着。
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        import ui_dict
+
+        from localization import archive as Larch
+        from localization import pipeline as Lpipe
+        from localization import wkit as Lwkit
+
+        translated = dict(translated or {})
+
+        def _say(msg):
+            if say is not None:
+                say(msg)
+
+        cfg = self._l10n_cfg()
+        try:
+            cli = Lwkit.find_cli(cfg["wkit_path"] or None)
+        except Exception:
+            cli = None
+        if not cli:
+            return {}, {"skipped": "no_wkit"}
+
+        jobs, mods = [], 0
+        for name in sorted(os.listdir(staging)):
+            root = os.path.join(staging, name)
+            if not os.path.isdir(root):
+                continue
+            try:
+                if ui_dict.is_own_pack(root):
+                    continue
+            except Exception:
+                pass
+            mods += 1
+            try:
+                jobs.extend(t for t in Larch.resolve_all(root)
+                            if t.archive_path is not None)
+            except Exception:
+                continue
+
+        info = {"mods": mods, "archives": len(jobs), "cached": 0,
+                "scanned": 0, "empty": 0, "pairs": 0, "skipped": ""}
+        if not jobs:
+            info["skipped"] = "no_archive"
+            return {}, info
+
+        _say(self._tr("正在扫描模组归档（共 %d 个）...") % len(jobs))
+
+        cache_path = self._archive_cache_path()
+        try:
+            with open(cache_path, encoding="utf-8") as f:
+                cache = json.load(f) or {}
+        except Exception:
+            cache = {}
+
+        def _sig(t):
+            """归档 + 它的 .xl 的大小和时间。任何一边变了就重扫。"""
+            try:
+                st = os.stat(str(t.archive_path))
+            except OSError:
+                return ""
+            parts = ["%d:%d" % (st.st_size, int(st.st_mtime))]
+            try:
+                xl = t.xl_cfg
+                if xl is not None:
+                    xs = os.stat(str(xl))
+                    parts.append("%d:%d" % (xs.st_size, int(xs.st_mtime)))
+            except Exception:
+                parts.append("-")
+            return "|".join(parts)
+
+        def _one(t):
+            path = str(t.archive_path)
+            sig = _sig(t)
+            hit = cache.get(path) if sig else None
+            if hit and hit.get("sig") == sig:
+                return ("cache", path, sig, hit.get("rows") or [])
+            try:
+                work = os.path.join(
+                    config_dir(), "work",
+                    re.sub(r"[^A-Za-z0-9_.-]+", "_", t.name)[:60] or "mod")
+                sess = Lpipe.Session(t, cli, work, lang="zh-cn", log=None,
+                                     source_lang=cfg["source_lang"])
+                sess.scan()
+                if not sess.rows:
+                    return ("empty", path, sig, [])
+                got, _skipped = self._filter_l10n_rows(sess, cfg)
+                rows = []
+                for r in got:
+                    src = str(r.get("orig") or "").strip()
+                    if src:
+                        rows.append([src, str(r.get("trans") or "").strip()])
+                return ("scan", path, sig, rows)
+            except Exception:
+                return ("error", path, sig, [])
+
+        results, done = [], 0
+        try:
+            with ThreadPoolExecutor(max_workers=min(4, max(1, len(jobs)))) as ex:
+                for res in ex.map(_one, jobs):
+                    results.append(res)
+                    done += 1
+                    if done % 10 == 0 or done == len(jobs):
+                        _say(self._tr("正在扫描模组归档（%d/%d）...")
+                             % (done, len(jobs)))
+        except Exception:
+            results = [_one(t) for t in jobs]
+
+        try:
+            memory = ui_dict.load_memory(os.path.join(config_dir(), "memory.json"))
+        except Exception:
+            memory = {}
+
+        pairs, alive = {}, {}
+        for kind, path, sig, rows in results:
+            if kind == "cache":
+                info["cached"] += 1
+                # 必须把它写回 alive：缓存命中也是「这次见过这个归档」，
+                # 漏了这一步，第二次跑完 cache 会被写成空 {}，缓存自毁。
+                alive[path] = {"sig": sig, "rows": rows}
+            elif kind == "scan":
+                info["scanned"] += 1
+                alive[path] = {"sig": sig, "rows": rows}
+            elif kind == "empty":
+                info["empty"] += 1
+                alive[path] = {"sig": sig, "rows": []}
+            else:                       # 这个归档坏了：留着旧缓存，下轮再说
+                if path in cache:
+                    alive[path] = cache[path]
+                continue
+            for src, dst in rows:
+                if not src or src in pairs:
+                    continue
+                v = dst or ui_dict._pick_text(translated, memory, src,
+                                              ui_dict._clean(src))
+                if v and ui_dict.has_cjk(v) and v != src:
+                    pairs[src] = v
+
+        cache = dict(alive)
+        try:
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            tmp = cache_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(cache, f, ensure_ascii=False)
+            os.replace(tmp, cache_path)
+        except Exception:
+            pass
+
+        info["pairs"] = len(pairs)
+        return pairs, info
+
     def export_all_dict(self):
         """批量：全量重扫所有模组，重建分片词典并重打整个包。
 
@@ -3706,6 +3884,27 @@ class Api(object):
         except Exception as ex:
             return {"ok": False,
                     "error": self._tr("重建失败: %s").replace("%s", str(ex))}
+
+        # 归档层：模组 .archive 里的 localization 表。并进 _archive.tsv（那一片
+        # build_all 不产出，只增不减）。扫归档可能要几分钟，遮罩上得能看见 ——
+        # 批量路径用 mb-packing 事件把话说在遮罩第三行。
+        arch_info = {"skipped": "off"}
+        try:
+            arch_pairs, arch_info = self._archive_dict_pairs(
+                staging, translated=translated,
+                say=lambda m: self._mb_push({"type": "mb-packing", "note": str(m)}))
+        except Exception as ex:      # noqa: BLE001 - 归档层坏了不该拖垮源码词典
+            arch_pairs = {}
+            arch_info = {"skipped": "error: %r" % (ex,)}
+            self._batch_log("归档层失败: %r" % (ex,))
+        if arch_pairs:
+            arch = ui_dict.merge_into(dict_dir,
+                                      {"_archive": {s: "" for s in arch_pairs}},
+                                      mem, arch_pairs)
+            stats["archived"] = int(arch.get("added") or 0)
+            self._batch_log("归档层：%d 条进 _archive.tsv %s"
+                            % (len(arch_pairs), arch_info))
+        stats["archive"] = arch_info
 
         # CET 那层的入口（ImGui 文本）也一并塞进包，见 _stamp_cet_mod
         self._stamp_cet_mod(work, dict_dir)
