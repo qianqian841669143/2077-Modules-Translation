@@ -570,17 +570,16 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
 .packbar .pnote { flex: 1; font-size: 13px; color: var(--muted); }
 
 /* 汉化包详情：左边包信息 + 检查，右边分片明细。
-   以前是 auto-fit 铺满，两块卡宽度接近、分片那块还得自己滚；现在左栏固定
-   360，右栏吃掉剩下的宽度，分片在里面按 200px 一列自动铺开，整页只有一个
-   滚动条。 */
-.packgrid { flex: 1; min-height: 0; overflow: auto; display: grid; gap: 14px;
+   两栏都撑满可用高度，分片明细自己滚 —— 92 个分片全部铺开会让整页变得很
+   长，滚动时左边的总数就看不见了。窄屏（<900px）退回单列，整页滚。 */
+.packgrid { flex: 1; min-height: 0; overflow: hidden; display: grid; gap: 14px;
             grid-template-columns: 360px minmax(0, 1fr);
-            align-items: start; padding: 14px 20px 14px; }
+            align-items: stretch; padding: 14px 20px 14px; }
 @media (max-width: 900px) {
-  .packgrid { grid-template-columns: minmax(0, 1fr); }
+  .packgrid { grid-template-columns: minmax(0, 1fr); overflow: auto; }
 }
 .pcard { border: 1px solid var(--border); border-radius: 10px; background: var(--card);
-         padding: 14px 16px; min-width: 0; }
+         padding: 14px 16px; min-width: 0; min-height: 0; overflow: auto; }
 .phead { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
 .pdot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .pdot.ok { background: var(--success); }
@@ -600,10 +599,10 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
 .pk:last-child { border-bottom: 0; }
 .pk b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums;
         text-align: right; }
-/* 分片明细：每个 .tsv 一个模组，按 180px 一列自动铺开，不单独滚。
-   左卡在滚动时固定住，翻着 92 个分片也能看到包的总数。 */
-.packgrid > .pcard:first-child { position: sticky; top: 0; }
-.pshards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+/* 分片明细：卡片自己占满剩余高度，里面按 180px 一列铺开、超出在卡片内滚动 */
+.pcard.pshardcard { display: flex; flex-direction: column; overflow: hidden; }
+.pshards { flex: 1; min-height: 0; overflow: auto; padding-right: 4px;
+           display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
            gap: 0 14px; margin-top: 4px; }
 .psh { display: flex; justify-content: space-between; gap: 10px; font-size: 12px;
        padding: 4px 0; color: var(--muted); border-bottom: 1px dashed var(--border); }

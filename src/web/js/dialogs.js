@@ -192,7 +192,7 @@ function renderPackStatus(s) {
   const sd = Array.isArray(s.shardsDetail) ? s.shardsDetail : [];
   if (sd.length) {
     const tot = sd.reduce((a, d) => a + Number(d.rows || 0), 0);
-    cards.push('<div class="pcard">' +
+    cards.push('<div class="pcard pshardcard">' +
       head("ok", T("分片明细"), tf("%d 个 · %d 条", sd.length, tot), "ok") +
       '<div class="pshards">' +
       sd.map((d) => '<div class="psh"><span title="' + esc(d.name) + '.tsv">' +
