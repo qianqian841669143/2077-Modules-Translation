@@ -573,7 +573,7 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
    两栏都撑满可用高度，分片明细自己滚 —— 92 个分片全部铺开会让整页变得很
    长，滚动时左边的总数就看不见了。窄屏（<900px）退回单列，整页滚。 */
 .packgrid { flex: 1; min-height: 0; overflow: hidden; display: grid; gap: 14px;
-            grid-template-columns: 360px minmax(0, 1fr);
+            grid-template-columns: 310px minmax(0, 1fr);
             align-items: stretch; padding: 14px 20px 14px; }
 @media (max-width: 900px) {
   .packgrid { grid-template-columns: minmax(0, 1fr); overflow: auto; }
