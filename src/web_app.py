@@ -3468,41 +3468,6 @@ class Api(object):
         except Exception:
             return ""
 
-    def _ledger_apply(self, items):
-        """把译文写进账本（userdata\\ledger\\mods\\<文件夹>.lua），不改模组任何文件。
-
-        这是「应用到模组」现在的唯一动作：以前这里调 _do_apply 覆盖原文件，
-        现在只落账本，游戏侧由 zzz_CP2077_Localization 运行时替换。
-        """
-        import mod_ledger
-        root = self.root or ""
-        out = mod_ledger.ledger_dir(self.settings)
-        tgt = self.settings.get("target_lang", "简体中文")
-        base = normalize_api_base(self.settings.get("api_base", ""))
-        model = self.settings.get("model", "").strip()
-        rec = mod_ledger.write(out, root, items,
-                               staging_name=os.path.basename(root),
-                               target=tgt, base=base, model=model,
-                               log=self._batch_log)
-        self._batch_log("ledger: %s (%d 条)"
-                        % (rec.get("file"), rec.get("entries") or 0))
-        return {"ok": int(rec.get("entries") or 0), "fail": 0, "errors": [],
-                "ledger": rec}
-
-    # ---------------------------------------------------- 账本 ↔ 汉化包
-    # 账本是活的运行时数据：all.lua / names.lua 给游戏读，mods\*.lua 是
-    # 重建 all.lua 的源，index.json 是索引。它们全躺在 staging 的补丁包
-    # 目录里，而 zip 只带得动包里有的文件 —— 重装 zip 时 Vortex 会用包里
-    # 那几个条目覆盖 staging，25 个模组账本当场全丢。所以每次写完账本，
-    # 把整个 ledger 目录同步进 zip，让 zip 成为唯一真相。
-    # 汉化包只含一个 CET mod：账本 + 运行时 + 说明都在 zzz_CP2077_Localization 下。
-    # zzz_ 前缀不能去——CET 按目录名字母序加载，必须排在 MCM 之后，patch 它的
-    # provider 才轮得到。2026-11-20 之前是 zzz_mod_text_override +
-    # zzz_CP2077_mod_fix 两个目录（后者原本还是第一人称反射修复），合并掉了。
-    _PACK_MOD_DIR = ("bin/x64/plugins/cyber_engine_tweaks/mods/"
-                     "zzz_CP2077_Localization/")
-    _LEDGER_ZIP_REL = _PACK_MOD_DIR + "ledger/"
-
     def _pack_zip_path(self):
         """汉化包 zip 的落点：``<设置里的输出目录>\\CP2077 Localization Pack.zip``。
 
@@ -3601,73 +3566,6 @@ class Api(object):
                 out[self._LEDGER_ZIP_REL + rel] = p
         return out
 
-    def _sync_ledger_to_zip(self, extra=None):
-        """把补丁包整份（账本 + 运行时 + 说明）合并进汉化包 zip。
-
-        不能只并账本：zip 一旦被删/换掉，只并账本会造出一个没有运行时
-        init.lua 的空壳包。这里优先用工作目录整份重建。
-
-        extra: 额外并进总包的文件 {zip 内路径: 磁盘路径}。单模组「应用」走
-        这个口——它自己的覆盖文件 / 归档产物只该进那个单模组 zip，但也必须
-        同时进总包，否则总包永远是旧的，重装一次就把这个模组的译文退回去。
-
-        顺手把包里**旧的逻辑脚本**（.reds）删掉：2026-11-20 之前所有 .reds
-        都当覆盖文件投，模组被禁用后游戏里只剩我们的副本，redscript 编译
-        直接失败（RedRequire「您的模组脚本未编译」）。新规则只投本地化包，
-        旧条目得跟着清，否则重装一次 zip 又全回来了。
-        """
-        import mod_pack
-        zp = self._pack_zip_path()
-        patch = self._patch_map()
-        files = patch or self._ledger_zip_map()
-        for k, v in (extra or {}).items():
-            if v and os.path.isfile(v):
-                files[k] = v
-        if not files:
-            self._batch_log("账本目录为空，跳过同步")
-            return {"files": 0, "zip": zp}
-        drop = self._bad_reds_names(zp)
-        r = mod_pack.merge_into_zip(zp, files, drop_names=drop,
-                                    log=self._batch_log)
-        self._batch_log("补丁包同步进 zip：%d 个文件（替换 %d，保留 %d%s）"
-                        % (len(files), r.get("replaced") or 0,
-                           r.get("kept") or 0,
-                           ("，删掉 %d 个旧脚本" % len(drop)) if drop else ""))
-        return {"files": len(files), "zip": zp,
-                "replaced": r.get("replaced"), "kept": r.get("kept"),
-                "dropped": r.get("dropped")}
-
-    def _bad_reds_names(self, zp):
-        """zip 里该删掉的 .reds：不是 Codeware 本地化包的那些。
-
-        逻辑 / UI 脚本一旦被我们单独投递，就等于只给了某个 redscript
-        模块的一部分编译单元。模组被禁用或升级后，游戏里剩下的这份副本
-        会让 import 找不到声明，214 条错、游戏起不来。所以宁可让这些
-        文案只留在账本里（MCM / ImGui 能替到），也不覆盖源码。
-        """
-        import mod_pack
-        import zipfile
-        out = set()
-        if not zp or not os.path.isfile(zp):
-            return out
-        try:
-            with zipfile.ZipFile(zp, "r") as z:
-                for name in z.namelist():
-                    if not name.lower().endswith(".reds"):
-                        continue
-                    try:
-                        text = z.read(name).decode("utf-8", "replace")
-                    except Exception:       # noqa: BLE001 - 读不动就当不安全
-                        out.add(name)
-                        continue
-                    if not mod_pack.is_localization_text(text):
-                        out.add(name)
-        except Exception as ex:             # noqa: BLE001 - 检查失败不该挡住同步
-            self._batch_log("检查旧包里的 .reds 失败：%s" % ex)
-        return out
-
-    # ------------------------------------------------- 单模组：独立 zip
-    @staticmethod
     def _all_lua_subset(text, folder):
         """从 all.lua 里只挑出指定模组那一段。
 
@@ -3704,94 +3602,6 @@ class Api(object):
         head.append("return {")
         return "\n".join(head + pick[0] + ["}", ""])
 
-    def _standalone_zip_path(self, mod_root=""):
-        """单模组「应用」的产物：``<输出目录>\\<模组名>_<目标语言>.zip``。
-
-        输出目录和汉化包总包同一个（设置里的 zh_pack_dir，留空则从 staging 推导）。
-        文件名用的是「部署到游戏目录时的文件夹名」——不是 staging 里那串带版本号
-        和 hash 的目录名（`ApexGrapple 1.0.7 36443 …LACBAIvh4`）。
-        """
-        import mod_ledger
-        d = os.path.dirname(self._pack_zip_path())
-        root = mod_root or (self.root or "")
-        folder = mod_ledger.folder_name(root) or mod_ledger.safe_name(
-            os.path.basename(root.rstrip("\\/")) or "mod")
-        lang = mod_ledger.safe_name(
-            str(self.settings.get("target_lang") or "简体中文").strip())
-        return os.path.join(d, "%s_%s.zip" % (folder, lang))
-
-    def _build_standalone_zip(self, mod_root, extra=None):
-        """把这一轮单模组的产物打成一个独立 zip。只含这一个模组。
-
-        extra: 额外要收的文件 {zip内路径: 磁盘路径}，归档产物走这个口。
-
-        内容：
-          覆盖文件（和原模组同路径同名）
-          归档产物 archive/pc/mod/<mod>_zh-cn.archive + .xl
-          zzz_CP2077_Localization 的运行时（init.lua / README.txt / names.lua）
-          这个模组的 ledger/mods/<folder>.lua
-          只含这个模组的一份 all.lua
-        """
-        import mod_ledger
-        import zipfile
-
-        files = {}
-        pend = getattr(self, "_pack_pending", None) or {}
-        for k, v in (pend.get("files") or {}).items():
-            if v and os.path.isfile(v):
-                files[k] = v
-        for k, v in (extra or {}).items():
-            if v and os.path.isfile(v):
-                files[k] = v
-
-        root = mod_root or (self.root or "")
-        folder = mod_ledger.folder_name(root) or mod_ledger.safe_name(
-            os.path.basename(root.rstrip("\\/")) or "mod")
-
-        # imgui_hook.lua 必须带：ImGui 自绘界面（CTO 那一类）靠它才翻得动
-        keep = {self._PACK_MOD_DIR + n
-                for n in ("init.lua", "imgui_hook.lua", "README.txt", "names.lua")}
-        keep.add(self._LEDGER_ZIP_REL + "mods/" + folder + ".lua")
-        for k, v in self._patch_map().items():
-            if k in keep:
-                files[k] = v
-
-        # all.lua 必须带（运行时只读这一个文件），但只留这一个模组
-        ldir = self._ledger_dir()
-        allp = os.path.join(ldir, "all.lua") if ldir else ""
-        if allp and os.path.isfile(allp):
-            try:
-                with open(allp, "r", encoding="utf-8", errors="ignore") as f:
-                    sub = self._all_lua_subset(f.read(), folder)
-                if sub:
-                    td = tempfile.mkdtemp(prefix="zhsub-")
-                    self._standalone_tmp.append(td)
-                    tp = os.path.join(td, "all.lua")
-                    with open(tp, "w", encoding="utf-8", newline="\n") as f:
-                        f.write(sub)
-                    files[self._LEDGER_ZIP_REL + "all.lua"] = tp
-                else:
-                    self._batch_log("all.lua 里没找到 %s 这一段，单模组包不含账本汇总"
-                                    % folder)
-            except Exception as ex:      # noqa: BLE001 - 少一份 all.lua 不该毁掉产物
-                self._batch_log("生成 all.lua 子集失败：%s" % ex)
-
-        if not files:
-            return {"ok": False, "error": self._tr("没有可打包的内容")}
-
-        zp = self._standalone_zip_path(root)
-        os.makedirs(os.path.dirname(zp) or ".", exist_ok=True)
-        tmpz = zp + ".new"
-        with zipfile.ZipFile(tmpz, "w", zipfile.ZIP_DEFLATED) as z:
-            for name, path in files.items():
-                z.write(path, name)
-        os.replace(tmpz, zp)
-        self._batch_log("单模组包：%d 个文件 → %s"
-                        % (len(files), os.path.basename(zp)))
-        return {"ok": True, "zip": zp, "files": len(files),
-                "name": os.path.basename(zp)}
-
-    # ------------------------------------------------------------ 分流
     def _apply_all(self, items, standalone=True):
         """应用 = 把当前模组的译文合并进分片词典，重打整个包。
 
@@ -3862,71 +3672,6 @@ class Api(object):
         p["fail"] = 0
         return out
 
-    def _pack_apply(self, root, rows, collect=False):
-        """把文案写成覆盖文件，合并进汉化包 zip。原模组只读。
-
-        collect=True：只生成文件、暂存待合并（批量用），临时目录留给
-        _flush_pack 收尾删除，这里不能删。
-        """
-        import mod_pack
-        zip_path = self._pack_zip_path()
-        res = mod_pack.build_pack(root, rows, log=self._batch_log)
-        if not res["files"]:
-            mod_pack.cleanup(res["temp"])
-            return {"ok": 0, "fail": res["fail"], "errors": res["errors"],
-                    "zip": zip_path, "files": 0, "entries": 0}
-
-        names = {}
-        for rel, path in res["files"].items():
-            names[mod_pack.pack_zip_name(zip_path, rel)] = path
-
-        if collect:
-            p = self._pack_pending_state()
-            p["temp"].append(res["temp"])
-            p["files"].update(names)
-            p["ok"] += int(res["ok"] or 0)
-            p["fail"] += int(res["fail"] or 0)
-            p["errors"].extend(res["errors"] or [])
-            return {"ok": res["ok"], "fail": res["fail"],
-                    "errors": res["errors"], "zip": zip_path,
-                    "files": len(names), "entries": res["ok"],
-                    "collected": True}
-
-        try:
-            mod_pack.merge_into_zip(zip_path, names, log=self._batch_log)
-        finally:
-            mod_pack.cleanup(res["temp"])
-
-        st_path = mod_pack.state_path(self.settings)
-        st = mod_pack.load_state(st_path)
-        mod_pack.update_state(st, root, res["ok"], res["files"], zip_path)
-        mod_pack.save_state(st_path, st)
-
-        self._batch_log("汉化包：%d 个文件 / %d 条 → %s"
-                        % (len(names), res["ok"], os.path.basename(zip_path)))
-        return {"ok": res["ok"], "fail": res["fail"], "errors": res["errors"],
-                "zip": zip_path, "files": len(names), "entries": res["ok"]}
-
-    def _merge_archive_into_zip(self, ap, xlp):
-        """把组好的 `_zh-cn.archive` / `.xl` 并进汉化包 zip。
-
-        归档只能落在游戏目录的 `archive/pc/mod/` 下才会被加载，所以 zip 内
-        路径固定成这个，不管产物此刻躺在模组的哪个子目录。
-        """
-        import mod_pack
-        names = {}
-        for p in (ap, xlp):
-            if p and os.path.isfile(p):
-                names["archive/pc/mod/" + os.path.basename(p)] = p
-        if not names:
-            return
-        zip_path = self._pack_zip_path()
-        mod_pack.merge_into_zip(zip_path, names, log=self._batch_log)
-        self._batch_log("归档产物并入 zip：%d 个文件" % len(names))
-
-    # ------------------------------------------------------------ 回填
-    UI_PACK_NAME = "CP2077 UI Translator.zip"
-
     def export_ui_dict(self):
         """把当前模组的译文整理成分片词典，带上内置插件打成一个包。
 
@@ -3991,8 +3736,8 @@ class Api(object):
 
         stats = ui_dict.write_mod_full(dict_dir, frags, mem, translated)
 
-        out_zip = os.path.join(os.path.dirname(self._pack_zip_path()),
-                               self.UI_PACK_NAME)
+        # 包名沿用输出目录那套写死的 PACK_ZIP_NAME，用户已经习惯这个名字
+        out_zip = self._pack_zip_path()
         try:
             os.makedirs(os.path.dirname(out_zip), exist_ok=True)
             ui_dict.pack(out_zip, work)
@@ -4053,8 +3798,8 @@ class Api(object):
             return {"ok": False,
                     "error": self._tr("重建失败: %s").replace("%s", str(ex))}
 
-        out_zip = os.path.join(os.path.dirname(self._pack_zip_path()),
-                               self.UI_PACK_NAME)
+        # 包名沿用输出目录那套写死的 PACK_ZIP_NAME
+        out_zip = self._pack_zip_path()
         try:
             os.makedirs(os.path.dirname(out_zip), exist_ok=True)
             ui_dict.pack(out_zip, work)
