@@ -1415,6 +1415,45 @@ class Api(object):
         }
         return rows, group, info
 
+    def _purge_work(self):
+        """删掉这次加载为解包建的 work 目录，返回释放的字节数。
+
+        `localization.archive.unpack()` 是**全量**解包（`want` 参数只是摆设，
+        WolvenKit 的 `-w` 是通配符拼不出路径选择器），一个 300 MB 的服装归档
+        解出来就是 304 MB 落在 `userdata\\work\\<归档名>\\raw` 下。这些文件只在
+        提取那一步用，rows 已经进内存、译文已经进翻译记忆，删掉不留任何后果。
+
+        只删 `config_dir()\\work` 底下的路径：workdir 是模块算出来的，万一哪天
+        传进来别的地方，这里不能退化成「递归删任意目录」。
+        """
+        import shutil
+
+        roots = []
+        sess = getattr(self, "l10n_session", None)
+        if sess is not None:
+            # SessionGroup 把 N 个归档会话包成一个，两边都取一遍
+            for s in [sess] + list(getattr(sess, "sessions", None) or []):
+                w = getattr(s, "workdir", None)
+                if w:
+                    roots.append(str(w))
+        base = os.path.normcase(os.path.abspath(os.path.join(config_dir(), "work")))
+        freed = 0
+        for d in set(roots):
+            dn = os.path.normcase(os.path.abspath(d))
+            if not dn.startswith(base + os.sep) or not os.path.isdir(d):
+                continue
+            try:
+                for dirpath, _dn, fns in os.walk(d):
+                    for fn in fns:
+                        try:
+                            freed += os.path.getsize(os.path.join(dirpath, fn))
+                        except OSError:
+                            pass
+                shutil.rmtree(d, ignore_errors=True)
+            except Exception:
+                pass
+        return freed
+
     # ------------------------------------------------------------ 资源模式
     #
     # 与上面的源码模式并列：源码模式回写明文文件，资源模式改 .archive 里的 CR2W。

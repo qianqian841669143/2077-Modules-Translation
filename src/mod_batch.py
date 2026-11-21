@@ -412,8 +412,40 @@ def finish(ctx, cand, prep, r):
     r["failed"] = 0
     r["errors"] = []
     r["ok"] = True
+    _drop_copies(ctx, dst, w, r)
     return
 
+
+def _drop_copies(ctx, dst, w, r):
+    """这个模组翻完就删掉它的副本目录和归档解包残留。
+
+    新架构的产物是词典包（收尾时从 staging 重扫 + 翻译记忆重建），副本本身
+    不参与交付，跑完也没人会再打开它。以前不清，`batch\\out` 一轮就堆到十几 GB，
+    还得靠「清空输出」手动扫尾 —— 而那个按钮一清就把续跑记录一起端了。
+
+    归档层的 `work\\<归档名>` 同理：`archive.unpack()` 是全量解包（want 参数
+    只是摆设），一个 300 MB 的服装归档解出来就是 304 MB，122 个模组攒了 5.6 GB。
+
+    删失败不算错：文件可能被杀毒 / 索引进程占着，下一轮 `prepare()` 会先 rmtree
+    再复制。这里吞掉异常，绝不让收尾的清理把一个跑成功的模组判成失败。
+    """
+    try:
+        freed = int(r.get("bytes") or 0)     # 副本体积 = 复制时统出来的那批文件
+        if w is not None:
+            try:
+                freed += int(w._purge_work() or 0)
+            except Exception:
+                pass
+        # 输出目录校验（prepare 已经挡过一道）：这里再确认一次，别让
+        # 「删副本」变成删到别的地方。
+        out_n = os.path.normcase(os.path.abspath(ctx.out_root or ""))
+        dst_n = os.path.normcase(os.path.abspath(dst or ""))
+        if (dst and out_n and dst_n.startswith(out_n + os.sep)
+                and os.path.isdir(dst)):
+            shutil.rmtree(dst, ignore_errors=True)
+        r["freed"] = freed
+    except Exception:
+        pass
 
 
 def run(ctx, cands):

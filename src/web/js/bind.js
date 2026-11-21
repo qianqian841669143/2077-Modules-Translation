@@ -301,7 +301,6 @@ function bind() {
   };
   $("q-out").oninput = () => syncQueueStart();
   $("btn-q-export").onclick = () => exportQueueResults();
-  $("btn-q-clear").onclick = () => clearQueueOut();
   $("btn-copy-apply-errors").onclick = () => {
     const text = state.applyErrors.map((x) => [
       x.file || "", x.line || "", x.orig || "", x.trans || "",

@@ -606,16 +606,8 @@ async function exportQueueResults() {
   toast(msg.replace("%d", r.rows || 0).replace("%s", r.path), "ok");
 }
 
-async function clearQueueOut() {
-  // batch_clear 随新架构下线了（批量产物不再需要单独清理）
-  if (!pywebview.api.batch_clear) { toast(T("该功能已下线"), "warn"); return; }
-  if (state.mbRunning) return;
-  if (!confirm(T("清空批量输出目录？里面是上一次跑出来的副本，删了就没了。"))) return;
-  const r = await pywebview.api.batch_clear();
-  if (!r || !r.ok) { toast((r && r.error) || "error", "err"); return; }
-  state.mbDone = {};
-  renderQueue();
-  toast(T("已清空 %d 项").replace("%d", r.removed || 0), "ok");
-}
+/* 「清空输出」按钮和 clearQueueOut() 已移除：副本现在每个模组跑完就被
+   mod_batch._drop_copies 删掉了，没有东西可清。留着这个入口只会让人以为
+   还得手动扫尾，而它连带删续跑记录（run.jsonl）—— 那正是模组列表要用的。 */
 
 /* ---------------- 应用 / Excel ---------------- */
