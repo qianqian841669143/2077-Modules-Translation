@@ -319,13 +319,14 @@ def write_dicts(out_dir, fragments, memory, translated=None):
 
 
 def build_all(mods_root, memory, out_dir, target_locale="", progress=None,
-              translated=None):
+              translated=None, runtime_miss=None):
     """扫 mods_root 下每个模组目录，合并成分片词典写到 out_dir。
 
     这是「批量翻译」的落盘步骤：全量重扫重翻后整包重打。
     单模组那一步不调这里，只动自己那一片。
 
     translated: {原文: 译文}，优先级高于 memory，放本次新翻的条目。
+    runtime_miss: 运行时补漏的原文列表，见函数末尾那段注释。
 
     返回值多一个 per_mod：{目录名: {"buckets": {分片键: 提取条数},
     "missing": 还没译文的条数}}。新架构下没有账本，这份统计就是「这个模组
@@ -378,6 +379,21 @@ def build_all(mods_root, memory, out_dir, target_locale="", progress=None,
                 bucket.setdefault(src, ctx)
         if progress is not None and (i % 10) == 0:
             progress(i, len(names))
+
+    # 运行时补漏：CET 那层入口（src/pack/cet_zh/init.lua）会把「流经 ImGui 但
+    # 词典里没有」的串写进 miss.tsv。静态提取看不见它们 —— 三元表达式
+    # （`ImGui.Button(Duty.onDuty and 'Go off duty' or 'Go on duty')`）、
+    # 别的 mod 自己封装的按钮（`controls.DynamicButton("All LUTs")`）都收不到 ——
+    # 但界面上一字不差地显示过，是货真价实的界面文案。
+    #
+    # 并进全局分片后，它们才进得了「还差几条」、才有机会被翻译；翻完下一轮
+    # 落盘就生效。不并的话 miss.tsv 就是个没人读的垃圾文件，白收集。
+    for _raw in (runtime_miss or ()):
+        s = _clean(str(_raw or ""))
+        if not s or has_cjk(s):
+            continue
+        merged.setdefault("", {}).setdefault(s, "runtime")
+
     stats.update(write_dicts(out_dir, merged, memory, translated))
     stats["buckets"] = len(merged)
     stats["per_mod"] = per_mod

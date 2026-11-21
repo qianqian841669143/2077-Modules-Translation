@@ -3391,6 +3391,34 @@ class Api(object):
         except Exception:        # noqa: BLE001 - 少了这一层不该挡住导出
             return 0
 
+    def _cet_miss_strings(self):
+        """读 CET 入口收集的 miss.tsv —— 跑过游戏之后，这里是 ImGui 上真实显示过、
+        但词典里没有的文案。
+
+        静态提取永远收不全 CET 生态的文案：`ImGui.Button(Duty.onDuty and
+        'Go off duty (10-7)' or 'Go on duty (10-8)')` 这种三元表达式、
+        `controls.DynamicButton("All LUTs", ...)` 这种模组自己封装的按钮，文案都
+        藏在表达式里，提取器只能收纯字面量。所以这份漏网清单只能在运行时拿。
+        读不到就返回空，不该挡住导出。
+        """
+        game = str(self.settings.get("game_dir") or "").strip().strip('"')
+        if not game:
+            return []
+        path = os.path.join(game, "bin", "x64", "plugins",
+                            "cyber_engine_tweaks", "mods", "zzz_CP2077_CETZh",
+                            "miss.tsv")
+        out, seen = [], set()
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    s = line.rstrip("\r\n").strip()
+                    if s and s not in seen:
+                        seen.add(s)
+                        out.append(s)
+        except OSError:
+            return []
+        return out
+
     def export_ui_dict(self, extra_pairs=None):
         """把当前模组的译文整理成分片词典，带上内置插件打成一个包。
 
@@ -3558,7 +3586,8 @@ class Api(object):
                 translated[s] = d
 
         try:
-            stats = ui_dict.build_all(staging, mem, dict_dir, translated=translated)
+            stats = ui_dict.build_all(staging, mem, dict_dir, translated=translated,
+                                      runtime_miss=self._cet_miss_strings())
         except Exception as ex:
             return {"ok": False,
                     "error": self._tr("重建失败: %s").replace("%s", str(ex))}
