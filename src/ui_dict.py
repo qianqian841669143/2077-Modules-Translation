@@ -212,7 +212,7 @@ def write_dicts(out_dir, fragments, memory, translated=None):
 
     stats = {"files": 0, "entries": 0, "missing": 0, "missing_samples": []}
     for key, items in sorted(fragments.items()):
-        rows = []
+        rows = {}
         for src, _ctx in items.items():
             s = _clean(src)
             if not s or has_cjk(s):
@@ -223,17 +223,24 @@ def write_dicts(out_dir, fragments, memory, translated=None):
                 if len(stats["missing_samples"]) < 200:
                     stats["missing_samples"].append(s)
                 continue
-            rows.append((s, _clean(dst)))
+            d = _clean(dst)
+            rows[s] = d
+            # 游戏侧传进来的串常常带首尾空格（" See the message"）。
+            # 原样那条照留，另外补一条去空格的，两种写法都能命中；
+            # 已经存在同文条目就不覆盖，避免把空格版挤掉。
+            t = s.strip()
+            if t and t != s:
+                rows.setdefault(t, d)
         if not rows:
             continue
-        rows.sort()
+        pair_list = sorted(rows.items())
         name = "%s.tsv" % (key if key else GLOBAL_KEY)
         path = os.path.join(out_dir, name)
         with open(path, "w", encoding="utf-8", newline="\n") as f:
-            for s, d in rows:
+            for s, d in pair_list:
                 f.write(s + "\t" + d + "\n")
         stats["files"] += 1
-        stats["entries"] += len(rows)
+        stats["entries"] += len(pair_list)
     return stats
 
 
