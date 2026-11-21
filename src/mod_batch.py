@@ -49,6 +49,13 @@ class Cancelled(Exception):
 # 一旦被当成模组跑，翻译器就在翻译自己的产物 —— 2026-11-21 实测一次
 # 复制了 682 个文件、加载耗掉 48 秒，而且产物会再被递归打进 zip。
 _OWN_PACK_MARKS = (
+    # 新架构产物（当前的包就长这样）。2026-11-22 实测：少了这一条，
+    # `CP2077 Localization Pack` 会被 list_dirs 当成普通模组 —— 它带着
+    # 3.5 MB 的 dict，预扫描数出 98,882 行，把「合计条数」直接堆到 13.8 万。
+    os.path.join("red4ext", "plugins", "CP2077UITranslator"),
+    os.path.join("bin", "x64", "plugins", "cyber_engine_tweaks", "mods",
+                 "zzz_CP2077_CETZh"),
+    # 旧架构产物：留着，用户机上的老包还没清干净
     os.path.join("bin", "x64", "plugins", "cyber_engine_tweaks", "mods",
                  "zzz_CP2077_Localization"),
     os.path.join("bin", "x64", "plugins", "cyber_engine_tweaks", "mods",

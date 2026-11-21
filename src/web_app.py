@@ -2289,11 +2289,13 @@ class Api(object):
                         cache[name]["archiveRows"] = int(by_mod.get(name) or 0)
                 self._scan_cache_write(root, cache)
                 self._mb_push({"type": "mods-scanned", "total": len(items),
-                               "scanned": len(cache), "staging": root,
+                               # 只数还在 items 里的：缓存里留着已经卸载、
+                               # 或者被 list_dirs 过滤掉的条目（自家产物包就曾
+                               # 占着 98,882 行，把总数堆成 13.8 万）。
+                               "scanned": sum(1 for it in items
+                                              if it["name"] in cache),
+                               "staging": root,
                                "upToDate": len(items) - len(todo),
-                               # 只数还在 items 里的：缓存里可能留着已经卸载、
-                               # 或者被 list_dirs 过滤掉的条目（自家产物包就
-                               # 曾占着 98,882 行，把总数堆成 13.8 万）。
                                "rows": sum(int((cache.get(it["name"]) or {})
                                                .get("entries") or 0)
                                            for it in items)})
