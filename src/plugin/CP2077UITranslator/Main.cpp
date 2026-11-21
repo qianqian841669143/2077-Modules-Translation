@@ -91,6 +91,7 @@ std::atomic<uint64_t> g_totalCalls{0};   // 经过 hook 的全部 redscript 调�
 std::atomic<uint64_t> g_textCalls{0};    // 其中 reg 命中文本函数的
 uint32_t g_verbose = 0;
 uint32_t g_stat = 0;                     // 1 = 每 5 秒写一行频率统计
+uint32_t g_onscreens = 0;                // 0=只打印地址不挂 hook；1=只调原函数；2=遍历不写；3=改写
 uint64_t g_lastStat = 0;
 
 // 每一份词典由一段连续内存 + 一个索引构成；string_view 指向这段内存，
@@ -1015,7 +1016,7 @@ void ReadConfig(const std::wstring& aDir)
     while (p != nullptr && *p != '\0')
     {
         const char* eol = strchr(p, '\n');
-        if (strncmp(p, "verbose", 7) == 0 || strncmp(p, "stat", 4) == 0)
+        if (strncmp(p, "verbose", 7) == 0 || strncmp(p, "stat", 4) == 0 || strncmp(p, "onscreens", 9) == 0)
         {
             const char* eq = strchr(p, '=');
             if (eq != nullptr)
@@ -1031,6 +1032,10 @@ void ReadConfig(const std::wstring& aDir)
                 else if (p[0] == 's' && v >= 0 && v <= 1)
                 {
                     g_stat = static_cast<uint32_t>(v);
+                }
+                else if (p[0] == 'o' && v >= 0 && v <= 3)
+                {
+                    g_onscreens = static_cast<uint32_t>(v);
                 }
             }
         }
@@ -1175,20 +1180,32 @@ using LoadOnScreens_t = uint64_t (*)(RED4ext::Handle<OnScreenEntries>&, RED4ext:
 
 LoadOnScreens_t g_loadOnScreensOrig = nullptr;
 
-uint64_t LoadOnScreensDetour(RED4ext::Handle<OnScreenEntries>& aOut, RED4ext::ResourcePath aPath)
+// 只在 __try 外面调：本函数里有 CString 临时对象要展开，和 __try 同处一个
+// 函数体 MSVC 会直接报 C2712，所以遍历改写必须拆成独立的 noinline 函数。
+__declspec(noinline) uint32_t RewriteOnScreens(OnScreenEntries* aTable, bool aWrite)
 {
-    const uint64_t result = g_loadOnScreensOrig(aOut, aPath);
-    if (aOut.instance == nullptr || g_global.map.empty())
+    auto& list = aTable->entries;
+    const uint32_t count = list.Size();
+    Log("[onscreens] entries=%u", count);
+    if (count > 200000)
     {
-        return result;
+        // 布局对不上时 Size() 读出来是垃圾，别拿着它去遍历野内存
+        Log("[onscreens] implausible count, layout mismatch?");
+        return 0;
     }
 
-    auto& list = aOut.instance->entries;
     uint32_t replaced = 0;
-    for (uint32_t i = 0; i < list.Size(); ++i)
+    for (uint32_t i = 0; i < count; ++i)
     {
         auto& entry = list[i];
         const char* key = entry.secondaryKey.c_str();
+        if (i < 3)
+        {
+            // 前三条先把 key 原样打出来：key 是 GP_Herald_Mesh-Name 这种形状
+            // 就说明 secondaryKey@0x08 的偏移是对的，后面的赋值才敢下笔。
+            Log("[onscreens] entry[%u] pk=%llu key='%s'", i,
+                static_cast<unsigned long long>(entry.primaryKey), key == nullptr ? "(null)" : key);
+        }
         if (key == nullptr || key[0] == '\0')
         {
             continue;
@@ -1198,15 +1215,48 @@ uint64_t LoadOnScreensDetour(RED4ext::Handle<OnScreenEntries>& aOut, RED4ext::Re
         {
             continue;
         }
-        entry.femaleVariant = RED4ext::CString(zh);
-        entry.maleVariant = RED4ext::CString(zh);
         ++replaced;
+        if (aWrite)
+        {
+            entry.femaleVariant = RED4ext::CString(zh);
+            entry.maleVariant = RED4ext::CString(zh);
+        }
+    }
+    return replaced;
+}
+
+uint64_t LoadOnScreensDetour(RED4ext::Handle<OnScreenEntries>& aOut, RED4ext::ResourcePath aPath)
+{
+    // 这行必须在调原函数之前。16:43 那次闪退，原函数一进就炸，而 "called"
+    // 当初写在调用之后，结果一行证据都没留下，白丢一次启动。
+    Log("[onscreens] enter mode=%u path=%llx", g_onscreens,
+        static_cast<unsigned long long>(aPath.hash));
+
+    const uint64_t result = g_loadOnScreensOrig(aOut, aPath);
+    Log("[onscreens] orig ret=%llu inst=%p",
+        static_cast<unsigned long long>(result), static_cast<void*>(aOut.instance));
+
+    if (g_onscreens < 2 || aOut.instance == nullptr || g_global.map.empty())
+    {
+        return result;
     }
 
-    if (replaced > 0)
+    // 结构布局（每条 0x68，femaleVariant@0x28、maleVariant@0x48）是从
+    // localizationPersistenceOnScreenEntry 反推的，一旦对不上，遍历就是读野内存。
+    // 用 SEH 兜住：最坏也只崩这一次回调，不让整个游戏陪葬。
+    uint32_t replaced = 0;
+    __try
     {
-        Log("[onscreens] replaced=%u", replaced);
+        replaced = RewriteOnScreens(aOut.instance, g_onscreens >= 3);
     }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        Log("[onscreens] EXCEPTION 0x%08X during rewrite",
+            static_cast<unsigned>(GetExceptionCode()));
+        return result;
+    }
+
+    Log("[onscreens] replaced=%u", replaced);
     return result;
 }
 
@@ -1214,9 +1264,21 @@ void InstallOnScreensHook()
 {
     static RED4ext::UniversalRelocFunc<LoadOnScreens_t> target(3550098299u);
     LoadOnScreens_t fn = target;
+    Log("[onscreens] addr=%p mode=%u", reinterpret_cast<void*>(fn), g_onscreens);
     if (fn == nullptr)
     {
         Log("[onscreens] address unresolved");
+        return;
+    }
+    if (g_onscreens == 0)
+    {
+        // 只报告地址，不挂 hook：上一次直接在没验证地址的情况下 Attach，
+        // 16:43 那次启动崩了。先确认解析出来的地址落在主模块里再开。
+        const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+        Log("[onscreens] probe addr=%p base=%p delta=%lld",
+            reinterpret_cast<void*>(fn),
+            reinterpret_cast<void*>(base),
+            static_cast<long long>(reinterpret_cast<intptr_t>(fn) - static_cast<intptr_t>(base)));
         return;
     }
     if (!g_sdk->hooking->Attach(g_handle, reinterpret_cast<void*>(fn),
