@@ -569,10 +569,16 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
            border-bottom: 1px solid var(--border); }
 .packbar .pnote { flex: 1; font-size: 13px; color: var(--muted); }
 
-/* 汉化包详情：三块卡片（包 / 分片明细 / 检查） */
+/* 汉化包详情：左边包信息 + 检查，右边分片明细。
+   以前是 auto-fit 铺满，两块卡宽度接近、分片那块还得自己滚；现在左栏固定
+   360，右栏吃掉剩下的宽度，分片在里面按 200px 一列自动铺开，整页只有一个
+   滚动条。 */
 .packgrid { flex: 1; min-height: 0; overflow: auto; display: grid; gap: 14px;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            align-content: start; padding: 14px 20px 6px; }
+            grid-template-columns: 360px minmax(0, 1fr);
+            align-items: start; padding: 14px 20px 14px; }
+@media (max-width: 900px) {
+  .packgrid { grid-template-columns: minmax(0, 1fr); }
+}
 .pcard { border: 1px solid var(--border); border-radius: 10px; background: var(--card);
          padding: 14px 16px; min-width: 0; }
 .phead { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
@@ -594,16 +600,20 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: default; }
 .pk:last-child { border-bottom: 0; }
 .pk b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums;
         text-align: right; }
-/* 分片明细：每个 .tsv 一个模组，铺两列、超出滚动 */
-.pcard.pwide { grid-column: 1 / -1; }
-.pshards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-           gap: 0 20px; max-height: 320px; overflow: auto; margin-top: 4px; }
+/* 分片明细：每个 .tsv 一个模组，按 180px 一列自动铺开，不单独滚。
+   左卡在滚动时固定住，翻着 92 个分片也能看到包的总数。 */
+.packgrid > .pcard:first-child { position: sticky; top: 0; }
+.pshards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+           gap: 0 14px; margin-top: 4px; }
 .psh { display: flex; justify-content: space-between; gap: 10px; font-size: 12px;
        padding: 4px 0; color: var(--muted); border-bottom: 1px dashed var(--border); }
 .psh span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .psh b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .pwarn { color: var(--amber); font-size: 12.5px; line-height: 1.65; margin: 4px 0; }
 .pok { color: var(--success); font-size: 12.5px; line-height: 1.65; margin: 4px 0; }
+/* 检查结果接在包信息下面，用一条虚线隔开 */
+.pcheck { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); }
+.pcheck .pwarn:first-child, .pcheck .pok:first-child { margin-top: 0; }
 .pagecol[data-page="pack"] #pack-tip { padding: 2px 20px 10px; font-size: 12px; }
 .report {
   flex: 1; margin: 14px 20px; padding: 16px 18px; overflow: auto;

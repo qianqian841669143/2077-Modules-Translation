@@ -161,10 +161,18 @@ function renderPackStatus(s) {
   const dirOf = String(s.zip || "").replace(/[\\/][^\\/]+$/, "");
   const cards = [];
 
-  // 1) 包本身
+  // 检查结果跟在包信息下面：一个包要么一切正常、要么就是这几条要注意的，
+  // 拆成两张卡等于让人在两块之间来回看。
+  const warns = [];
+  if (!s.exists) warns.push(T("包还没生成：点一次「应用」就会产出。"));
+  if (s.error) warns.push(s.error);
+
+  // 1) 包本身 + 检查
   cards.push('<div class="pcard">' +
-    head(s.exists ? "ok" : "wa", of || T("汉化包"),
-         T(s.exists ? "已生成" : "未生成"), s.exists ? "ok" : "wa") +
+    head(s.exists && !warns.length ? "ok" : "wa", of || T("汉化包"),
+         warns.length ? T("有 %d 项要注意").replace("%d", warns.length)
+                      : T(s.exists ? "已生成" : "未生成"),
+         s.exists && !warns.length ? "ok" : "wa") +
     '<div class="pmeta">' + (s.exists
       ? esc(fmtBytes(s.size)) + " · " + esc(s.mtime || "-")
       : esc(T("还没点过「应用」，包还不存在"))) + "</div>" +
@@ -174,32 +182,23 @@ function renderPackStatus(s) {
     row(T("模组"), n(s.mods)) +
     row(T("分片"), n(s.shards)) +
     row(T("包内文件"), n(s.files)) +
-    "</div>");
+    '<div class="pcheck">' +
+    (warns.length
+      ? warns.map((w) => '<div class="pwarn">' + esc(w) + "</div>").join("")
+      : '<div class="pok">' + esc(T("插件和词典都在包里，重装这一个 zip 就是全部。")) + "</div>") +
+    "</div></div>");
 
   // 2) 分片明细：每个 .tsv 就是一个模组的词典，看得到各多少条
   const sd = Array.isArray(s.shardsDetail) ? s.shardsDetail : [];
   if (sd.length) {
     const tot = sd.reduce((a, d) => a + Number(d.rows || 0), 0);
-    cards.push('<div class="pcard pwide">' +
+    cards.push('<div class="pcard">' +
       head("ok", T("分片明细"), tf("%d 个 · %d 条", sd.length, tot), "ok") +
       '<div class="pshards">' +
       sd.map((d) => '<div class="psh"><span title="' + esc(d.name) + '.tsv">' +
         esc(d.name || "") + "</span><b>" + n(d.rows) + "</b></div>").join("") +
       "</div></div>");
   }
-
-  // 3) 检查：哪里会出问题就写在这里
-  const warns = [];
-  if (!s.exists) warns.push(T("包还没生成：点一次「应用」就会产出。"));
-  if (s.error) warns.push(s.error);
-  cards.push('<div class="pcard">' +
-    head(warns.length ? "wa" : "ok", T("检查"),
-         warns.length ? T("有 %d 项要注意").replace("%d", warns.length) : T("没问题"),
-         warns.length ? "wa" : "ok") +
-    (warns.length
-      ? warns.map((w) => '<div class="pwarn">' + esc(w) + "</div>").join("")
-      : '<div class="pok">' + esc(T("插件和词典都在包里，重装这一个 zip 就是全部。")) + "</div>") +
-    "</div>");
 
   box.innerHTML = cards.join("");
   $("pack-tip").textContent = "";
