@@ -235,6 +235,37 @@ bool HasCjk(const char* aText)
     return false;
 }
 
+// 图标字体落在 Unicode 私用区，翻译无从下手，记进 miss 只会白占名额。
+// 按 UTF-8 前缀卡范围，不解码整串：
+//   EE 80..BF        U+E000..U+EFFF
+//   EF 80..A3        U+F000..U+F8FF
+//   F3 B0..BF        U+F0000 以上
+// 全角标点从 EF BC 起、CJK 兼容区从 EF A4 起，都不会被误伤。
+bool HasPrivateUse(const char* aText)
+{
+    if (aText == nullptr)
+    {
+        return false;
+    }
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(aText);
+    for (; p[0] != 0; ++p)
+    {
+        if (p[0] == 0xEE && p[1] >= 0x80 && p[1] <= 0xBF)
+        {
+            return true;
+        }
+        if (p[0] == 0xEF && p[1] >= 0x80 && p[1] <= 0xA3)
+        {
+            return true;
+        }
+        if (p[0] == 0xF3 && p[1] >= 0xB0 && p[1] <= 0xBF)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // "DigitalVixenCore.DVCStatusWindow::Update;GameInstance" -> "DigitalVixenCore"
 // "ME3Bar::Show"                                         -> "ME3Bar"
 // 取不到就返回空，调用方当作无模组归属。
@@ -432,6 +463,13 @@ void ReportMiss(const char* aText)
     static std::unordered_set<std::string> seen;
     static uint32_t count = 0;
     if (count >= kMissDetails || aText[0] == '\0')
+    {
+        return;
+    }
+    // 已经是中文的串不必记：词典 key 全是英文，中文串查不到是必然的。
+    // 2026-11-21 那份 318 条 miss 里 111 条（35%）是 `负重上限` / `重命名` /
+    // `等级 46` 这种，把名额挤掉了真正要看的英文。图标字符同理。
+    if (HasCjk(aText) || HasPrivateUse(aText))
     {
         return;
     }

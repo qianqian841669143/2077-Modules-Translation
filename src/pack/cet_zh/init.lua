@@ -25,15 +25,25 @@ local hits, misses = 0, 0
 local missSeen, missList = {}, {}
 local missCount = 0
 local function noteMiss(s)
+    -- 回车和换行都得挡掉：tsv 是按行读的，串里带裸 \r 会让下游把一条撕成
+    -- 好几条（2026-11-21 那份 miss.tsv 里有 216 行带裸 \r，解析出来一堆
+    -- 像 `#` / `#Window Manager` 这种半截货）。
+    s = s:gsub("[\r\n]", " ")
     if #s < 3 or #s > 300 or missSeen[s] then
         return
     end
-    if s:find("\n") or s:find("^%s*$") or s:find("^%d+$") then
+    if s:find("^%s*$") or s:find("^%d+$") then
         return
     end
     -- 已经是中文的不用再收（UTF-8 汉字首字节 0xE4-0xE9 = 228-233）。
     -- 之前 `已暂停` 这种也进了 miss.tsv，白占待译名额。
     if s:find("[\228-\233]") then
+        return
+    end
+    -- 图标字体在 Unicode 私用区，翻译无从下手：EE 80.. 是 U+E000 段，
+    -- EF 80..A3 是 U+F000-U+F8FF，F3 B0..BF 再往上。全角标点从 EF BC 起、
+    -- CJK 兼容区从 EF A4 起，都不会被误伤。
+    if s:find("[\238][\128-\191]") or s:find("\239[\128-\163]") or s:find("\243[\176-\191]") then
         return
     end
     -- 实时读数每帧都在变：`VRAM: 6.4 / 21.3 (22GB)`、`Textures: 4.4 GB`。
