@@ -4322,17 +4322,6 @@ def main():
     _startup_log("single_instance: ok")
     api = Api(initial)
     _startup_log("Api initialized")
-    # 无边框窗口靠 `.pywebview-drag-region`（就是顶栏那一条）拖动。pywebview
-    # 默认 DRAG_REGION_DIRECT_TARGET_ONLY = False：在这个区域里按下**任何**
-    # 子元素都算拖动起点，于是最小化 / 最大化 / 关闭三个按钮的 mousedown 被
-    # 当成拖窗口，点击被吞掉 —— 表现就是「点了没反应」。
-    # 设成 True 之后只认「直接按在拖动区本身」，按钮才能正常响应。
-    # 必须在 create_window 之前设：customize.js 是在那一刻按这些设置渲染的。
-    try:
-        import webview as _wv
-        _wv.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
-    except Exception:
-        pass
     # 必须在 create_window 之前设：WebView2 的环境只创建一次，之后再改环境变量
     # 不会生效（勾选里那句「下次启动生效」就是这个原因）。
     _wv_args = _apply_webview_args(api.settings)
