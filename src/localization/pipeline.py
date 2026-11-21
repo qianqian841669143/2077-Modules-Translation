@@ -205,8 +205,14 @@ class Session(object):
         if self.log:
             self.log(msg)
 
-    def scan(self):
-        """解包并抽出全部可翻译条目。可重复调用，第二次直接返回缓存。"""
+    def scan(self, uncook=False):
+        """解包并抽出全部可翻译条目。可重复调用，第二次直接返回缓存。
+
+        uncook=True 时用 `uncook -s -u` 一条命令完成解包 + 序列化，比
+        `unbundle` + `convert serialize` 两次进程快 1.7 倍（实测每个归档
+        5.05s → 2.90s）。批量扫几百个归档时这是分钟级的差别，但单模组那条
+        路走的是已经调好的老流程，默认不开。
+        """
         if self._scanned:
             return self.meta
 
@@ -220,7 +226,12 @@ class Session(object):
         # 只解本地化候选。candidate_json 的判据就是「.json 且 CR2W」，
         # 字幕注册表也是 .json，所以这个过滤不会漏任何可翻资源；服装/地图
         # 归档里那几百 MB 的 mesh/texture 本来就不参与提取。
-        files = archmod.unpack(self.cli, self.target, raw, log=None, pattern="*.json")
+        ser = {}
+        if uncook:
+            files, ser = archmod.uncook_export(self.cli, self.target, raw, log=None)
+        else:
+            files = archmod.unpack(self.cli, self.target, raw, log=None,
+                                   pattern="*.json")
         # 只读源语言 + 目标语言：其余十几种语言序列化一次要 2.8 秒（进程启动
         # 占大头），而它们从来不参与配对，纯属白等。实测 Nearby Auto Loot
         # 19 个语言文件 → 2 个，加载 58.8 s → 约 8 s。
@@ -234,7 +245,11 @@ class Session(object):
         # .NET 启动上。TraumaTeam 的 50 个候选逐个转要 139 秒，用户看到的就是
         # 「提取卡住」；同一条命令带上全部路径只要 2.9 秒。
         docs = {}
-        got = self._serialize_batch(cands, raw)
+        # uncook 已经转好的直接用，剩下的才补一轮批量序列化
+        got = {rel: ser[rel] for rel in cands if rel in ser}
+        todo = [rel for rel in cands if rel not in got]
+        if todo:
+            got.update(self._serialize_batch(todo, raw))
         for rel in cands:
             doc = self._load_resource(raw / _norm(rel), rel, ser=got.get(rel))
             if doc is not None:

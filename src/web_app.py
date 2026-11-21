@@ -3772,7 +3772,9 @@ class Api(object):
                     re.sub(r"[^A-Za-z0-9_.-]+", "_", t.name)[:60] or "mod")
                 sess = Lpipe.Session(t, cli, work, lang="zh-cn", log=None,
                                      source_lang=cfg["source_lang"])
-                sess.scan()
+                # 批量扫几百个归档，用 uncook 一条命令走完解包 + 序列化
+                # （1.7 倍），单模组那条路仍旧走 scan() 默认流程。
+                sess.scan(uncook=True)
                 if not sess.rows:
                     return ("empty", path, sig, [])
                 got, _skipped = self._filter_l10n_rows(sess, cfg)

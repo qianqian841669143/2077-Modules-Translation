@@ -506,6 +506,45 @@ def map_files(root):
     }
 
 
+_JSON_RE = r".*\.json$"
+
+
+def uncook_export(cli, target, workdir, regex=_JSON_RE, log=None):
+    """一条命令做掉 unbundle + serialize，返回 ({rel: CR2W}, {rel: JSON})。
+
+    为什么不再分两步：`unbundle` 和 `convert serialize` 是两次 CLI 进程，而
+    耗时几乎全在 .NET 启动上。2026-11-22 实测三个归档（28 KB / 5 MB / 10 MB）：
+
+        unbundle 2.15s + serialize 2.96s = 5.05s   ← 现状
+        uncook -s -u                     = 2.90s   ← 一条命令，1.7 倍
+
+    归档多了就是线性收益：333 个归档串行省约 12 分钟。
+
+    `-r` 正则限定只处理 .json：游戏里以 .json 结尾的 CR2W 基本只有本地化，
+    服装/地图归档那几百 MB 的 mesh/texture 本来就不参与提取。注意 `-w`
+    通配符在这里不生效（实测 `-w "*.json"` 报 Found 0/1），必须用 `-r`。
+
+    产物是两份：`x.json`（CR2W 原始）和 `x.json.json`（序列化）。这里把后者
+    单独归一份，键回到 CR2W 的相对路径 —— `candidate_json` 靠 `is_cr2w_file`
+    判候选，拿序列化产物去判会被整片筛掉。
+    """
+    from . import wkit
+
+    if not target.archive_path or not target.archive_path.is_file():
+        raise ArchiveError("目标没有归档文件，无法解包：%s" % target.name)
+
+    out = Path(workdir)
+    out.mkdir(parents=True, exist_ok=True)
+    wkit.run(cli, ["uncook", str(target.archive_path), "-o", str(out),
+                   "-s", "-u", "-r", regex], log=log)
+    files = map_files(out)
+    ser = {}
+    for rel, p in files.items():
+        if rel.lower().endswith(".json.json"):
+            ser[rel[: -len(".json")]] = p
+    return files, ser
+
+
 def is_cr2w_file(path):
     try:
         with open(path, "rb") as f:
