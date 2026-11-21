@@ -128,6 +128,25 @@ def collect(root, target_locale="", include_lua=True, loose=False):
 
     fragments = {}
 
+    # 用户标记「这条是代码，别翻」的集合。键是 (相对路径小写, 原文 sha1)，
+    # 和 web_app 里 load_mod 用的是同一份数据。新模组尤其需要：提取规则挡不住
+    # 的协议串、纯符号、混在句子里的标识符，只能靠人标一次就永远不再翻。
+    skip_keys = set()
+    try:
+        import user_skip                                    # noqa: PLC0415
+        skip_keys = set(user_skip.marks(root)) | set(user_skip.skip_marks(root))
+    except Exception:
+        pass
+
+    def _is_skipped(rel, text):
+        if not skip_keys:
+            return False
+        try:
+            import user_skip                                # noqa: PLC0415
+            return (rel.replace("\\", "/").lower(), user_skip.sha1_of(text)) in skip_keys
+        except Exception:
+            return False
+
     for rel, items in data.items():
         if not items:
             continue
@@ -149,6 +168,9 @@ def collect(root, target_locale="", include_lua=True, loose=False):
             # 日志、资源转储、调试行、SQL、路径清单这类一律不进词典：
             # 它们不会出现在界面上，翻了也是白占体积。
             if NOISE.hard_family(src):
+                continue
+            if _is_skipped(rel, src):
+                meta["user_skipped"] = meta.get("user_skipped", 0) + 1
                 continue
             if src not in bucket:
                 bucket[src] = ctx or typ
@@ -276,6 +298,57 @@ def build_all(mods_root, memory, out_dir, target_locale="", progress=None,
             progress(i, len(names))
     stats.update(write_dicts(out_dir, merged, memory, translated))
     stats["buckets"] = len(merged)
+    return stats
+
+
+def load_tsv(path):
+    out = {}
+    if not os.path.exists(path):
+        return out
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if "\t" in line:
+                s, d = line.split("\t", 1)
+                if s and d:
+                    out[s] = d
+    return out
+
+
+def merge_into(out_dir, fragments, memory, translated=None):
+    """单模组增量：只重写这个模组涉及的分片，其它分片一个字节都不动。
+
+    这是「单模组翻译」的落盘方式。区别于 build_all（全量重扫重建），
+    这里读出现有 tsv、把新译文合并进去、再写回，所以不会把别的模组的
+    条目冲掉 —— 尤其是 _global.tsv，那是所有模组共用的一片。
+    """
+    translated = translated or {}
+    os.makedirs(out_dir, exist_ok=True)
+    stats = {"files": 0, "added": 0, "missing": 0}
+    for key, items in fragments.items():
+        name = "%s.tsv" % (key if key else GLOBAL_KEY)
+        path = os.path.join(out_dir, name)
+        existing = load_tsv(path)
+        before = len(existing)
+        for src, _ctx in items.items():
+            s = _clean(src)
+            if not s or has_cjk(s):
+                continue
+            dst = translated.get(src) or memory.get(src)
+            if not dst:
+                stats["missing"] += 1
+                continue
+            d = _clean(dst)
+            existing[s] = d
+            t = s.strip()
+            if t and t != s:
+                existing.setdefault(t, d)
+        if len(existing) != before:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                for s, d in sorted(existing.items()):
+                    f.write(s + "\t" + d + "\n")
+            stats["files"] += 1
+            stats["added"] += len(existing) - before
     return stats
 
 
