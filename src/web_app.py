@@ -5047,6 +5047,37 @@ def _crash_ready():
     except Exception:
         pass
 
+    def win_min(self):
+        self._window.minimize()
+
+
+    def win_max(self):
+        if self._maxed:
+            self._window.restore()
+            self._maxed = False
+        else:
+            self._window.maximize()
+            self._maxed = True
+        return self._maxed
+
+
+    def win_close(self):
+        if not self._confirm_exit():
+            return                      # 用户点了「取消」：窗口留着
+        try:
+            self._window.destroy()
+        except Exception:
+            pass
+        threading.Timer(0.25, lambda: os._exit(0)).start()
+
+
+    def win_resize(self, w, h):
+        try:
+            self._window.resize(max(900, int(w)), max(600, int(h)))
+        except Exception:
+            pass
+
+
     def remember_skips(self, items):
         """记住 / 忘掉「跳过」勾选，下次加载同一行默认就是勾上的。
 
