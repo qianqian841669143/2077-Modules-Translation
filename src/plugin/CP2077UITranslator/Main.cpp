@@ -984,7 +984,10 @@ void ReadConfig(const std::wstring& aDir)
             if (eq != nullptr)
             {
                 const int v = atoi(eq + 1);
-                if (p[0] == 'v' && v >= 0 && v <= 2)
+                // 上限必须跟着 kProbeVerbose 走：加 verbose=3 时忘了放宽这里，
+                // 2026-11-21 15:35 那次整场日志只有 3 行，探针一个都没开起来
+                // ——配置写的是 3，被 v <= 2 挡掉后回落成 0。
+                if (p[0] == 'v' && v >= 0 && v <= 3)
                 {
                     g_verbose = static_cast<uint32_t>(v);
                 }
