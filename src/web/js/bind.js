@@ -3,6 +3,8 @@
    2026-11-20 从 app.js 原样拆出，只搬运不改逻辑。
    ============================================================ */
 function bind() {
+  console.log(pywebview.api);
+  // try { pywebview.api.probe("bind() 开始"); } catch (_) {}
   $("win-min").onclick = () => pywebview.api.win_min();
   $("win-max").onclick = () => pywebview.api.win_max();
   $("win-close").onclick = () => pywebview.api.win_close();

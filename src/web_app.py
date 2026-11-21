@@ -4095,6 +4095,93 @@ class Api(object):
             "noise": meta.get("noise", {}),
         }
 
+    # ------------------------------------------------------------------
+    # 窗口控制。423d6a3 恢复这几个方法时插到了 _crash_ready() 里面，
+    # 结果成了死代码 —— Api 上没有这些名字，前端 pywebview.api.win_min
+    # 永远是 undefined，三个按钮点下去只会报 not a function。
+    # ------------------------------------------------------------------
+    def probe(self, msg):
+        """前端探针：把一条消息记进 crash.log，用来分清「点击没到前端」还是
+        「到了但后端没动」。排查完可以删。"""
+        _note_log("probe: %s" % (msg,))
+        return {"ok": True}
+
+    def win_min(self):
+        _note_log("win_min")
+        self._window.minimize()
+
+    def win_max(self):
+        _note_log("win_max (maxed=%s)" % self._maxed)
+        if self._maxed:
+            self._window.restore()
+            self._maxed = False
+        else:
+            self._window.maximize()
+            self._maxed = True
+        return self._maxed
+
+    def win_close(self):
+        _note_log("win_close")
+        if not self._confirm_exit():
+            return                      # 用户点了「取消」：窗口留着
+        try:
+            self._window.destroy()
+        except Exception:
+            pass
+        threading.Timer(0.25, lambda: os._exit(0)).start()
+
+    def win_resize(self, w, h):
+        try:
+            self._window.resize(max(900, int(w)), max(600, int(h)))
+        except Exception as ex:         # noqa: BLE001 - 拖边失败要说出来
+            _note_log("win_resize(%r, %r) 失败: %s" % (w, h, ex))
+
+    def mark_as_code(self, file, orig):
+        """把 (相对路径, 原文) 记进「这是代码」排除表, 以后不再当候选。
+
+        用户点一次「标记为代码」，比每次应用都撞一次「疑似代码片段」有用得多；
+        这也是唯一能把用户判断留下来的形态（弹窗本身不留任何东西）。
+        """
+        import user_skip
+        root = self.root or ""
+        if not root or not file:
+            return {"ok": False, "error": self._tr("还没有加载模组。")}
+        ok, n = user_skip.add(root, file, orig)
+        if not ok:
+            return {"ok": False, "error": self._tr("写入排除表失败。")}
+        # 已经加载在表格里的行一并标掉, 不用重新加载
+        hit = 0
+        for r in (self.rows or []):
+            if (str(r.get("file") or "") == str(file)
+                    and str(r.get("orig") or "") == str(orig)):
+                r["skip"] = 1
+                r["codeMarked"] = 1
+                hit += 1
+        return {"ok": True, "marked": hit, "total": n}
+
+    def remember_skips(self, items):
+        """记住 / 忘掉「跳过」勾选，下次加载同一行默认就是勾上的。
+
+        items: [[相对路径, 原文, 是否跳过], …]。只对明文层（.reds/.lua）生效——
+        跳过状态是按 (相对路径, 原文 sha1) 记的，归档层的行没有磁盘路径。
+        """
+        import user_skip
+        root = self.root or ""
+        if not root:
+            return {"ok": False, "error": self._tr("还没有加载模组。")}
+        n = 0
+        for it in (items or []):
+            try:
+                rel, orig, value = it[0], it[1], bool(it[2])
+            except Exception:
+                continue
+            if not rel or not str(orig or "").strip():
+                continue
+            ok, _cnt = user_skip.set_skip(root, rel, orig, value)
+            if ok:
+                n += 1
+        return {"ok": True, "remembered": n}
+
 
 _MUTEX = []
 _CRASH_FILES = []     # crash.log 的句柄必须活到进程结束，别让 GC 关掉
@@ -4170,88 +4257,6 @@ def _crash_ready():
         faulthandler.enable(f, all_threads=True)
     except Exception:
         pass
-
-    def win_min(self):
-        _note_log("win_min")
-        self._window.minimize()
-
-
-    def win_max(self):
-        _note_log("win_max (maxed=%s)" % self._maxed)
-        if self._maxed:
-            self._window.restore()
-            self._maxed = False
-        else:
-            self._window.maximize()
-            self._maxed = True
-        return self._maxed
-
-
-    def win_close(self):
-        _note_log("win_close")
-        if not self._confirm_exit():
-            return                      # 用户点了「取消」：窗口留着
-        try:
-            self._window.destroy()
-        except Exception:
-            pass
-        threading.Timer(0.25, lambda: os._exit(0)).start()
-
-
-    def win_resize(self, w, h):
-        try:
-            self._window.resize(max(900, int(w)), max(600, int(h)))
-        except Exception as ex:         # noqa: BLE001 - 拖边失败要说出来
-            _note_log("win_resize(%r, %r) 失败: %s" % (w, h, ex))
-
-
-    def mark_as_code(self, file, orig):
-        """把 (相对路径, 原文) 记进「这是代码」排除表, 以后不再当候选。
-
-        用户点一次「标记为代码」，比每次应用都撞一次「疑似代码片段」有用得多；
-        这也是唯一能把用户判断留下来的形态（弹窗本身不留任何东西）。
-        """
-        import user_skip
-        root = self.root or ""
-        if not root or not file:
-            return {"ok": False, "error": self._tr("还没有加载模组。")}
-        ok, n = user_skip.add(root, file, orig)
-        if not ok:
-            return {"ok": False, "error": self._tr("写入排除表失败。")}
-        # 已经加载在表格里的行一并标掉, 不用重新加载
-        hit = 0
-        for r in (self.rows or []):
-            if (str(r.get("file") or "") == str(file)
-                    and str(r.get("orig") or "") == str(orig)):
-                r["skip"] = 1
-                r["codeMarked"] = 1
-                hit += 1
-        return {"ok": True, "marked": hit, "total": n}
-
-
-    def remember_skips(self, items):
-        """记住 / 忘掉「跳过」勾选，下次加载同一行默认就是勾上的。
-
-        items: [[相对路径, 原文, 是否跳过], …]。只对明文层（.reds/.lua）生效——
-        跳过状态是按 (相对路径, 原文 sha1) 记的，归档层的行没有磁盘路径。
-        """
-        import user_skip
-        root = self.root or ""
-        if not root:
-            return {"ok": False, "error": self._tr("还没有加载模组。")}
-        n = 0
-        for it in (items or []):
-            try:
-                rel, orig, value = it[0], it[1], bool(it[2])
-            except Exception:
-                continue
-            if not rel or not str(orig or "").strip():
-                continue
-            ok, _cnt = user_skip.set_skip(root, rel, orig, value)
-            if ok:
-                n += 1
-        return {"ok": True, "remembered": n}
-
 
     def _hook(kind):
         def _dump(exc_type, exc, tb):
