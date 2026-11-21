@@ -1,0 +1,373 @@
+# onscreens LocKey -> 中文（插件启动时并入 g_global，供 Localization_LoadOnScreens 使用）
+GP-Signed	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">刻于天体。人定胜天。</>
+GP-Augur-Counter-Name	先知套装已安装
+GP-Augur-SetDisplay	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</> [{stat_0}/{int_0}]\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">2 个已安装</>: 最大生命值 +10%。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">4 个已安装</>: 伤害你的人将被标记 10 秒。你对被标记的敌人造成 15% 额外伤害。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">6 个已安装</>: 总最大生命值 +25%，护甲 +50，减伤几率 +20%。
+GP-Augur-Capstone	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">签名切割 [{stat_0}/{int_0}]</>: 六个全部达到 5++ 级。当你未冲刺时，单次伤害不会超过你最大生命值的 15%。
+GP_Augur_Holdfast-Name	感官科技 堡垒狂暴
+GP_Augur_Holdfast-Stats	狂怒（LB+RB）：持续 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0} 秒</>，充能需 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1} 秒</>。期间你保留枪械。\n生效时，你的生命值不会低于 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_2}%</>，且受到的伤害减少 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_3}%</>。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 最大耐力 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_4}%</>。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</>
+GP_Augur_Holdfast-Gold1	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5 级</>: 每击杀一个敌人，其充能就会恢复 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</>。
+GP_Augur_Optics-Name	感官科技 守卫光学
+GP_Augur_Optics-Stats	你击中的敌人将被钉住 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">8 秒</>。被钉住的敌人对你的伤害减少 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</>。<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}倍</> 变焦。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>：敌人能从 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">{int_2}%</> 更远的距离发现你。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</>
+GP_Augur_Optics-Gold1	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5 级</>: 闪光手雷无法致盲你。
+GP_Augur_Legs-Name	感官科技 锚定支柱
+GP_Augur_Legs-Stats	当你静止不动时，受到的伤害减少 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</>。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 敌人能听到你的脚步声，距离增加 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">{int_1}%</>。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</>
+GP_Augur_Skin-Name	感官科技 堡垒装甲
+GP_Augur_Skin-Stats	真皮装甲 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}</>。你的护甲效果提升了 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}%</>。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">+{int_2}%</> 可见度。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</>
+GP_Augur_Nerves-Name	感官科技 铁神经
+GP_Augur_Nerves-Stats	生命值越低，受到的伤害越少：当生命即将耗尽时，伤害减少最多 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</>。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 潜行攻击不再获得额外伤害。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</>
+GP_Augur_Frame-Name	感官科技 堡垒框架
+GP_Augur_Frame-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 最大生命值。\n重击无法将你击倒。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_1}%</> 移动速度。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</>
+GP_Augur_Frame-Stats-Rare	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 最大生命值。\n爆炸无法使你眩晕，重击也无法将你击倒。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_1}%</> 移动速度。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</>
+GP_Util_BlackoutValve-Name	感官科技 断电阀门
+GP_Util_BlackoutValve-Stats	当敌人的攻击将你生命值降至 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</> 或更低时，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1} 米</> 范围内的敌人会致盲 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_2}</> 秒并失去对你的追踪。\n充能时间：<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_3}</> 秒。需要赛博义体。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 发动后你的义体将陷入黑暗 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">{int_4}</> 秒。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_BlackoutValve-Gold1	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5 级</>: 当敌人致盲时，还会对其施加“行动迟缓”效果。
+GP_Util_CensusCortex-Name	感官科技 普查皮层
+GP_Util_CensusCortex-Stats	在战斗或受限区域内，当其充能完毕时，按下方向键右（呼叫载具键）：无声扫描将勾勒出 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0} m</> 范围内（可穿透墙壁）的每一个敌人，并关闭你周围的摄像头、炮塔和无人机，直到你离开该区域。\n充能时间：<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}</> 分钟。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_CensusCortex-Gold1	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5 级</>: 扫描还会标记地雷和陷阱，且范围内的警报面板无法呼叫增援。
+GP_Util_FirecrackerGrips-Name	感官科技 爆竹握把
+GP_Util_FirecrackerGrips-Stats	任何枪械击中目标都会引发一次 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">3 米</> 范围的爆炸，造成你枪械伤害的 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</>。\n你枪械的物理伤害有 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}%</> 转化为火焰，并有 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_2}%</> 的几率点燃目标。\n你的枪械可忽略 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_3}%</> 的护甲，弹道偏转时暴击几率提升 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_4}%</>。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 每次射击消耗 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">+{int_5}%</> 耐力，且你自己的爆炸会以一半威力击中你自己。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_FirecrackerGrips-Gold1	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5 级</>: 脱靶的子弹也会爆炸，无论落在何处。
+GP_Util_FirecrackerGrips-Gold3	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">Tier 5++</>: 你击倒的任何人，其爆炸也会随之引爆。
+GP_Util_HackatomyGrips-Name	感官科技 黑客解剖学握把
+GP_Util_HackatomyGrips-Stats	每次武器命中都有 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</> 几率在命中位置上传一个免费快速破解：头部重启光学，躯干义体故障，手臂武器故障，腿部行动瘫痪。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_3}%</> 武器伤害。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_HackatomyGrips-Stats-Rare	每次武器命中都有 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</> 几率在命中位置上传免费快速破解：头部重启光学，躯干义体故障，手臂武器故障，腿部致残行动。\n暴击、重近战攻击和满充能射击有 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}%</> 几率电磁脉冲目标。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_3}%</> 武器伤害。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_HackatomyGrips-Stats-Epic	每次武器命中都有 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</> 几率根据命中部位上传免费快速破解：头部重启光学，躯干义体故障，手臂武器故障，腿部行动瘫痪。\n暴击、重近战攻击和满充能射击有 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}%</> 几率对目标释放电磁脉冲。\n武器命中对目标造成 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">+{int_2}%</> 伤害，每存在一种不同的快速破解或持续伤害效果。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">成本</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_3}%</> 武器伤害。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP-Herald-Counter-Name	先驱套装已装配
+GP-Herald-SetDisplay	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先驱套装</> [{stat_0}/{int_0}]\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">2 件装配</>: 快速破解持续伤害 +15%。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">4 件装配</>: 终极技能消耗少 1 点 RAM。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">6 件装配</>: 跳跃次数 +1。冲击范围 +3。燃烧和电击持续时长延长 25%，中毒持续时长延长 2 秒。
+GP-Herald-Capstone	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">SIGNED CUT [{stat_0}/{int_0}]</>: 当你的快速破解击倒某人时，它会免费传递给 15 米内的最近敌人。
+GP_Herald_Deck-Name	感官科技 号角卡组
+GP_Herald_Deck-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}</> 内存。 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1} 米</> 快速破解传播范围。\n你的大部分快速破解有 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_2}%</> 几率跳跃至附近敌人。跳跃次数：<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_3}</>。\n命中的快速破解会刷新你的 Ping。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">成本</>: 敌人快速破解提前 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">{int_4}%</> 命中。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</>
+GP_Herald_Deck-Gold1	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">Tier 5</>: 上传开始时跳跃生效。
+GP_Herald_Optics-Name	感官科技 信标光学
+GP_Herald_Optics-Stats	你的快速破解伤害有 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</> 几率使目标陷入大规模易伤状态。快速破解会对陷入该状态的敌人造成 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 伤害。<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_2}x</> 变焦。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">消耗</>: 追踪者会提前 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">{int_3}%</> 发现你。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</>
+GP_Herald_Tendons-Name	感官科技 枢轴肌腱
+GP_Herald_Tendons-Stats	快速破解每缺少 1 点 RAM 就会造成 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+2%</> 伤害，上限为 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</>。\n空气闪避。闪避消耗 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}%</> 更少的耐力。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">消耗</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">+{int_2}%</> 噪音范围。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</>
+GP_Herald_Tendons-Stats-Legendary	快速破解伤害每缺少 1 点 RAM 增加 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+2%</>，上限为 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</>。\n空中闪避。闪避不消耗耐力。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">+{int_2}%</> 噪音范围。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先驱套装</>
+GP_Herald_Mesh-Name	感官科技 狂热网
+GP_Herald_Mesh-Stats	对敌人施加的灼烧与电击持续 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</> 更久，中毒 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1} s</> 更久。\n持续伤害类快速破解造成 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}%</> 伤害。表皮护甲 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_3}</>。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_4}</> 电抗。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</>
+GP_Herald_Nerves-Name	感官科技 渐强神经
+GP_Herald_Nerves-Stats	终极快速破解消耗少 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}</> 点 RAM。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">+{int_1}%</> 可见度。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先驱套装</>
+GP_Herald_Nerves-Gold1	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">Tier 5</>: 感染传播给 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}</> 更多敌人。
+GP_Herald_Frame-Name	感官科技 动力框架
+GP_Herald_Frame-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</> 你受到的伤害以 RAM 形式反弹。护甲帧 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}</>。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">成本</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_2}%</> 最大生命值。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 先知套装</>
+GP_Util_PaxGrips-Name	感官科技 和平握把
+GP_Util_PaxGrips-Stats	你所有的武器命中均为非致命伤害。<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 经验值，针对所有目标。<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}</> 欧元，仅在你亲自让敌人存活（警察除外）时生效，且仅限一次。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_2}%</> 后坐力，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_3}%</> 晃动，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_4}%</> 散布。你的命中有 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_5}%</> 几率使目标眩晕。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_6}%</> 换弹速度，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_7}%</> 弹匣容量，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_8}%</> 更快的瞄准速度。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_9}%</> 最大生命值。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_PaxGrips-StatsPure	你所有的武器命中均为非致命。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_0}%</> 最大生命值。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_PyreSkin-Name	感官科技 余烬皮肤
+GP_Util_PyreSkin-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}</> 热抗性。\n任何近战命中你的敌人都有 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}%</> 几率起火。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_PyreSkin-Gold3	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">Tier 5++</>: 近战命中你之后，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0} m</> 范围内的所有人都会起火，持续 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}</> 秒。
+GP-Solar-Counter-Name	Solar 遗物部件已穿戴
+GP-Solar-SetDisplay	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">太阳遗物</> [{stat_0}/{int_0}]\n所有 {int_0} 件遗物都必须穿戴。在此之前，它们没有任何遗物效果。\n不带火地放倒某人是个失误。失误太多，无论是否穿戴，太阳都会坠落，直到你连续完成 3 个任务不带任何失误。
+GP-Solar-Status-Blessed-Name	太阳
+GP-Solar-Status-Blessed-Desc	Solar 与你同在。
+GP-Solar-Status-Fallen-Name	Solar (堕落)
+GP-Solar-Status-Fallen-Desc	Solar 已堕落。Solar Heart 仍在运作。在不失误的情况下完成 3 份工作以重新获得它。
+GP-Index-Counter-Name	已佩戴 Index 遗物部件
+GP-Index-SetDisplay	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">索引遗物</> [{stat_0}/{int_0}]\n所有 {int_0} 件装备必须穿戴。在此之前，它们的遗物效果均无效。\n用武器击倒某人是一次失误。失误太多，无论是否穿戴，索引都会下降，直到你连续完成 3 个任务不带任何失误。
+GP-Index-Status-Blessed-Name	索引
+GP-Index-Status-Blessed-Desc	Index 在你身边。
+GP-Index-Status-Fallen-Name	Index (堕落)
+GP-Index-Status-Fallen-Desc	Index 已堕落。Recall Pulse 仍在运作。在不失误的情况下完成 3 份工作以重新获得它。
+GP-Grace-Counter-Name	已佩戴 Grace 遗物部件
+GP-Grace-SetDisplay	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">恩典遗物</> [{stat_0}/{int_0}]\n所有 {int_0} 件义体都必须穿戴。在此之前，它们的遗物效果均无效。\n一次杀戮就是一个失误，击倒平民或警察也是失误。失误太多，无论是否穿戴，恩典都会消失，直到你连续完成 3 个任务且无一失误。
+GP-Grace-Status-Blessed-Name	格蕾丝
+GP-Grace-Status-Blessed-Desc	Grace 在你身边。
+GP-Grace-Status-Fallen-Name	Grace (堕落)
+GP-Grace-Status-Fallen-Desc	Grace 已堕落。在不失误的情况下完成 3 份工作以重新获得它。
+GP-Grace-Rt-Given	Grace 归你所有。去义体医生处安装它。
+GP-Grace-Rt-Up	Grace 变得更强大。{tier}。
+GP-Grace-Rt-UpInventory	Grace 变得更强大。去义体医生处安装 {tier}。
+GP-Grace-Rt-UpNoRoom	Grace 变得更强大。释放义体容量以安装 {tier}。
+GP-Grace-Rt-Hint	Grace 会给予那些不断饶恕生命的人更多。
+GP-Grace-Rt-Forgiven	Grace 饶恕了 {what}。它还能饶恕 {left} 次。
+GP-Grace-Rt-ForgivenLast	Grace 饶恕了 {what}。再失误一次它就会堕落。
+GP-Grace-Rt-SeenPlain	Grace 目睹了 {what}。
+GP-Grace-Rt-WhatHand	一次由你手下的击杀
+GP-Grace-Rt-WhatDown	一次对已倒地者的击杀
+GP-Grace-Rt-WhatCar	一次用车进行的击杀
+GP-Grace-Rt-WhatWreck	一次由你炸毁的车辆造成的击杀
+GP-Grace-Rt-WhatBlast	一次由你引爆的爆炸造成的击杀
+GP-Grace-Rt-WhatTurret	由你操控的炮塔造成的击杀
+GP-Grace-Rt-WhatMine	由你布置的地雷造成的击杀
+GP-Grace-Rt-WhatTrap	由你触发的陷阱造成的击杀
+GP-Grace-Rt-WhatMad	由你逼疯的人造成的击杀
+GP-Grace-Rt-WhatHack	由你致命的快速破解造成的击杀
+GP-Grace-Rt-WhatFinisher	由你的终结技造成的击杀
+GP-Grace-Rt-WhatDevice	由你黑入的设备造成的击杀
+GP-Grace-Rt-WhatDouble	由你的连杀造成的击杀
+GP-Grace-Rt-WhatDrop	由你抛尸造成的击杀
+GP-Grace-Rt-WhatAfterHit	你命中后立刻发生的死亡
+GP-Grace-Rt-WhatOther	那次击杀
+GP-Grace-Rt-Spoiled	格蕾丝目睹了{what}。你的下一个任务将不计入统计。
+GP-Grace-Rt-WhoCivilian	一名平民
+GP-Grace-Rt-WhoCop	一名警察
+GP-Grace-Rt-WhoOther	一个无害的人
+GP-Grace-Rt-HarmSeen	格蕾丝目睹你击晕了{who}。
+GP-Grace-Rt-HarmForgiven	格蕾丝目睹你击晕了{who}。还能再原谅{left}次。
+GP-Grace-Rt-HarmForgivenLast	格蕾丝目睹你击晕了{who}。再失手一次，她就倒下了。
+GP-Grace-Rt-HarmSpoiled	格蕾丝目睹你击晕了{who}。你的下一个任务将不计入统计。
+GP-Grace-Rt-SlipsLeft	再失手{left}次，格蕾丝就会原谅你。
+GP-Grace-Rt-SlipsLast	再失手一次，格蕾丝就会不再容忍你。
+GP-Grace-Rt-Lost	格蕾丝将不再容忍你。你可以选择关闭她。
+GP-Grace-Rt-Fell	格蕾丝倒下了。完成{n}个任务且不失手，才能让她复活。
+GP-Grace-Rt-FellEarly	格蕾丝在你到达前就倒下了。她将在你完成{n}个干净任务后重新启用。
+GP-Grace-Rt-Job	格蕾丝：已完成{done}/{n}个任务。
+GP-Grace-Rt-JobNoCount	格蕾丝未计入该任务。你在上次任务后造成了击杀。
+GP-Grace-Rt-JobNoCountHarm	格蕾丝未计入该任务。你击晕了{who}。
+GP-Grace-Rt-JobNoKo	格蕾丝只在你击晕某人时才计入夜之城警局的呼叫。
+GP-Grace-Rt-Reset	格蕾丝目睹了{what}。计数重置：0/{n}个任务。
+GP-Grace-Rt-HarmReset	你击晕了{who}。格蕾丝的计数重置：0/{n}个任务。
+GP-Grace-Rt-Back	格蕾丝已回归你身边。
+GP-Grace-Rt-StillFallen	格蕾丝倒下了。已完成{done}/{n}个任务。
+GP-Grace-Rt-StillFallenLast	格蕾丝倒下了。再完成一个干净任务即可让她复活。
+GP-Grace-Rt-OneJob	{n}个任务
+GP-Grace-Rt-OneCleanJob	{n}个干净任务
+GP-Grace-Rt-Returned	格蕾丝的缺失部件已回归。义体医生可以为你安装。
+GP-Grace-Rt-ReturnedOne	格蕾丝的缺失部件已回归。义体医生可以为你安装它。
+GP-Grace-Rt-Adopted	你已拥有完整的格蕾丝套装。若失手次数超过其容忍限度，她将倒下。
+GP-Grace-Rt-AdoptedUp	格蕾丝现在计入你的{tier}套装。规则与之前相同。
+GP-Grace-Rt-NeedCore	将 ST 核心更新至 1.1.1 或更高版本。否则你的命中会造成击杀，导致格蕾丝倒下。
+GP-Grace-Rt-Rejudged	格蕾丝再次审视了你。她适合你。
+ST-Relic-Diff-Lenient	宽容
+ST-Relic-Diff-Standard	标准
+ST-Relic-Diff-Purist	纯粹
+ST-Relic-Diff-Later	稍后决定
+ST-Relic-Diff-Keep	保留{name}
+ST-Relic-Diff-Set	本存档的遗物难度：{name}。
+ST-Relic-Diff-Default	未选择遗物难度。本存档使用标准难度。
+ST-Relic-Pop-Title1	遗物
+ST-Relic-Pop-Title2	有多严格？
+ST-Relic-Pop-Title3	遗物
+ST-Relic-Pop-Title4	格蕾丝
+ST-Relic-Pop-Fluff	感官科技 · 往日之影计划
+ST-Relic-Pop-Code	你无法进入%s。
+ST-Relic-Pop-Footer	稍后决定
+ST-Relic-Pop-Style	和平主义者
+ST-Relic-Pop-Rival	无人幸存
+ST-Relic-Pop-Page1	我们为特定生活方式的人制作了几套装备。\n一件遗物由三件饰品组成。你同一时间只能穿戴一件遗物。\n\n- {style} (格蕾丝)。让人活下来。更多生命值和耐力，免疫效果，无声处决，以及让敌人活下来获得的欧币。你的攻击会将人击晕，且你的移动速度降低 15%。\n- Index。让你的快速破解来终结战斗。更多内存，伤害更高的快速破解，以及当有人倒下时返还的内存。你无法冲刺。\n- Solar。用火焰让他们倒下。更多生命值和火焰抗性，有机会引燃敌人，以及当火焰让敌人倒下时返还的生命值。你不再能自行回血。\n\n你的遗物会在故事的三个节点变得更强。隐藏的功绩将解锁更多内容。\nST 商店也出售遗物，但价格昂贵。
+ST-Relic-Pop-Page2	每件遗物都有规则。违背一条即为一次失误。对于{style}而言，失误意味着击杀，或击倒平民或警察。若对方先对你动手，则不计入。\n故事节点间失误过多，遗物便会坠落。其增益效果将停止，直到你重新赢得它。\n\n- 宽容：{lenient}。\n- 标准：{standard}。\n- 原教旨：{purist}。\n\n本次存档由你选择。通过模组设置，你可在之后再次选择。
+ST-Relic-Pop-Slips0	欠缺
+ST-Relic-Pop-Slips1	一次失手被原谅
+ST-Relic-Pop-SlipsN	{count} 次失手被原谅
+ST-Relic-Pop-Page3	该存档已经处于进行中。\n\n- {now}\n- 继续游玩：下一个故事节点是你第一次机会，与新游戏相同。
+ST-Relic-Pop-Page3Last	该存档已超过最后一个故事节点。\n\n- {now} 你已完成的隐藏功绩仍然有效。\n- 稍后：我们不会在该存档中再次询问。
+ST-Relic-Pop-Page3PL	该游戏以《往日之影》开始。抢劫行动已经在你身后。\n\n- {now}\n- 继续游玩：下一个故事节点是你第一次机会。
+ST-Relic-Pop-NowSeen	现在：我们将审视你迄今为止的游玩情况，并根据你在故事中的位置为你匹配遗物。
+ST-Relic-Pop-NowBlind	现在：我们无法看到你安装格蕾丝之前的游玩情况，因此那部分不会计入你的失手次数。此后的失手次数会计入。你将获得与你当前故事进度匹配的遗物。
+ST-Relic-Pop-FitOpen	你让人活了下来。
+ST-Relic-Pop-FitBlind	我们无法看到你安装格蕾丝之前的游玩情况，因此你从零开始。此后的失手次数会计入。
+ST-Relic-Pop-Fit	格蕾丝适合你。{tier} 是你的遗物。义体医生可以为你安装。
+ST-Relic-Pop-FitWait	格蕾丝适合你。完成《与时间赛跑》后，{tier} 是你的遗物。义体医生届时可以为你安装。
+ST-Relic-Pop-NoFit	你留下了很多尸体。{rival} 更适合你。它即将推出。\n\n你现在可以接受格蕾丝。其成本立即开始生效。其增益效果在你完成{n}个不失手的任务前不会生效。
+ST-Relic-Pop-NoFitCount	你的失手次数超过了格蕾丝的容忍限度。\n\n你现在可以接受格蕾丝。其成本立即开始生效。其增益效果在你完成{n}个不失手的任务前不会生效。
+ST-Relic-Pop-TakeHeld	这同样适用于你已经拥有的套装。
+ST-Relic-Pop-Next	下一个
+ST-Relic-Pop-Close	关闭
+ST-Relic-Pop-Now	现在
+ST-Relic-Pop-PlayOut	继续游玩
+ST-Relic-Pop-NotNow	现在不行
+ST-Relic-Pop-Take	带上格蕾丝
+GP-Grace-Rt-WhatQuickhack	由你的快速破解造成的击杀
+GP-Grace-Rt-HouseJoined	宅邸在注视着你。直到某个遗物找到你，一切都不会改变。
+GP-Grace-Rt-HouseNo	宅邸不会再询问了。你可以在模组设置中随时加入。
+GP-Grace-Rt-HouseLater	宅邸将在下一个故事节点再次询问。
+GP-Grace-Rt-HouseLeft	宅邸停止注视你了。
+GP-Grace-Rt-HouseBound	你已与遗物绑定。宅邸现在无法离开。
+GP-Grace-Rt-HouseKept	你保留了格蕾丝。一切都不会改变。
+GP-Grace-Rt-HouseDropped	格蕾丝已被搁置。宅邸将在你的下一个任务或故事节点后再次询问。
+ST-Relic-Pop-HouseTitle1	宅邸注视
+ST-Relic-Pop-HousePage1	感官科技宅邸会关注某些人。\n\n随它去，它会观察你的游玩风格。如果你的风格契合某个遗物，该遗物就会找到你，是否接受由你决定。
+ST-Relic-Pop-HouseTitle2	宅邸的消息
+ST-Relic-Pop-HousePage2	宅邸想观察你的游玩风格。除非你加入，否则不会追踪任何数据。在携带遗物之前，你可以在模组设置中改变主意。
+ST-Relic-Pop-HouseYes	加入
+ST-Relic-Pop-HouseNo	现在不行
+ST-Relic-Pop-HouseLater	稍后提醒我
+ST-Relic-Pop-HouseMore	工作原理
+ST-Relic-Pop-HouseTitle3	宅邸注视的工作原理
+ST-Relic-Pop-HousePage3	- 宅邸注视你的战斗风格。当你的风格契合某个遗物时，它会向你提供。\n- 接受后你便与该遗物的代码绑定。若频繁破坏它，遗物便会失效。\n- 一次只能携带一个遗物，除非你的设置允许携带两个。在携带之前，你可以随时离开。\n- 携带一个后，宅邸会持续注视。若有更契合的遗物，它可以向你提供交易。\n- 每个存档中，你可以主动切换到另一个遗物，并可切换回原遗物一次。你接受的一次交易即视为这次切换。\n\n遗物列表：\n- 格蕾丝：保全生命。\n- 索引：让你的快速破解终结战斗。\n- 太阳：以火焰将其击倒。\n- 更多遗物即将推出。
+ST-Relic-Pop-HouseBack	返回
+ST-Relic-Pop-HouseTitle4	格蕾丝与宅邸
+ST-Relic-Pop-HousePage4	遗物的运作方式已改变。宅邸会观察玩家的游玩风格，并向契合的玩家提供遗物。网络黑客遗物“索引”和火焰遗物“太阳”也已上线。\n\n你已拥有格蕾丝。保留它，一切都不会改变。或者切换到“索引”或“太阳”：本存档中可切换一次遗物，若新遗物不适合你，还可再切换回原遗物一次。
+ST-Relic-Pop-HouseKeep	保留格蕾丝
+ST-Relic-Pop-HouseDrop	搁置格蕾丝
+GP-Grace-Rt-HouseDeclined	你拒绝了该遗物。宅邸将继续注视。
+GP-Grace-Rt-HouseBoundGrace	你已与格蕾丝绑定。保留其代码，否则她会倒下。
+GP-Grace-Rt-HouseBoundIndex	你已与 Index 绑定。保留其代码，否则它会倒下。
+ST-Relic-Pop-HouseOfferTitle	发现遗物
+ST-Relic-Pop-HouseOfferGrace	夜之城观察了你的玩法，格蕾丝已适配。\n\n格蕾丝：让人活下来。提供额外生命值和耐力、免疫效果、无声处决，以及让他人存活所获得的欧币。你的攻击会击晕敌人，但移动速度变慢。\n\n接受后你便与其代码绑定。若频繁破坏，格蕾丝将倒下。
+ST-Relic-Pop-HouseOfferIndex	夜之城观察了你的玩法，Index 已适配。\n\nIndex：让你的快速破解决胜。提供额外内存、可暴击且威力更强的快速破解，以及快速破解击倒敌人后返还的内存。你无法冲刺。\n\n接受后你便与其代码绑定。用武器击倒敌人算作失手，失手次数过多会导致 Index 倒下。
+ST-Relic-Pop-HouseAccept	接受
+ST-Relic-Pop-HouseDecline	拒绝
+GP-Index-Rt-Yours	Index 归你所有。前往义体医生处安装。
+GP-Index-Rt-Grows	Index 变强了：{tier}。前往义体医生处安装新部件。
+GP-Index-Rt-Slip	Index 目睹你用武器击倒某人。还能再原谅{left}次。
+GP-Index-Rt-SlipLast	Index 目睹你用武器击倒某人。再有一次，它便会倒下。
+GP-Index-Rt-SlipFallen	Index 目睹你用武器击倒某人。你的下一个任务将不计入统计。
+GP-Index-Rt-Payback	你的快速破解抵消了一次失手。Index 还能再原谅{left}次。
+GP-Index-Rt-Fall	Index 已倒下。脉冲功能仍可调用。完成{n}个干净任务以重新获得它。
+GP-Index-Rt-Job	Index：已完成{done}/{n}个任务。
+GP-Index-Rt-JobWeapon	该任务不计入 Index 统计。你用武器击倒了某人。
+GP-Index-Rt-JobNoHack	该任务不计入 Index 统计。你的快速破解未击倒任何人。
+GP-Index-Rt-Back	Index 已回归你身边。
+GP-Grace-Rt-HouseBought	你购买了{name}。你现已与其绑定。
+GP-Grace-Rt-HouseBuySwap	你购买了{name}。你现已与其绑定；旧遗物将停止工作。
+GP-Grace-Rt-HouseBuyBoth	你购买了{name}。你现在持有两件遗物，每件都有各自的规则。
+GP-Grace-Rt-HouseBuyRefused	你已与{name}绑定。第二件遗物对你无效。
+GP-Index-Rt-Returned	Index 归还了你缺失的部件。
+GP-Index-Rt-GrowsInventory	Index 变强了：{tier}。新部件已存入你的物品栏。
+GP-Index-Rt-GrowsNoRoom	Index 变强了：{tier}。前往义体医生处腾出空间以安装它。
+GP-Index-Rt-StillFallen	Index 再次倒下。完成{n}个干净任务可将其召回。
+GP-Index-Rt-Hint	Index 会向那些用快速破解不断击倒他人的人提供更多力量。
+ST-Relic-Pop-HouseEsc	下次再问我
+ST-Relic-Pop-HouseTradeIndex	Index 已锁定你。收下它，{old} 就会放你走。\n\nIndex：让你的快速破解来终结这场战斗。更多内存、能暴击且伤害更高的快速破解，以及当快速破解击倒某人时返还的内存。你将无法冲刺。\n\n如果你收下它，你的 {old} 部件将停止运作，Index 的部件则会降临到你身上。武器压制是滑步，过多的压制会让 Index 倒下。收下它是本存档的唯一开关，你可以切换回一次。拒绝则保留 {old}。夜之城不会再提供 Index。
+ST-Relic-Pop-HouseTradeGrace	Grace 已找到你。收下它，{old} 就会放你走。\n\nGrace：让人活下去。更多的生命值和耐力，免疫效果，无声处决，以及让那些被你留下呼吸的人获得欧元。你的攻击会击晕敌人，但你的移动速度会变慢。\n\n如果你收下它，你的 {old} 义体将停止运作，而 Grace 的义体将来到你身上。频繁破解它的代码会导致 Grace 崩溃。收下它是本存档的一次性开关，你可以切换回一次。拒绝的话，你将保留 {old}。夜之城不会再提供 Grace。
+GP-Grace-Rt-HouseTraded	{old} 放你走了。你现已与{name}绑定。保留其代码，否则它会倒下。
+GP-Grace-Rt-HouseTradeDeclined	你保留了{old}。宅邸 不会再提供{name}。
+GP-Grace-Rt-HouseLaterJob	宅邸 会在你完成下一个任务后再次询问。
+ST-Relic-Pop-SwitchTo	切换至{name}
+ST-Relic-Pop-SwitchBackTo	切换回{name}
+ST-Relic-Pop-SwitchTitle	切换至{name}？
+ST-Relic-Pop-SwitchIndex	Index 让你的快速破解平息战斗。更多内存、可暴击且威力更强的快速破解，以及当快速破解击倒某人时恢复的内存。你无法冲刺。对于 Index 而言，用武器击倒他人算作失手。
+ST-Relic-Pop-SwitchGrace	Grace 用于让人存活。更多生命值和耐力、免疫效果、无声处决，以及让那些被你放走的人活下来所获得的欧币。你的攻击会将人击晕，且移动速度变慢。对于 Grace 而言，击杀算作失手，击晕平民或警察也算失手。
+ST-Relic-Pop-SwitchHow	你的 {old} 义体停止运作，但你保留了它们。{name} 来自 {tier} 等级。它的部件会替换你佩戴的 {old} 义体，其余部件则暂存于你的库存中，等待义体医生安装。
+ST-Relic-Pop-SwitchFall	{old} 在本存档中已倒下。{name} 从零开始。
+ST-Relic-Pop-SwitchFallBack	{name} 仍处于倒下状态，正如你离开时那样。
+ST-Relic-Pop-SwitchDeeds	{old} 的隐藏等级保留在{old}身上。
+ST-Relic-Pop-SwitchOnce	这是本存档中你唯一的切换机会。如果{name}不适合你，你可以切换回{old}一次。
+ST-Relic-Pop-SwitchLast	这是你的回切机会。此后，本存档将保留{name}。
+ST-Relic-Pop-StatusTitle	你的遗物
+ST-Relic-Pop-StatusHeld	你持有{name}，等级为{tier}。
+ST-Relic-Pop-StatusFallen	{name} 在本存档中已倒下。完成干净任务可将其召回。
+ST-Relic-Pop-StatusTwo	你同时持有{name}和{also}，每件都有各自的规则。当你同时持有两者时无法切换。
+ST-Relic-Pop-StatusAside	你已在本存档中将 Grace 搁置。其部件在你将其取回前无法工作。
+ST-Relic-Pop-StatusWatching	你尚未持有遗物。宅邸 正在观察，当你的玩法风格符合其要求时便会提供一件。
+ST-Relic-Pop-StatusNotWatching	你尚未持有遗物，且 宅邸 并未在本存档中观察。你可以在模组设置中的 宅邸 行加入。
+ST-Relic-Pop-StatusSwitchOpen	在本存档中，你可以切换至{name}。如果它不适合你，你可以切换回一次。
+ST-Relic-Pop-StatusSwitchBack	你已从{name}切换。你可以切换回它一次。
+ST-Relic-Pop-StatusSwitchUsed	你已使用本存档的开关。
+ST-Relic-Pop-StatusSwitchWait	遗物仍在移交部件。完成后即可切换。
+ST-Relic-Pop-GracePages	格蕾丝的页面
+ST-Relic-Pop-TakeBack	取回格蕾丝
+ST-Relic-Pop-RemindTitle	宅邸
+ST-Relic-Pop-RemindBody	你持有{old}。若{name}更契合你的玩法，本存档中可切换一次。若不契合，也可切换回一次。
+ST-Relic-Pop-RemindBack	你已切换至{old}。若不契合，本存档中可切换回{name}一次。
+ST-Relic-Pop-RemindMS	你也可以在模组设置 (ST 遗物、宅邸) 的“显示遗物信息”中稍后操作。
+ST-Relic-Pop-RemindNoMS	宅邸 将不再弹出此提示。
+ST-Relic-Pop-KeepName	保留{name}
+ST-Relic-Pop-AsideTitle	GRACE，暂且搁置
+ST-Relic-Pop-AsideAgain	你已在本存档中搁置格蕾丝，其部件暂时失效。\n\n你可以按原样取回格蕾丝，或转而选择 Index 或 Solar。选择其中之一即为本存档的唯一一次切换机会。
+ST-Relic-Pop-LeaveIt	搁置它
+ST-Relic-Pop-TakeIndex	转而选择 Index
+ST-Relic-Pop-AsideConfirmTitle	暂且搁置 GRACE？
+ST-Relic-Pop-AsideConfirm	格蕾丝的部件在本存档中已停止工作。你保留它们，且搁置期间格蕾丝不会计入任何统计。\n\n下一次任务或剧情节点后，宅邸 将再次询问，届时你可取回格蕾丝。
+ST-Relic-Pop-AsideConfirmMS	你也可以随时在模组设置 (ST 遗物、宅邸) 的“显示遗物信息”中取回它。
+GP-Grace-Rt-HouseSwitched	你已切换至{name}。你的{old}部件已停止工作。
+GP-Grace-Rt-HouseSwitchedBack	你已切换回{name}。本存档将永久保留此状态。
+GP-Grace-Rt-HouseSwitchNot	当前无法切换：{what}。
+GP-Grace-Rt-HouseRemindKept	你保留了{name}。
+GP-Grace-Rt-HouseTakenBack	格蕾丝已按原样回归。
+GP-Grace-Rt-HouseAsideLeft	格蕾丝保持搁置状态。
+GP-Grace-Rt-WhyTwo	你持有两件遗物
+GP-Grace-Rt-WhyNone	你未持有遗物
+GP-Grace-Rt-WhyUsed	你已使用本存档的开关
+GP-Grace-Rt-WhyHandOver	一件遗物仍在移交其部件
+GP-Grace-Rt-WhyMissing	该遗物的文件尚未安装
+GP-Grace-Rt-SwitchOn	格蕾丝归你所有，等级为{tier}，已安装在你旧遗物的位置。
+GP-Grace-Rt-SwitchInventory	格蕾丝归你所有，等级为{tier}。部分部件已存入你的物品栏。
+GP-Grace-Rt-SwitchNoRoom	格蕾丝归你所有，等级为{tier}。请前往义体医生处腾出义体容量以安装它。
+GP-Index-Rt-SwitchOn	Index 归你所有，等级为{tier}，已安装在你旧遗物的位置。
+GP-Index-Rt-SwitchInventory	Index 归你所有，等级为{tier}。部分部件已存入你的物品栏。
+GP-Index-Rt-SwitchNoRoom	Index 归你所有，等级为{tier}。请前往义体医生处腾出义体容量以安装它。
+GP-Grace-Rt-HouseSwitchStore	如果你使用 ST 商店，加载后它将显示{name}的部件。
+GP-Grace-Rt-HouseBoundSolar	你已与 Solar 绑定。保留其代码，否则它会倒下。
+ST-Relic-Pop-HouseOfferSolar	House 已观测你的玩法，Solar 适配。\n\nSolar：用火焰击倒他们。获得额外生命值和火焰抗性，有机会引燃敌人，当火焰击倒敌人时恢复生命值。你不再自行回血。\n\n接受它即表示你已与其绑定。不用火焰击倒他人即为失手，失手次数过多会导致 Solar 倒下。
+ST-Relic-Pop-HouseTradeSolar	Solar 已找到你。收下它，{old} 便会放你离去。\n\nSolar：用火焰将他们制服。你将获得额外的生命值与火焰抗性，有机会引燃敌人，并在火焰致人倒下时恢复生命值。你不再能自行回血。\n\n若你收下它，你原有的 {old} 义体将停止运作，Solar 的义体将为你所用。不带火焰的制服行动称为“滑倒”，过多会导致 Solar 倒下。收下它是本存档的唯一切换开关，你可切换回一次。拒绝则保留 {old}。夜之屋不会再提供 Solar。
+ST-Relic-Pop-SwitchSolar	Solar 专为用火焰击倒敌人而设。获得额外生命值和火焰抗性，有机会引燃敌人，当火焰击倒敌人时恢复生命值。你不再自行回血。对于 Solar 而言，不用火焰而用武器或快速破解击倒他人即为失手。
+ST-Relic-Pop-TakeSolar	改用 Solar
+GP-Solar-Rt-Yours	Solar 归你所有。前往义体医生处安装。
+GP-Solar-Rt-Grows	Solar 变强了：{tier}。前往义体医生处安装新部件。
+GP-Solar-Rt-GrowsInventory	Solar 变强了：{tier}。新部件已存入你的物品栏。
+GP-Solar-Rt-GrowsNoRoom	Solar 变强了：{tier}。请前往义体医生处腾出空间以安装它。
+GP-Solar-Rt-Slip	Solar 目睹你不用火焰击倒某人。还能再原谅{left}次。
+GP-Solar-Rt-SlipLast	Solar 目睹你不用火焰击倒某人。再有一次，它便会倒下。
+GP-Solar-Rt-SlipFallen	Solar 目睹你不用火焰击倒某人。你的下一个任务将不计入统计。
+GP-Solar-Rt-Payback	你的火焰抵消了一次失手。Solar 还能再原谅{left}次。
+GP-Solar-Rt-Fall	Solar 已倒下。Solar Heart 仍可调用。完成{n}个干净任务以重新获得它。
+GP-Solar-Rt-Job	Solar：已完成{done}/{n}个任务。
+GP-Solar-Rt-JobSlip	该任务不计入 Solar 统计。你用火焰击倒了某人。
+GP-Solar-Rt-JobNoFire	该任务不计入 Solar 统计。火焰未击倒任何人。
+GP-Solar-Rt-Back	Solar 已回归你身边。
+GP-Solar-Rt-Returned	Solar 归还了你缺失的部件。
+GP-Solar-Rt-StillFallen	Solar 再次倒下。完成{n}个干净任务可将其召回。
+GP-Solar-Rt-Hint	Solar 会赐予那些持续用火焰击倒他人的人更多馈赠。
+GP-Solar-Rt-SwitchOn	Solar 归你所有，等级为{tier}，已安装在你旧遗物的位置。
+GP-Solar-Rt-SwitchInventory	Solar 归你所有，等级为{tier}。部分部件已存入你的物品栏。
+GP-Solar-Rt-SwitchNoRoom	Solar 归你所有，等级为{tier}。前往义体医生处腾出义体容量以安装它。
+ST-Relic-Pop-Or	或
+GP-Grace-Tier-1	1 阶
+GP-Grace-Tier-2	1+ 阶
+GP-Grace-Tier-3	2 阶
+GP-Grace-Tier-4	2+ 阶
+GP-Grace-Tier-5	3 阶
+GP-Grace-Tier-6	3+ 阶
+GP-Grace-Tier-7	4 阶
+GP-Grace-Tier-8	4+ 阶
+GP-Grace-Tier-9	5 阶
+GP-Grace-Tier-10	5+ 阶
+GP-Grace-Tier-11	5++ 阶
+GP_Solar_Heart-Name	森森太阳之心
+GP_Solar_Heart-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 最大生命值。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 热损伤抗性。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 你不再恢复生命值。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 太阳遗物 · 为 Azula Zaidi 打造</>
+GP_Solar_Heart-Stats-Legendary	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 最大生命值。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 热损伤抗性。\n免疫燃烧。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 你不再恢复生命值。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 太阳遗物 · 为 Azula Zaidi 打造</>
+GP_Solar_EmberMarrow-Name	森森余烬皮层
+GP_Solar_EmberMarrow-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 几率用你的武器点燃目标。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 暴击几率。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}</> 体质检定。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 你不再恢复生命值。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 太阳遗迹 · 为 Azula Zaidi 打造</>
+GP_Solar_Vessels-Name	森森灰烬双掌
+GP_Solar_Vessels-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 最大生命值，当火焰将某人击倒时恢复。<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 暴击伤害。<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_2}%</> 义体冷却时间。<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 你不再恢复生命值。<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 太阳遗物 · 献给 Azula Zaidi</>
+GP_Index_Recall-Name	森森脉冲召回
+GP_Index_Recall-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}</> 内存。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 内存恢复。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}</> 用于智力检定。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 你无法冲刺。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 索引遗物 · 献给伊洛·阿卡迪亚</>
+GP_Index_Oracle-Name	森森神谕阵列
+GP_Index_Oracle-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 追踪找到你所需的时间。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 敌方快速破解上传至你所需的时间。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}</> 技术能力检定。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 你无法冲刺。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 索引遗物 · 献给 Ilo Acaidia</>
+GP_Index_Oracle-Stats-Rare	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 追踪找到你所需的时间。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 敌人快速破解上传至你所需的时间。\n当网络黑客破解你时，你能看见他们并穿过墙壁反制他们。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}</> 技术能力检定。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 你无法冲刺。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 索引遗物 · 献给 Ilo Acaidia</>
+GP_Index_Oracle-Stats-Legendary	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 追踪找到你所需的时间。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 敌方快速破解上传至你所需的时间。\n当网络黑客破解你时，你能看见他们并透过墙壁反击。\n中途阻止敌方快速破解，随后需要时间恢复。无法阻止追踪。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}</> 技术能力检定。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 你无法冲刺。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 索引遗物 · 献给伊洛·阿卡迪亚</>
+GP_Index_Solver-Name	森森求解数字
+GP_Index_Solver-Stats	快速破解可造成暴击。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 快速破解暴击几率。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 快速破解伤害。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_2}%</> 快速破解上传时间。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_3}%</> 快速破解使目标倒地时的内存回收量。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">成本</>: 你无法冲刺。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 索引遗物 · 献给 Ilo Acaidia</>
+GP_Index_Solver-Stats-Rare	快速破解可造成暴击。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 快速破解暴击几率。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 快速破解伤害。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_2}%</> 快速破解上传时间。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_3}%</> 快速破解使目标倒地时的 RAM 返还量。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_4}%</> 控制类快速破解的持续时间。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>：你无法冲刺。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 索引遗物 · 献给 Ilo Acaidia</>
+GP_Index_Solver-Stats-Legendary	快速破解可造成暴击。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 快速破解暴击几率。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 快速破解伤害。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_2}%</> 快速破解上传时间。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_3}%</> 快速破解使目标倒地时的 RAM 返还量。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_4}%</> 控制类快速破解的持续时间。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_5}</> 秒的近乎即时上传，在快速破解使目标倒地后生效。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>：你无法冲刺。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 索引遗物 · 献给 Ilo Acaidia</>
+GP_Grace_Conduit-Name	森森第七容器
+GP_Grace_Conduit-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 最大生命值。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 最大耐力。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}%</> 耐力恢复速度。\n冲刺、闪避、跳跃和攻击不再消耗耐力。\n战斗中生命值会恢复。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_3}%</> 战斗中生命值恢复速度。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_4}</> 负重上限。\n免疫流血。\n免疫镇静剂。\n无声行走。\n无声奔跑。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>：你的攻击会将敌人击晕而非杀死，且你的移动速度降低 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">15%</>。即使敌人已经倒地，仍可能死亡。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 格蕾丝遗物 · 献给阿基玛·埃兰·格蕾丝</>
+GP_Grace_Relay-Name	森森支配面纱
+GP_Grace_Relay-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 减伤几率。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 减伤强度。\n无法被击倒。\n免疫眩晕。\n免疫致盲。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}</> 智力检定加成。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_3}</> 技术能力检定加成。\n透过墙壁勾勒出敌人、警察、摄像头和炮塔，最远可达 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_4} 米</>。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 你的攻击会将敌人击晕而非击杀，且你的移动速度降低 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">15%</>。已倒地者仍可能死亡。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 恩典遗物 · 为阿基玛·艾兰·恩典铸造</>
+GP_Grace_Breaker-Name	森森教令双掌
+GP_Grace_Breaker-Stats	无声处决。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 近战攻击速度。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 经验值。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}</> 欧元，每让你亲自让一名敌人（警察除外）继续呼吸一次。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 你的攻击会将敌人击晕而非杀死，且你的移动速度降低 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">15%</>。已倒地者仍可能死亡。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 恩典遗物 · 为阿基玛·艾兰·恩典铸造</>
+GP_Util_SkeletonKey-Name	森森骷髅钥匙
+GP_Util_SkeletonKey-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}</> 突破缓冲。设备破解消耗 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}</> 更少的内存。\n追踪者找到你需要花费 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_2}%</> 更长时间。摄像头注意到你的速度 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_3}%</> 变慢。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_4}%</> 欧元，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_5}%</> 组件。\n标记所有突破的路线。\n开启“和平”或“恩典”：跳过杀手守护灵。\n突破计时器运行 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_6}%</> 更短。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">成本</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">+{int_7}%</> 可见度，<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_8}</> 内存，<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_9}%</> 最大生命值，<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_10}%</> 护甲。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_SkeletonKey-Stats-Rare	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}</> 突破缓冲。设备破解消耗 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}</> 更少的内存。\n追踪者找到你需要 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_2}%</> 更长时间。摄像头注意到你的速度 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_3}%</> 变慢。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_4}%</> 欧元，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_5}%</> 组件。\n标记所有突破的路线。\n开启“和平”或“恩典”：跳过杀手守护灵。\n预装第一个守护灵。\n突破计时器运行 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_6}%</> 更短。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">成本</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">+{int_7}%</> 可见度，<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_8}</> 内存，<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_9}%</> 最大生命值，<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_10}%</> 护甲。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_SkeletonKey-Gold1	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5 级</>: <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_0}%</> 计时器，第二守护灵。
+GP_Util_SkeletonKey-Gold2	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5 级以上</>: <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_0}%</> 计时器。
+GP_Util_SkeletonKey-Gold3	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5++ 级</>: <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_0}%</> 计时器，跳过所有守护进程。
+GP-Ghost-Counter-Name	已安装美德收藏
+GP-Ghost-SetDisplay	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 美德收藏</> [{stat_0}/{int_0}]\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">已安装 2 个</>: 可见度 -10%，噪音范围 -15%。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">已安装 4 个</>: 隐秘快速破解消耗 1 点更少内存。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">已安装 6 个</>: 可见度 -28%，被侦测范围 -20%，内存再生 +25%，街头声望经验 +25%。夜游神经潜行奖金 +44%。
+GP-Ghost-Capstone	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">已签署切割 [{stat_0}/{int_0}]</>: 六个部件全部达到 5++ 级：无人能听到你的枪声、脚步声、开门声或你携带的尸体。爆炸和投掷的干扰物仍会被听到。
+GP_Ghost_Deck-Name	森森低语甲板
+GP_Ghost_Deck-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}</> 内存，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}</> 突破缓冲，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}%</> 内存再生。隐秘快速破解消耗 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_3}</> 更少内存。\n追踪者找到你需要花费 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_4}%</> 更长时间。隐秘快速破解持续时间延长 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_5}%</>。\n突破计时器运行时间延长 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_6}%</>。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">成本</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_7}%</> 快速破解伤害。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 美德套装 · 如幽灵般行动。</>
+GP_Ghost_Deck-Gold1	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5 级</>: <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 计时器，更大的缓冲区。
+GP_Ghost_Optics-Name	森森面纱光学
+GP_Ghost_Optics-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_0}%</> 可见度，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_1}%</> 侦测范围。摄像头发现你的速度变慢 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_2}%</>。\n透过墙壁看到敌人和摄像头，侦测距离为 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_3} 米</>。<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_4} 倍</> 变焦。<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_5}%</> 爆头伤害；子弹可忽略 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_6}%</> 的护甲。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">+{int_7}%</> 瞄准时间。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 美德套装 · 如幽灵般行动。</>
+GP_Ghost_Optics-Gold1	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5 级</>: 热成像视觉，穿透玻璃和完全黑暗。
+GP_Ghost_Optics-Gold2	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5+ 级</>: 穿透烟雾和光学迷彩。
+GP_Ghost_Stride-Name	森森天鹅绒步伐
+GP_Ghost_Stride-Stats	二段跳、空中闪避，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 跳跃高度。\n静音行走、奔跑与落地；<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_1}%</> 噪音范围。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_2}%</> 坠落伤害。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_3}%</> 移动速度。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 美德套装 · 如鬼魅般移动。</>
+GP_Ghost_Stride-Stats-Rare	跳跃冲刺、空中闪避，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 跳跃高度。\n无声行走、奔跑与落地；<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_1}%</> 噪音范围。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_2}%</> 坠落伤害。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_3}%</> 移动速度。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 美德套装 · 如幽灵般行动。</>
+GP_Ghost_Weave-Name	森森夜丝编织
+GP_Ghost_Weave-Stats	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_0}%</> 可见度。真皮装甲 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}</>。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}</> 热阻。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">成本</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_4}</> 物理抗性。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 美德套装 · 如幽灵般行动。</>
+GP_Ghost_Weave-Stats-Epic	<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_0}%</> 可见度。真皮装甲 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_1}</>。\n<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}</> 热阻。\n光学迷彩：隐身 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_3}</> 秒。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">成本</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_4}</> 物理抗性。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 美德套装 · 如幽灵般行动。</>
+GP_Ghost_Nerves-Name	森森夜游神经
+GP_Ghost_Nerves-Stats	无声处决。使用无声武器进行潜行攻击：<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_0}%</> 伤害。\n脱离战斗后，每次攻击造成 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</> 伤害。敌人听不到你受害者的死讯。\n每中和一名敌人：义体冷却时间 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">-{int_2}%</>，<Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_3}</> 内存。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_4}%</> 造成的伤害。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 美德套装 · 如幽灵般行动。</>
+GP_Ghost_Frame-Name	森森幻影框架
+GP_Ghost_Frame-Stats	在不消耗“冷静”专长的情况下进行蹲伏冲刺，消耗 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0}%</> 耐力。最大耐力 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_1}%</>。\n耐力回复 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">+{int_2}%</>。无力竭。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">-{int_3}%</> 最大生命值。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 美德套装 · 如幽灵般行动。</>
+GP_Util_WritHeart-Name	森森文书之心
+GP_Util_WritHeart-Stats	你的破解协议还可上传“摄像头关闭”和“炮塔关闭”。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 敌人的快速破解对你造成 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">{int_1}%</> 更多伤害。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_WritHeart-Stats-Uncommon	你的破解协议还可上传“摄像头关闭”和“炮塔关闭”。\n武器故障：网络上的枪械会卡壳一次，随后在 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0} 秒</> 内命中率大幅下降。它会暴露你的位置：任何被它命中的目标都会开始追踪你。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 敌人的快速破解对你造成 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">{int_1}%</> 更多伤害。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_WritHeart-Stats-Rare	你的破解协议还可上传“摄像头关闭”和“炮塔关闭”。\n武器故障：网络上的枪械会卡壳一次，随后在 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0} 秒</> 内命中率大幅下降。它会暴露你的位置：任何被它命中的目标都会开始追踪你。\n质量脆弱：网络上的所有人都会损失护甲和抗性。\n<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>: 敌人的快速破解对你造成 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">{int_1}%</> 更多伤害。\n<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_WritHeart-Stats-Epic	你的快速破解还可上传“摄像头关闭”和“炮塔关闭”。武器故障：网络上的枪械会卡壳一次，随后在 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0} 秒</> 内持续脱靶。这会暴露你的位置：被击中的敌人会开始追踪你。群体虚弱：网络上的所有人都会损失护甲和抗性。延迟：网络上的所有人都会被标记 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0} 秒</>。<Rich color=\"MainColors.Red\" style=\"Semi-Bold\">代价</>：敌人的快速破解对你造成 <Rich color=\"MainColors.Red\" style=\"Semi-Bold\">{int_1}%</> 的额外伤害。<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">感官科技 · 遗珍 · 可与任意套装混搭</>
+GP_Util_WritHeart-Gold1	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5 级</>: 你的破解协议还可上传“义体故障”，使网络上的义体在 <Rich color=\"TooltipText.cyberwareDescriptionHighlightColor\" style=\"Semi-Bold\">{int_0} 秒</> 内关闭，并以相同方式暴露你的位置。
+GP_Util_WritHeart-Gold3	<Rich color=\"MainColors.Gold\" style=\"Semi-Bold\">5++ 级</>: 来自你破解协议的“质量脆弱”持续时间加倍。

@@ -19,6 +19,9 @@
 #include <RED4ext/RTTITypes.hpp>
 #include <RED4ext/CNamePool.hpp>
 #include <RED4ext/CString.hpp>
+#include <RED4ext/Containers/DynArray.hpp>
+#include <RED4ext/Handle.hpp>
+#include <RED4ext/ResourcePath.hpp>
 
 #include <Windows.h>
 
@@ -1142,6 +1145,90 @@ void LoadDictionary(const std::wstring& aDir)
         static_cast<unsigned long long>(g_global.entries));
 }
 
+// ============================================================================
+// onscreens 语言表覆盖
+//
+// 坐标：Localization_LoadOnScreens，RED4ext 地址库 hash 3550098299
+// （与 Codeware 的 src/Red/Shared/AddressLib.hpp 同一个值），原型
+// uint64_t(Handle<Entries>&, ResourcePath)。Codeware 和 ArchiveXL 都挂这里：
+// 前者把 provider 的 en-us fallback 写进表，后者写 .xl 里的条目。
+//
+// 谁最后执行谁说了算。red4ext 按插件目录名字母序加载，本插件
+// CP2077UITranslator 排在 Codeware 之后，同址 hook 时后加载者位于最外层、
+// 回调最后跑，所以这里写进去的中文不会再被 provider 的 en-us 覆盖。
+// 不依赖 Cosmopolitan、redscript、TweakXL 任何一个第三方模组。
+// ============================================================================
+struct OnScreenEntry
+{
+    uint64_t primaryKey;            // 00
+    RED4ext::CString secondaryKey;  // 08
+    RED4ext::CString femaleVariant; // 28
+    RED4ext::CString maleVariant;   // 48
+};
+
+struct OnScreenEntries
+{
+    RED4ext::DynArray<OnScreenEntry> entries;
+};
+
+using LoadOnScreens_t = uint64_t (*)(RED4ext::Handle<OnScreenEntries>&, RED4ext::ResourcePath);
+
+LoadOnScreens_t g_loadOnScreensOrig = nullptr;
+
+uint64_t LoadOnScreensDetour(RED4ext::Handle<OnScreenEntries>& aOut, RED4ext::ResourcePath aPath)
+{
+    const uint64_t result = g_loadOnScreensOrig(aOut, aPath);
+    if (aOut.instance == nullptr || g_global.map.empty())
+    {
+        return result;
+    }
+
+    auto& list = aOut.instance->entries;
+    uint32_t replaced = 0;
+    for (uint32_t i = 0; i < list.Size(); ++i)
+    {
+        auto& entry = list[i];
+        const char* key = entry.secondaryKey.c_str();
+        if (key == nullptr || key[0] == '\0')
+        {
+            continue;
+        }
+        const char* zh = Lookup(g_global, key);
+        if (zh == nullptr)
+        {
+            continue;
+        }
+        entry.femaleVariant = RED4ext::CString(zh);
+        entry.maleVariant = RED4ext::CString(zh);
+        ++replaced;
+    }
+
+    if (replaced > 0)
+    {
+        Log("[onscreens] replaced=%u", replaced);
+    }
+    return result;
+}
+
+void InstallOnScreensHook()
+{
+    static RED4ext::UniversalRelocFunc<LoadOnScreens_t> target(3550098299u);
+    LoadOnScreens_t fn = target;
+    if (fn == nullptr)
+    {
+        Log("[onscreens] address unresolved");
+        return;
+    }
+    if (!g_sdk->hooking->Attach(g_handle, reinterpret_cast<void*>(fn),
+                                reinterpret_cast<void*>(&LoadOnScreensDetour),
+                                reinterpret_cast<void**>(&g_loadOnScreensOrig)))
+    {
+        Log("[onscreens] Attach failed");
+        return;
+    }
+    Log("[onscreens] hooked");
+}
+
 // 尝试只 hook native 实现（handler 表）。成功返回挂钩数量。
 // 返回 0 说明这张表在游戏这个版本里不可用，调用方要退回总入口方案。
 int TryHookHandlers()
@@ -1254,6 +1341,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle, RED4e
         ReadConfig(dir);
         Install();
         LoadDictionary(dir);
+        InstallOnScreensHook();
         Log("[init] verbose=%u hits=%llu missMod=%llu",
             g_verbose,
             static_cast<unsigned long long>(g_hits.load()),
