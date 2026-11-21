@@ -39,9 +39,39 @@ function enterBatchMask() {
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
 }
 
+/* 预扫描遮罩：扫目录 / 扫归档这段时间也要看得见在动。
+ * 和批量遮罩用同一块 #overlay，只是文案和停止按钮的字不同 —— 预扫描同样能停
+ * （batch_cancel 会让扫描循环在下一个模组处 break）。 */
+function enterScanMask(classify) {
+  const ov = $("overlay");
+  if (!ov) return;
+  // 每个模组都会来一条 mb-scan，遮罩只建一次，否则进度条每 200ms 被清零
+  if (state.mbScanMaskOn) {
+    const t0 = $("overlay-text");
+    if (t0) t0.textContent = classify ? T("正在扫描归档…") : T("正在预扫模组目录…");
+    return;
+  }
+  state.mbScanMaskOn = true;
+  ov.classList.add("on", "batch");
+  const t = $("overlay-text");
+  if (t) t.textContent = classify ? T("正在扫描归档…") : T("正在预扫模组目录…");
+  const cnt = $("ov-count");
+  if (cnt) cnt.textContent = "";
+  const now = $("ov-now");
+  if (now) { now.textContent = ""; delete now.dataset.name; }
+  const bar = $("ov-bar");
+  if (bar) bar.style.width = "0%";
+  const st = $("btn-tr-stop");
+  if (st) { st.dataset.mode = "batch"; st.textContent = T("停止预扫"); st.disabled = false; st.style.display = ""; }
+  const app = document.querySelector("main.app");
+  if (app) app.inert = true;
+  state.busy = true;
+}
+
 function exitBatchMask() {
   const ov = $("overlay");
   if (ov) ov.classList.remove("on", "batch");
+  state.mbScanMaskOn = false;
   const st = $("btn-tr-stop");
   // display 也要还原：打包阶段 enterPackingMask 把它藏起来了（那一段停不掉）
   if (st) {
@@ -183,10 +213,12 @@ async function pickMbDir() {
 async function scanQueue() {
   if (state.mbRunning) return;
   const dir = $("q-staging").value.trim();
+  const withArchive = $("q-archive") ? !!$("q-archive").checked : false;
   $("q-list").innerHTML = "";
   state.mbItems = [];
+  state.mbScanMaskOn = false;
   $("q-summary").textContent = T("正在预扫，全部跑完大约 1 分钟 ...");
-  const r = await pywebview.api.batch_scan(dir);
+  const r = await pywebview.api.batch_scan(dir, withArchive);
   if (!r || !r.ok) toast((r && r.error) || "error", "err");
   else startMbPoll();
 }
@@ -202,11 +234,13 @@ async function modsPrescan() {
   }
   const el = $("q-staging");
   const dir = el ? String(el.value || "").trim() : "";
+  const withArchive = $("q-archive") ? !!$("q-archive").checked : false;
   btn.disabled = true;
   btn.textContent = T("正在预扫描 ...");
+  state.mbScanMaskOn = false;
   let r = null;
   try {
-    r = await pywebview.api.mods_prescan(dir);
+    r = await pywebview.api.mods_prescan(dir, false, withArchive);
   } catch (ex) {
     // 老后端没有这个方法（源码新、exe 还是旧的）：别把按钮永远卡在禁用态
     r = { ok: false,
@@ -224,10 +258,24 @@ async function modsPrescan() {
 
 function onModsScan(e) {
   const btn = $("btn-prescan");
-  if (!btn) return;
-  btn.textContent = T("预扫描 %d/%d")
-    .replace("%d", Number(e.done || 0))
-    .replace("%d", Number(e.total || 0));
+  const note = String(e.note || "");
+  const done = Number(e.done || 0);
+  const total = Number(e.total || 0);
+  const isArchive = e.phase === "archive";
+  if (btn) {
+    btn.textContent = T("预扫 %d/%d").replace("%d", done).replace("%d", total);
+  }
+  // 预扫描也要盖遮罩：以前只有按钮上一行小字，扫 309 个目录的一分钟里
+  // 看不出跑到哪、卡在哪个模组。
+  if (!state.mbRunning) enterScanMask(isArchive);
+  const t = $("overlay-text");
+  if (t) t.textContent = note || (isArchive ? T("正在扫描归档…") : T("正在预扫模组目录…"));
+  const cnt = $("ov-count");
+  if (cnt && total) cnt.textContent = done + " / " + total + " " + T("个模组");
+  const bar = $("ov-bar");
+  if (bar && total) bar.style.width = Math.round((done / total) * 100) + "%";
+  const now = $("ov-now");
+  if (now) now.textContent = note || String(e.name || "");
 }
 
 function onModsScanned(e) {
@@ -237,12 +285,16 @@ function onModsScanned(e) {
     btn.textContent = T("预扫描");
   }
   const n = Number(e.scanned || 0);
-  if (!n) {
+  const skip = Number(e.upToDate || 0);
+  if (!n && !skip) {
     toast(T("没有需要预扫描的模组"));
   } else {
-    toast(T("预扫描完成：%d 个模组，合计 %d 条")
-      .replace("%d", n).replace("%d", Number(e.rows || 0)));
+    let msg = T("预扫描完成：%d 个模组，合计 %d 条")
+      .replace("%d", n).replace("%d", Number(e.rows || 0));
+    if (skip) msg += " " + T("（%d 个未更新，已跳过）").replace("%d", skip);
+    toast(msg);
   }
+  exitBatchMask();
   try { refreshMods(); } catch (_) {}
 }
 
@@ -369,12 +421,35 @@ function renderQueue() {
 }
 
 function onMbScan(e) {
-  $("q-summary").textContent = T("预扫 %d / %d：%s")
-    .replace("%d", e.done || 0).replace("%d", e.total || 0)
-    .replace("%s", e.name || "");
+  const note = String(e.note || "");
+  const name = String(e.name || "");
+  const done = Number(e.done || 0);
+  const total = Number(e.total || 0);
+  const isArchive = e.phase === "archive";
+  let line;
+  if (note) {
+    line = note;
+  } else if (total) {
+    line = T("预扫 %d / %d：%s")
+      .replace("%d", done).replace("%d", total).replace("%s", name);
+    if (e.upToDate) line += " " + T("（未更新，跳过）");
+  } else {
+    line = T("正在预扫模组目录…");
+  }
+  $("q-summary").textContent = line;
+  if (!state.mbRunning) enterScanMask(isArchive);
+  const t = $("overlay-text");
+  if (t) t.textContent = note || (isArchive ? T("正在扫描归档…") : T("正在预扫模组目录…"));
+  const cnt = $("ov-count");
+  if (cnt && total) cnt.textContent = done + " / " + total + " " + T("个模组");
+  const bar = $("ov-bar");
+  if (bar && total) bar.style.width = Math.round((done / total) * 100) + "%";
+  const now = $("ov-now");
+  if (now) now.textContent = note || name;
 }
 
 function onMbScanned(e) {
+  exitBatchMask();
   state.mbItems = e.items || [];
   state.mbDone = {};
   state.mbSel = new Set(state.mbItems.filter(mbUsable).map((x) => String(x.key)));
