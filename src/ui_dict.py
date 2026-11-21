@@ -280,6 +280,20 @@ def _clean(text: str) -> str:
     return text
 
 
+# 运行时漏网串里的两类噪声，读取 miss.tsv 时过滤掉（不影响正常提取）：
+#
+# 1. 模组自己的更新日志。AMM 的 "What's New" 窗口把整份 changelog 画在 ImGui 上，
+#    于是 "Added Favorite button for Decor Presets" 这种成百上千条全被收集进来
+#    —— 那是模组说明，不是游戏界面，翻它没有意义。
+# 2. 实时读数。`Textures: 4.4 GB` / `135 FPS` 每帧都在变，同一个前缀收出几十个
+#    数字变体。
+_CHANGELOG_RE = re.compile(
+    r'^(?:Added|Fixed|Improved|Removed|Updated|Changed|Reverted|Reworked|Restored)\b',
+    re.I)
+_READING_RE = re.compile(
+    r'^(?:Textures|VRAM|FPS|Memory|Disk)\s*[:=]|\b\d+(?:\.\d+)?\s*(?:FPS|GB|MB)\b', re.I)
+
+
 def _pick_text(translated, memory, src, s):
     """取译文：先按原文形态查，再按清理后的形态查一次。
 
@@ -411,6 +425,15 @@ def build_all(mods_root, memory, out_dir, target_locale="", progress=None,
     for _raw in (runtime_miss or ()):
         s = _clean(str(_raw or ""))
         if not s or has_cjk(s):
+            continue
+        # 实时读数不进待译：`VRAM: 6.4 / 21.3 (22GB)` / `Textures: 4.4 GB`
+        # 每帧都在变，同一个前缀会收出成百个数字变体，翻出来也用不上。
+        # 数字多的串一律跳过；正常文案里四个数字很罕见。
+        if sum(ch.isdigit() for ch in s) >= 4:
+            continue
+        # 模组的 changelog（AMM 的 What's New 整份画在 ImGui 上）和实时读数，
+        # 都是「玩家看得到但不该翻」的：前者是模组说明，后者每帧都变。
+        if _CHANGELOG_RE.match(s) or _READING_RE.search(s):
             continue
         merged.setdefault("", {}).setdefault(s, "runtime")
 

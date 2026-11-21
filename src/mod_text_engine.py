@@ -1659,6 +1659,11 @@ def _diag_fragment(t):
     return bool(re.search(r"(^|[\s:(\[])[A-Za-z_][\w.]*=", t))
 
 
+# `case SomeEnum.Value: return "显示名";` —— 前文以 case+return 结尾即为证据。
+# 用 \s*$ 锚在切片末尾（切片就是字面量引号之前的原文）。
+_CASE_RETURN_RE = re.compile(r"\bcase\s+[\w.]+\s*:\s*return\s*$")
+
+
 def text_evidence(text, pos, callee=""):
     """判断一个字面量「有证据是界面文本」的程度。
 
@@ -1678,6 +1683,16 @@ def text_evidence(text, pos, callee=""):
         return "internal", var
     if _looks_like_log_call(callee):
         return "internal", callee
+    # switch 分支返回的字符串：`case RPS_Mastery.LawEnforcement: return
+    # "Law Enforcement";`。裸 return 没有调用者、没有赋值目标，只看变量名会
+    # 一律落到 plain，精确档全丢 —— RPGProgressionSystem 的整个文本层
+    # （RPS_Text.reds，995 条）就是这么写的，以前只收到 48 条。
+    # `case X: return "Y"` 本身就是「这个串是某个枚举值的显示名」的结构性证据，
+    # 和 _ui_label_position 里给单大写词用的那条是同一个道理。
+    # 单个小写词（`return "ranged"`）不会被这条带进来：它过不了 is_translatable，
+    # 而 _is_ui_word 只认全大写/首字母大写。
+    if _CASE_RETURN_RE.search(text[max(0, pos - 200):pos]):
+        return "display", "switch-case"
     # 调用者本身就是「把这串推给界面」的方法（b.Tab / b.Slider / b.Label …）。
     # 这类字面量没有赋值目标，只看变量名会一律落到 plain，精确档全丢。
     #

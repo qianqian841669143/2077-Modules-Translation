@@ -31,6 +31,23 @@ local function noteMiss(s)
     if s:find("\n") or s:find("^%s*$") or s:find("^%d+$") then
         return
     end
+    -- 已经是中文的不用再收（UTF-8 汉字首字节 0xE4-0xE9 = 228-233）。
+    -- 之前 `已暂停` 这种也进了 miss.tsv，白占待译名额。
+    if s:find("[\228-\233]") then
+        return
+    end
+    -- 实时读数每帧都在变：`VRAM: 6.4 / 21.3 (22GB)`、`Textures: 4.4 GB`。
+    -- 收进来会变成成百个数字变体，翻出来也用不上。数字多的直接放过。
+    local digits = 0
+    for i = 1, #s do
+        local b = s:byte(i)
+        if b >= 48 and b <= 57 then
+            digits = digits + 1
+            if digits >= 4 then
+                return
+            end
+        end
+    end
     missSeen[s] = true
     missList[#missList + 1] = s
     missCount = missCount + 1
