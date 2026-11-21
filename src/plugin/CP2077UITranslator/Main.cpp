@@ -29,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace
@@ -396,6 +397,39 @@ void ReportHit(const char* aSrc, const char* aDst, const char* aScope)
     }
 }
 
+// 只在 verbose>=2 时工作：把「查不到」的文本记下来，去重、限 300 条。
+//
+// 用途是诊断 —— 界面上一片英文时，光看 hit 日志分不清是「词典里没有」还是
+// 「词典里有但形态对不上」（大小写 / 换行 / 富文本标签 / 运行时占位符被替换成
+// 数字）。把真实的 src 打出来，一眼就能比对。
+//
+// 只记「像句子」的：长度 8~300 且含空格，单字和纯数字不占名额。
+// verbose=0/1 时第一行就返回，热路径上没有额外开销。
+void ReportMiss(const char* aText)
+{
+    if (g_verbose < 2 || aText == nullptr)
+    {
+        return;
+    }
+    static std::unordered_set<std::string> seen;
+    static uint32_t count = 0;
+    if (count >= 300 || aText[0] == '\0')
+    {
+        return;
+    }
+    const size_t len = std::strlen(aText);
+    if (len < 8 || len > 300 || std::strchr(aText, ' ') == nullptr)
+    {
+        return;
+    }
+    if (!seen.insert(std::string(aText)).second)
+    {
+        return;
+    }
+    ++count;
+    Log("[miss #%u] \"%s\"", count, aText);
+}
+
 // 在 SetText 执行完之后调用：此时 widget->text 才是「这次要显示的那串」。
 // 调之前改没有意义 —— SetText 会把参数里的英文重新写回去（1.0 首版的坑）。
 //
@@ -460,6 +494,7 @@ void ApplyTranslation(void* aCtx)
     const char* hit = LookupText(g_global, src);
     if (hit == nullptr)
     {
+        ReportMiss(src);                         // verbose<2 时立刻返回
         return;
     }
 
