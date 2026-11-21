@@ -4172,10 +4172,12 @@ def _crash_ready():
         pass
 
     def win_min(self):
+        _note_log("win_min")
         self._window.minimize()
 
 
     def win_max(self):
+        _note_log("win_max (maxed=%s)" % self._maxed)
         if self._maxed:
             self._window.restore()
             self._maxed = False
@@ -4186,6 +4188,7 @@ def _crash_ready():
 
 
     def win_close(self):
+        _note_log("win_close")
         if not self._confirm_exit():
             return                      # 用户点了「取消」：窗口留着
         try:
@@ -4198,8 +4201,8 @@ def _crash_ready():
     def win_resize(self, w, h):
         try:
             self._window.resize(max(900, int(w)), max(600, int(h)))
-        except Exception:
-            pass
+        except Exception as ex:         # noqa: BLE001 - 拖边失败要说出来
+            _note_log("win_resize(%r, %r) 失败: %s" % (w, h, ex))
 
 
     def mark_as_code(self, file, orig):
