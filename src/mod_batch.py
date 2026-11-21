@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -84,6 +85,40 @@ def _tree_size(root):
             except OSError:
                 pass
     return files, total
+
+
+def fingerprint(root):
+    """目录指纹：树里每个文件的 相对路径 + 大小 + mtime 的 sha1。
+
+    用途是判断「这个模组自上次扫描以来变没变」。只 stat 不读内容，实测 309 个
+    目录 2~5 秒，比 probe_text 的 33 秒便宜一个数量级。
+
+    为什么不用更省事的判据：
+    * 目录 mtime —— Windows 上只改嵌套子目录里的文件名/内容，顶层目录的
+      mtime 不一定动，会漏判成「没更新」。
+    * Vortex 目录名里的版本号 —— 手动改文件、覆盖安装、同一个版本换个包
+      都看不出来，而这几类恰恰是用户最想重跑的。
+
+    取 sha1 前 16 位：碰撞概率在这个量级（几百个目录、每次换个值）可以忽略。
+    """
+    h = hashlib.sha1()
+    root = os.path.abspath(str(root or ""))
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if d.lower() != ".git")
+            rel = os.path.relpath(dirpath, root)
+            for fn in sorted(filenames):
+                try:
+                    st = os.stat(os.path.join(dirpath, fn))
+                except OSError:
+                    continue
+                relf = fn if rel == "." else os.path.join(rel, fn)
+                h.update(("%s|%d|%d\n" % (
+                    relf.replace("\\", "/").lower(), st.st_size,
+                    int(st.st_mtime))).encode("utf-8", "replace"))
+    except Exception:                # noqa: BLE001 - 指纹算不出来就当「变了」
+        return ""
+    return h.hexdigest()[:16]
 
 
 def probe_text(root, target_code, measure=False):
@@ -246,7 +281,7 @@ class Ctx(object):
     def __init__(self, spawn_worker, out_root, with_archive=False,
                  skip_assets=True, base="", model="", target="简体中文",
                  on_event=None, cancel=None, deploy=False, deploy_dry=True,
-                 log=None):
+                 log=None, archive_rows=None):
         self.spawn_worker = spawn_worker
         self.out_root = out_root
         self.with_archive = with_archive
@@ -259,6 +294,10 @@ class Ctx(object):
         self.worker = None
         self.deploy = deploy            # 跑完把副本按文件覆盖回原模组目录
         self.deploy_dry = deploy_dry    # 只算不写
+        # 预扫描抽好的归档原文：{归档绝对路径: [[原文, 自带译文], ...]}。
+        # 不在 prepare 里解包（副本根本没归档），也不在这里读盘 —— 由宿主
+        # 读一次缓存后灌进来，309 个模组共用这一份。
+        self.archive_rows = archive_rows or {}
         # 诊断日志（宿主的 _batch_log → logs/batch.log）。以前这条链没接，
         # 账本合并 / 模组名翻译的日志在批量里全是静默的，出问题只能靠猜。
         self.log = log or (lambda _m: None)
@@ -313,7 +352,10 @@ def prepare(ctx, cand):
     if os.path.isdir(dst):
         shutil.rmtree(dst, ignore_errors=True)
 
-    cp = copy_mod(cand["root"], dst, with_archive=ctx.with_archive,
+    # 副本里不放 .archive：归档文本改从预扫描的缓存拿（见 enrich_archive_rows），
+    # 复制一份几百 MB 的归档只为再扫一遍文本纯属浪费 —— 实测 43 个带归档的
+    # 模组加起来几十 GB。
+    cp = copy_mod(cand["root"], dst, with_archive=False,
                   skip_assets=ctx.skip_assets, cancel=ctx.cancel)
     prep["cp"] = cp
     t_copy = time.time()
@@ -327,8 +369,9 @@ def prepare(ctx, cand):
 
     w = ctx.spawn_worker()
     prep["w"] = w
-    load = w._do_load(dst, {"resource": bool(ctx.with_archive),
-                            "lua": True, "loose": True})
+    # resource 一律 False：副本里没有归档，也不该在这里解包 —— 归档文本在
+    # 预扫描阶段就抽好了（ctx.archive_rows），见 finish 里的 enrich_archive_rows。
+    load = w._do_load(dst, {"resource": False, "lua": True, "loose": True})
     prep["load"] = load
     ctx.stage(cand.get("key"), cand.get("name"), "加载",
               round(time.time() - t_copy, 2))
@@ -343,6 +386,47 @@ def prepare(ctx, cand):
 def run_one(ctx, cand, r):
     """跑一个 mod：复制 → 提取 → 机翻 → 写回副本。"""
     finish(ctx, cand, prepare(ctx, cand), r)
+
+
+def enrich_archive_rows(ctx, cand, rows, w=None):
+    """把预扫描抽好的归档原文并进这个模组的 rows，一起送去机翻。
+
+    为什么必须并进**同一个** rows 列表：`_run_translate` 的按原文去重只在
+    传进去的那批行里生效（web_app.py 里那段 groups）。归档行如果另开一条
+    翻译通道，同一个串就会被翻两次 —— 实测有的模组里 "Close" 出现 40 多次。
+
+    归档行带 `_resource: True`：它不写回任何文件（归档本身不动），只负责把
+    译文送进翻译记忆，收尾重建词典时 `_archive_dict_pairs` 再从记忆里取。
+
+    返回追加的条数。
+    """
+    if not ctx.with_archive or not ctx.archive_rows:
+        return 0
+    try:
+        from localization import archive as Larch
+        targets = [t for t in Larch.resolve_all(cand.get("root") or "")
+                   if t.archive_path is not None]
+    except Exception:                # noqa: BLE001 - 没归档就是没有，不算错
+        return 0
+    seen = {str(x.get("orig") or "").strip() for x in rows}
+    added = 0
+    for t in targets:
+        for src, dst in (ctx.archive_rows.get(str(t.archive_path)) or []):
+            s = str(src or "").strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            rows.append({
+                "orig": str(src),
+                "trans": str(dst or ""),
+                "file": str(t.archive_path),
+                "_resource": True,
+            })
+            added += 1
+    if added and w is not None:
+        # _run_translate 读的是 worker.rows，必须让它看见新加的行
+        w.rows = rows
+    return added
 
 
 def finish(ctx, cand, prep, r):
@@ -365,6 +449,16 @@ def finish(ctx, cand, prep, r):
     w = prep.get("w")
     load = prep.get("load") or {}
     rows = load.get("rows") or []
+    # 归档行必须在算 todo 之前并进来：这样它们和源码行一起进 _run_translate，
+    # 才能吃到那段按原文去重，而不是被单独翻一遍。
+    arch = 0
+    try:
+        arch = enrich_archive_rows(ctx, cand, rows, w)
+        if arch:
+            ctx.log("归档行 +%d %s" % (arch, cand.get("name") or ""))
+    except Exception as ex:          # noqa: BLE001 - 归档层坏了不该拖垮这个模组
+        ctx.log("归档行注入失败 %r" % (ex,))
+    r["archiveRows"] = arch
     r["rows"] = len(rows)
     r["tm"] = int(load.get("tmHits") or 0)
     r["already"] = sum(1 for x in rows if x.get("already"))
@@ -387,21 +481,26 @@ def finish(ctx, cand, prep, r):
     # already 行本身已经是中文，写回去等于把原文再抄一遍，跳过。
     # 译文与原文相同的行同理：模型没翻出来。放过它们会覆盖目标语言文件
     # 里已经译好的文本（MCM 的 zh-cn.json 被冲成英文就是这个原因）。
+    # _resource 行（归档）不参与这几项统计：它们不写回任何文件，算进来会让
+    # 「未译 / 未动」的数字看着像有文件没处理。
     unchanged = [x for x in rows
-                 if str(x.get("trans") or "").strip() and not x.get("already")
+                 if not x.get("_resource")
+                 and str(x.get("trans") or "").strip() and not x.get("already")
                  and str(x.get("trans")).strip() == str(x.get("orig") or "").strip()]
     r["untouched"] = len(unchanged)
     # 永远没翻出来的行：机翻后译文仍为空（模型没答）+ 译文与原文相同
     # （模型照抄）。这两种行都会被下面从 items 里剔掉，不写进任何文件，
     # 以前连计数都没有——25 个归档包漏了约 10 条，报告上却显示 failed=0。
     empty_trans = [x for x in rows
-                   if not str(x.get("trans") or "").strip()
+                   if not x.get("_resource")
+                   and not str(x.get("trans") or "").strip()
                    and not x.get("already")]
     r["untranslated"] = len(empty_trans) + len(unchanged)
     r["untranslatedSample"] = [str(x.get("orig") or "")[:60]
                                for x in (empty_trans + unchanged)[:5]]
     items = [x for x in rows
-             if str(x.get("trans") or "").strip() and not x.get("already")
+             if not x.get("_resource")
+             and str(x.get("trans") or "").strip() and not x.get("already")
              and str(x.get("trans")).strip() != str(x.get("orig") or "").strip()]
     r["machine"] = sum(1 for x in items
                        if (x.get("transSrc") or "") == "machine")

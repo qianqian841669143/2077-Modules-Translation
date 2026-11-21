@@ -2163,18 +2163,27 @@ class Api(object):
             return False
 
     @staticmethod
-    def _scan_need(it, have, cache, force):
+    def _scan_need(it, have, cache, force, has_baseline=False, fp=""):
         """这个模组这轮要不要预扫。
 
-        账本里已经有的不扫（提取时数出来的条数比再数一遍准）；剩下的要扫，
-        除非缓存里已经有**文件明细**——只有条数没有明细的老缓存是升级前的
-        产物，展开时列不出文件，所以顺带补扫一遍。
+        顺序有意为之：
+          1. 指纹一致 + 原有翻译包在 → 一定跳过。「没更新就别扫」是用户口径，
+             它比「账本里有没有」更贴近事实 —— 账本里的条数可能是上一版的。
+          2. 账本里已经有的不扫（提取时数出来的条数比再数一遍准）。
+          3. 剩下要扫，除非缓存里已经有**文件明细**——只有条数没有明细的老缓存
+             是升级前的产物，展开时列不出文件，所以顺带补扫一遍。
         """
         if force:
             return True
+        c = cache.get(it["name"])
+        # 增量路径：只在「原有翻译包在」且这个模组之前记过指纹时启用。
+        # 记过指纹 = 上次扫过它，指纹一样就跳过、不一样就重扫 —— 不能把
+        # 「指纹变了」交给后面的老逻辑去判，老逻辑看到 perFile 存在就跳过了，
+        # 那正好把「模组更新了」这件事吞掉。
+        if has_baseline and fp and c is not None and c.get("fp"):
+            return c.get("fp") != fp
         if it["name"] in have:
             return False
-        c = cache.get(it["name"])
         if c is None:
             return True
         return not c.get("perFile")
@@ -2199,7 +2208,7 @@ class Api(object):
         out.sort(key=lambda x: (-x["todo"], -x["total"], x["file"]))
         return out
 
-    def mods_prescan(self, staging="", force=False):
+    def mods_prescan(self, staging="", force=False, with_archive=False):
         """异步：把还没有账本的模组真扫一遍，条数落进 ``userdata\\mods_scan.json``。
 
         模组列表上那些「未分析」的，就是 staging 里有目录、账本里没记录的模组：
@@ -2229,12 +2238,16 @@ class Api(object):
                 cache = self._scan_cache_read(root)
                 # 导出过词典的不用扫：条数是提取时数出来的，比再数一遍准。
                 have = set((self._dict_index_read().get("mods") or {}).keys())
+                has_baseline = os.path.isfile(self._pack_zip_path())
+                fps = {it["name"]: MB.fingerprint(it["root"]) for it in items}
                 todo = [it for it in items
-                        if self._scan_need(it, have, cache, force)]
+                        if self._scan_need(it, have, cache, force,
+                                           has_baseline, fps.get(it["name"]) or "")]
                 total = len(todo)
-                if not total:
+                if not total and not with_archive:
                     self._mb_push({"type": "mods-scanned", "total": len(items),
-                                   "scanned": 0, "staging": root, "rows": 0})
+                                   "scanned": 0, "staging": root, "rows": 0,
+                                   "upToDate": len(items)})
                     return
                 for i, it in enumerate(todo):
                     if self._mb_cancel.is_set():
@@ -2249,6 +2262,8 @@ class Api(object):
                         "fileCount": int(info.get("files") or 0),
                         "bytes": int(info.get("bytes") or 0),
                         "error": str(info.get("error") or ""),
+                        # 指纹：下一轮判断「有没有更新」就靠它，别再整目录读一遍
+                        "fp": fps.get(it["name"]) or "",
                         # 每个文件几条、还差几条：清单展开时直接列出来，
                         # 不用等提取（提取会写账本，那就不是预扫了）
                         "perFile": [[str(d.get("file") or ""),
@@ -2262,11 +2277,26 @@ class Api(object):
                     # 每 10 个落一次盘：中途关窗口也不用从头再来
                     if i and i % 10 == 0:
                         self._scan_cache_write(root, cache)
+                # 归档层：勾了才扫。扫完把每个模组的待翻条数写回缓存，
+                # 列表上就能看到「归档里还有几条」。
+                if with_archive:
+                    _p, ainfo = self._archive_dict_pairs(
+                        root, say=lambda m: self._mb_push(
+                            {"type": "mods-scan", "phase": "archive",
+                             "note": str(m)}))
+                    by_mod = ainfo.get("byMod") or {}
+                    for name in cache:
+                        cache[name]["archiveRows"] = int(by_mod.get(name) or 0)
                 self._scan_cache_write(root, cache)
                 self._mb_push({"type": "mods-scanned", "total": len(items),
                                "scanned": len(cache), "staging": root,
-                               "rows": sum(int(v.get("entries") or 0)
-                                           for v in cache.values())})
+                               "upToDate": len(items) - len(todo),
+                               # 只数还在 items 里的：缓存里可能留着已经卸载、
+                               # 或者被 list_dirs 过滤掉的条目（自家产物包就
+                               # 曾占着 98,882 行，把总数堆成 13.8 万）。
+                               "rows": sum(int((cache.get(it["name"]) or {})
+                                               .get("entries") or 0)
+                                           for it in items)})
             except Exception as ex:  # noqa: BLE001 - 报给界面，别让线程静默死
                 import traceback
                 traceback.print_exc()
@@ -2279,8 +2309,19 @@ class Api(object):
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True, "started": True}
 
-    def batch_scan(self, staging=""):
-        """异步：列出 staging 下的一级目录并预扫行数。不复制、不翻译。"""
+    def batch_scan(self, staging="", with_archive=False):
+        """异步：列出 staging 下的一级目录并预扫行数。不复制、不翻译。
+
+        with_archive=True 时顺带扫归档，分两步：
+          1. 记录每个模组的归档路径（.archive 和同名 .xl）
+          2. 每个归档一条 uncook 命令，解进它自己的 work 目录并抽出文本
+        结果落在 userdata\\cache\\archive_rows.json —— 批量翻译和收尾重建
+        都直接吃这份，不再碰 .archive。
+
+        增量：原有翻译包在 + 目录指纹和上次一致 → 整个模组跳过，直接复用上次
+        的条数。包不在等于没有基线，一律真扫（用户口径：「原有翻译包在的情况下
+        才进这个路径」）。
+        """
         import locale_pack
         if self._mb_running:
             return {"ok": False, "error": self._tr("批量正在运行")}
@@ -2293,6 +2334,9 @@ class Api(object):
         self._mb_scanning = True
         self._mb_push({"type": "busy", "on": True,
                        "text": i18n.tr("正在预扫模组目录 ...")})
+        has_baseline = os.path.isfile(self._pack_zip_path())
+        prev = self._scan_cache_read(root) if has_baseline else {}
+        self._mb_archives = bool(with_archive)
 
         def work():
             try:
@@ -2303,22 +2347,63 @@ class Api(object):
                 # 以前判据是部署清单，新架构不部署了，改看词典索引。
                 done_mods = set((self._dict_index_read().get("mods") or {}).keys())
                 keep = []
+                reused = 0
                 for i, it in enumerate(items):
                     if self._mb_cancel.is_set():
                         break
-                    info = MB.probe_text(it["root"], target, measure=True)
-                    it.update(info)
+                    fp = MB.fingerprint(it["root"])
+                    old = prev.get(it["name"]) or {}
+                    hit = bool(has_baseline and fp and old.get("fp") == fp)
+                    if hit:
+                        # 没变：吃上次的条数，不扫。notes 里那几项就是
+                        # probe_text 的返回字段，直接填回去，前端看起来一样。
+                        it.update({k: old.get(k) for k in
+                                   ("localeRows", "sourceRows", "alreadyRows",
+                                    "todo", "files", "bytes", "perFile")})
+                        reused += 1
+                    else:
+                        it.update(MB.probe_text(it["root"], target, measure=True))
+                    it["fp"] = fp
+                    it["upToDate"] = hit
                     it["deployed"] = it.get("name") in done_mods
                     keep.append(it)
                     if i % 5 == 0 or i == total - 1:
                         self._mb_push({"type": "mb-scan", "done": i + 1,
-                                       "total": total, "name": it["name"]})
+                                       "total": total, "name": it["name"],
+                                       "upToDate": hit})
+                # 归档层：勾了才扫。扫完把每个模组的待翻条数写回列表，
+                # 用户才能在勾选前看到「这个模组归档里还有几条」。
+                if with_archive:
+                    _pairs, ainfo = self._archive_dict_pairs(
+                        root, say=lambda m: self._mb_push(
+                            {"type": "mb-scan", "phase": "archive",
+                             "note": str(m)}))
+                    by_mod = ainfo.get("byMod") or {}
+                    for it in keep:
+                        n = int(by_mod.get(it["name"]) or 0)
+                        it["archiveRows"] = n
+                        it["todo"] = int(it.get("todo") or 0) + n
                 self._mb_items = keep
+                # 增量记录：扫过的写上指纹和条数，跳过的不动。
+                cache = self._scan_cache_read(root)
+                for it in keep:
+                    if it.get("upToDate"):
+                        continue
+                    cache[it["name"]] = {
+                        "entries": int(it.get("todo") or 0)
+                        + int(it.get("alreadyRows") or 0),
+                        "filled": int(it.get("alreadyRows") or 0),
+                        "fileCount": int(it.get("files") or 0),
+                        "bytes": int(it.get("bytes") or 0),
+                        "fp": it.get("fp") or "",
+                        "archiveRows": int(it.get("archiveRows") or 0),
+                    }
+                self._scan_cache_write(root, cache)
                 usable = [x for x in keep if x.get("todo")]
                 self._mb_push({"type": "mb-scanned", "items": keep,
                                "total": len(keep), "usable": len(usable),
                                "rows": sum(int(x.get("todo") or 0) for x in keep),
-                               "staging": root})
+                               "reused": reused, "staging": root})
             except Exception as ex:
                 import traceback
                 traceback.print_exc()
@@ -2343,11 +2428,15 @@ class Api(object):
         if keys:
             want = {str(k) for k in keys}
             cache = {str(it.get("key")): it for it in (self._mb_items or [])}
+            # upToDate：预扫描时指纹和上次一致、且原有翻译包在 —— 直接跳过，
+            # 连副本都不复制。这是「模组没更新就别重跑」的落点。
+            stale = {k for k, it in cache.items() if it.get("upToDate")}
             items = [it for it in cache.values()
-                     if str(it.get("key")) in want and it.get("todo")]
+                     if str(it.get("key")) in want and it.get("todo")
+                     and not it.get("upToDate")]
             # 预扫过、判定「无需翻译」的不再整目录复制一遍，哪怕它被勾上了
             empty = {k for k, it in cache.items() if not it.get("todo")}
-            rest = want - {str(it.get("key")) for it in items} - empty
+            rest = want - {str(it.get("key")) for it in items} - empty - stale
             if rest:
                 found = {}
                 try:
@@ -2363,9 +2452,19 @@ class Api(object):
                     if hit:
                         items.append(dict(hit))
         else:
-            items = [it for it in (self._mb_items or []) if it.get("todo")]
+            items = [it for it in (self._mb_items or [])
+                     if it.get("todo") and not it.get("upToDate")]
         if not items:
             if keys:
+                skipped = [str(it.get("name") or it.get("key") or "")
+                           for it in (self._mb_items or [])
+                           if str(it.get("key")) in {str(k) for k in keys}
+                           and it.get("upToDate")]
+                if skipped:
+                    return {"ok": True, "started": False, "upToDate": len(skipped),
+                            "message": self._tr(
+                                "勾选的 %d 个模组自上次打包以来没有变化，已跳过。"
+                                "想强制重跑请先「清空输出」。") % len(skipped)}
                 return {"ok": False, "error": self._tr(
                     "勾选的模组里没有可翻译的文本（或者目录已经不在了）")}
             return {"ok": False,
@@ -2421,6 +2520,17 @@ class Api(object):
         def work():
             try:
                 import mod_batch as MB
+                # 勾了「包含归档」但没预扫描过（或者缓存缺）时，这里补一次。
+                # 缓存命中只要 0.3 秒，缺的时候才真扫 —— 保证 enrich 有料可用，
+                # 不然归档文本会被静默漏掉。
+                if with_archive:
+                    try:
+                        self._archive_dict_pairs(
+                            staging,
+                            say=lambda m: self._mb_push(
+                                {"type": "mb-packing", "note": str(m)}))
+                    except Exception as aex:     # noqa: BLE001
+                        self._batch_log("归档预扫失败: %r" % (aex,))
                 ctx = MB.Ctx(spawn_worker=spawn, out_root=out_root,
                              with_archive=bool(with_archive),
                              skip_assets=bool(skip_assets),
@@ -2428,7 +2538,8 @@ class Api(object):
                              on_event=self._mb_push, cancel=self._mb_cancel,
                              deploy=bool(self.settings.get("batch_deploy")),
                              deploy_dry=bool(self.settings.get("batch_deploy_dry", True)),
-                             log=self._batch_log)
+                             log=self._batch_log,
+                             archive_rows=self._load_archive_rows())
                 self._mb_results = MB.run(ctx, items)
                 # 每个模组只做「提取 → 翻译」，译文进 memory；收尾时从 staging
                 # 重扫一遍重建整个词典包（见 _flush_pack）。
@@ -3724,13 +3835,17 @@ class Api(object):
                 pass
             mods += 1
             try:
-                jobs.extend(t for t in Larch.resolve_all(root)
-                            if t.archive_path is not None)
+                # 带上模组名：预扫描要按模组统计「归档里还有几条要翻」，
+                # 光有一份全局 {原文: 译文} 没法和模组列表对上。
+                for t in Larch.resolve_all(root):
+                    if t.archive_path is not None:
+                        jobs.append((t, name))
             except Exception:
                 continue
 
         info = {"mods": mods, "archives": len(jobs), "cached": 0,
-                "scanned": 0, "empty": 0, "pairs": 0, "skipped": ""}
+                "scanned": 0, "empty": 0, "pairs": 0, "skipped": "",
+                "byMod": {}}
         if not jobs:
             info["skipped"] = "no_archive"
             return {}, info
@@ -3760,12 +3875,13 @@ class Api(object):
                 parts.append("-")
             return "|".join(parts)
 
-        def _one(t):
+        def _one(job):
+            t, mod = job
             path = str(t.archive_path)
             sig = _sig(t)
             hit = cache.get(path) if sig else None
             if hit and hit.get("sig") == sig:
-                return ("cache", path, sig, hit.get("rows") or [])
+                return ("cache", mod, path, sig, hit.get("rows") or [])
             try:
                 work = os.path.join(
                     config_dir(), "work",
@@ -3776,16 +3892,16 @@ class Api(object):
                 # （1.7 倍），单模组那条路仍旧走 scan() 默认流程。
                 sess.scan(uncook=True)
                 if not sess.rows:
-                    return ("empty", path, sig, [])
+                    return ("empty", mod, path, sig, [])
                 got, _skipped = self._filter_l10n_rows(sess, cfg)
                 rows = []
                 for r in got:
                     src = str(r.get("orig") or "").strip()
                     if src:
                         rows.append([src, str(r.get("trans") or "").strip()])
-                return ("scan", path, sig, rows)
+                return ("scan", mod, path, sig, rows)
             except Exception:
-                return ("error", path, sig, [])
+                return ("error", mod, path, sig, [])
 
         results, done = [], 0
         try:
@@ -3805,7 +3921,8 @@ class Api(object):
             memory = {}
 
         pairs, alive = {}, {}
-        for kind, path, sig, rows in results:
+        by_mod = info["byMod"]
+        for kind, mod, path, sig, rows in results:
             if kind == "cache":
                 info["cached"] += 1
                 # 必须把它写回 alive：缓存命中也是「这次见过这个归档」，
@@ -3822,7 +3939,14 @@ class Api(object):
                     alive[path] = cache[path]
                 continue
             for src, dst in rows:
-                if not src or src in pairs:
+                if not src:
+                    continue
+                # 按模组累计：预扫描要把「归档里还有几条要翻」写回列表，
+                # 光有全局 pairs 对不上具体是哪个模组。
+                if not (dst or ui_dict._pick_text(translated, memory, src,
+                                                  ui_dict._clean(src))):
+                    by_mod[mod] = int(by_mod.get(mod) or 0) + 1
+                if src in pairs:
                     continue
                 v = dst or ui_dict._pick_text(translated, memory, src,
                                               ui_dict._clean(src))
@@ -3841,6 +3965,22 @@ class Api(object):
 
         info["pairs"] = len(pairs)
         return pairs, info
+
+    def _load_archive_rows(self):
+        """读归档原文缓存：{归档绝对路径: [[原文, 模组自带译文], ...]}。
+
+        预扫描（勾「包含归档」）写下的那一份。批量翻译阶段直接吃它 ——
+        副本里根本没有 .archive，也没有第二次解包。
+        """
+        try:
+            with open(self._archive_cache_path(), encoding="utf-8") as f:
+                cache = json.load(f) or {}
+        except Exception:
+            return {}
+        if not isinstance(cache, dict):
+            return {}
+        return {str(p): (v.get("rows") or []) for p, v in cache.items()
+                if isinstance(v, dict)}
 
     def export_all_dict(self):
         """批量：全量重扫所有模组，重建分片词典并重打整个包。
