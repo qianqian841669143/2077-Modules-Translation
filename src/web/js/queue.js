@@ -607,6 +607,8 @@ async function exportQueueResults() {
 }
 
 async function clearQueueOut() {
+  // batch_clear 随新架构下线了（批量产物不再需要单独清理）
+  if (!pywebview.api.batch_clear) { toast(T("该功能已下线"), "warn"); return; }
   if (state.mbRunning) return;
   if (!confirm(T("清空批量输出目录？里面是上一次跑出来的副本，删了就没了。"))) return;
   const r = await pywebview.api.batch_clear();

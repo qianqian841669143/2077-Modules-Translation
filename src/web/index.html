@@ -39,7 +39,8 @@
       <span data-i18n="汉化包">汉化包</span><span class="n" id="tab-pack-n"></span></button>
   </div>
   <div class="head-right">
-    <button class="btn" id="btn-repack" data-i18n="重新打包">重新打包</button>
+    <!-- btn-repack 已下线：它调的是 sync_pack()，补丁包机制被分片词典取代 -->
+    <button class="btn" id="btn-repack" data-i18n="重新打包" style="display:none">重新打包</button>
     <button class="btn" id="btn-settings" data-i18n="设置">设置</button>
     <div class="menu-wrap">
       <button class="btn" id="btn-more" data-i18n="更多" title="更多操作">更多 ▾</button>
@@ -263,8 +264,9 @@
            data-i18n="这个 zip 是唯一交付物：覆盖文本、归档产物、运行时补丁、账本都并在这里。重装前确认「账本」是「已同步」。">
         这个 zip 是唯一交付物。重装前确认「账本」是「已同步」。</div>
       <button class="btn" id="btn-pack-refresh" data-i18n="刷新">刷新</button>
-      <button class="btn" id="btn-pack-open" data-i18n="打开所在文件夹">打开所在文件夹</button>
-      <button class="btn primary" id="btn-pack-sync" data-i18n="同步账本">同步账本</button>
+      <!-- btn-pack-open / btn-pack-sync 已下线：open_pack / sync_pack 随补丁包机制一起移除 -->
+      <button class="btn" id="btn-pack-open" data-i18n="打开所在文件夹" style="display:none">打开所在文件夹</button>
+      <button class="btn primary" id="btn-pack-sync" data-i18n="同步账本" style="display:none">同步账本</button>
     </div>
     <!-- 汉化包详情：三块卡片（包 / 账本 / 提示），由 renderPackStatus 填充 -->
     <div class="packgrid" id="pack-cards"></div>
@@ -400,7 +402,8 @@
       <div class="cache-list" id="cache-list"></div>
       <div class="row gap" style="padding:2px 0 0">
         <button class="btn" id="btn-cache-refresh" data-i18n="刷新大小">刷新大小</button>
-        <button class="btn" id="btn-cache-clear" data-i18n="清理选中">清理选中</button>
+        <!-- btn-cache-clear 已下线：cache_clear 随缓存面板一起移除 -->
+        <button class="btn" id="btn-cache-clear" data-i18n="清理选中" style="display:none">清理选中</button>
         <span class="hint" id="cache-info"></span>
       </div>
       <div class="divider"></div>
