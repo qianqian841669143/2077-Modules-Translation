@@ -383,6 +383,12 @@ Dict* FindModDict(const char* aKey)
 // 只有在 verbose>0 时才会被调用。日志是同步写盘的（red4ext logger 每条都落
 // 文件），MCM 界面里鼠标一移动就会刷一批文本，命中一条写一行，I/O 就顶起来了。
 // verbose=0（默认）时这条路径完全不执行。
+//
+// 明细按**原文**去重，每个不同的字符串只记一次。ApexGrapple 的调参面板每帧
+// 重绘一次就把 "Figure size" / "ADS FOV" 重设一遍，AudioXL 的 30 条音量滑块
+// 同理；2026-11-21 那次 1,979 行明细里只有 50 条唯一原文，97.4% 的行是重复，
+// 2000 个名额 8 秒就被 5 个字符串吃光，进义体界面时已经什么都记不到了。
+// 去重之后名额的含义变成「2000 条不同原文」。
 void ReportHit(const char* aSrc, const char* aDst, const char* aScope)
 {
     if (g_verbose == 0)
@@ -390,10 +396,12 @@ void ReportHit(const char* aSrc, const char* aDst, const char* aScope)
         return;
     }
     const uint64_t n = g_hits.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n <= kLogDetails)
+    static std::unordered_set<std::string> seen;
+    static uint32_t logged = 0;
+    if (logged < kLogDetails && seen.insert(std::string(aSrc)).second)
     {
-        Log("[hit #%llu %s] \"%s\" -> \"%s\"",
-            static_cast<unsigned long long>(n), aScope, aSrc, aDst);
+        ++logged;
+        Log("[hit #%u %s] \"%s\" -> \"%s\"", logged, aScope, aSrc, aDst);
     }
     else if (g_verbose >= 2 && (n % 500) == 0)
     {
@@ -401,7 +409,7 @@ void ReportHit(const char* aSrc, const char* aDst, const char* aScope)
     }
 }
 
-// 只在 verbose>=2 时工作：把「查不到」的文本记下来，去重、限 300 条。
+// 只在 verbose>=2 时工作：把「查不到」的文本记下来，去重、限 kMissDetails 条。
 //
 // 用途是诊断 —— 界面上一片英文时，光看 hit 日志分不清是「词典里没有」还是
 // 「词典里有但形态对不上」（大小写 / 换行 / 富文本标签 / 运行时占位符被替换成
