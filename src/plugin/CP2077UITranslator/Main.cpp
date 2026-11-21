@@ -17,6 +17,7 @@
 #include <RED4ext/Scripting/Functions.hpp>
 #include <RED4ext/Scripting/Stack.hpp>
 #include <RED4ext/RTTITypes.hpp>
+#include <RED4ext/CNamePool.hpp>
 #include <RED4ext/CString.hpp>
 
 #include <Windows.h>
@@ -512,6 +513,71 @@ __declspec(noinline) bool IsTextWidget(void* aCtx)
     return false;
 }
 
+// 只读 textIdKey(+0x278) 那 8 字节哈希。带 __try 的这个函数里不碰任何
+// 需要「静态初始化守卫」的东西 —— 和 OnPostRegister 同理，混在一起不能展开。
+__declspec(noinline) uint64_t ReadTextIdHash(void* aCtx)
+{
+    __try
+    {
+        return *reinterpret_cast<const uint64_t*>(
+            reinterpret_cast<const uint8_t*>(aCtx) + kTextIdKeyOffset);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+// CName 只是一个哈希，名字得问 CNamePool。地址解析不出来时 UniversalRelocFunc
+// 给的是 0（InstallFallbackHook 里也是这么判的），直接调就是调 0 地址。
+using CNameGet_t = const char* (*)(const RED4ext::CName&);
+
+const char* NameToString(const RED4ext::CName& aName)
+{
+    static CNameGet_t getter = []() -> CNameGet_t {
+        RED4ext::UniversalRelocFunc<CNameGet_t> target(
+            RED4ext::Detail::AddressHashes::CNamePool_Get);
+        return target;
+    }();
+    if (getter == nullptr)
+    {
+        return nullptr;
+    }
+    const char* text = getter(aName);
+    return (text != nullptr && text[0] != '\0') ? text : nullptr;
+}
+
+// 只在 verbose>=2 时记，按键名去重，名额和 miss 共用一套上限。
+void ReportKey(const char* aKey)
+{
+    if (g_verbose < 2 || aKey == nullptr)
+    {
+        return;
+    }
+    static std::unordered_set<std::string> seen;
+    static uint32_t count = 0;
+    if (count >= kMissDetails)
+    {
+        return;
+    }
+    if (!seen.insert(std::string(aKey)).second)
+    {
+        return;
+    }
+    ++count;
+    Log("[key #%u] \"%s\"", count, aKey);
+}
+
+void ReportKeyOf(void* aCtx)
+{
+    const uint64_t hash = ReadTextIdHash(aCtx);
+    if (hash == 0)
+    {
+        return;
+    }
+    ReportKey(NameToString(RED4ext::CName(hash)));
+}
+
 void ApplyTranslation(void* aCtx)
 {
     if (aCtx == nullptr)
@@ -525,6 +591,12 @@ void ApplyTranslation(void* aCtx)
     {
         return;
     }
+
+    // 带本地化键的控件：键才是文本真正的来源。义体名/描述这类控件在游戏调
+    // SetLocalizationKey 的那一刻 text 还是空的，真正的中英文要等渲染时按
+    // textIdKey 解析出来 —— 所以我们 hook 到的永远是个空串，下面那条早退
+    // 把日志里唯一能看见的东西也吞了。这里先把键名记下来。
+    ReportKeyOf(aCtx);
 
     const char* src = ReadWidgetText(aCtx);
     if (src == nullptr || src[0] == '\0' || src[1] == '\0')
