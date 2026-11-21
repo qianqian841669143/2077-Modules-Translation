@@ -53,7 +53,11 @@ constexpr size_t kNativeTypeOffset = 0x30;
 constexpr uint32_t kTextRegs[] = {1858, 1859, 1860, 1861, 1863, 1864, 1865, 1835};
 constexpr size_t kTextRegCount = sizeof(kTextRegs) / sizeof(kTextRegs[0]);
 constexpr int kMaxChain = 8;
-constexpr uint32_t kLogDetails = 120;
+// 诊断上限。只影响 verbose>0 的 [hit] / [miss] 明细；verbose=0（默认）时
+// 两条路径都在第一行返回，所以放大这两个数字对正常运行零开销。
+// 原来 120 撑不过十几秒：MCM 面板一开就把名额吃光，进义体界面时已经什么都不记了。
+constexpr uint32_t kLogDetails = 2000;
+constexpr uint32_t kMissDetails = 2000;
 constexpr size_t kMaxDictBytes = 64u << 20;
 
 // 热路径，每帧可能被调上万次，只做两次整数比较。
@@ -413,7 +417,7 @@ void ReportMiss(const char* aText)
     }
     static std::unordered_set<std::string> seen;
     static uint32_t count = 0;
-    if (count >= 300 || aText[0] == '\0')
+    if (count >= kMissDetails || aText[0] == '\0')
     {
         return;
     }
@@ -422,7 +426,38 @@ void ReportMiss(const char* aText)
     {
         return;
     }
-    if (!seen.insert(std::string(aText)).second)
+    // 去重键把数字串抹成 '#'。DVCore 的战斗追踪每挨一下就换一串
+    // "Head   x17" / "Hits landed:   33"，不归一化的话名额几分钟就被计数器吃光
+    // （2026-11-21 那次 242 条 miss 里 100 多条全是这种），真正要看的义体文本
+    // 一条也记不上。日志里打的仍然是原文。
+    std::string key(aText);
+    for (size_t i = 0; i < key.size();)
+    {
+        if (key[i] >= '0' && key[i] <= '9')
+        {
+            size_t j = i;
+            while (j < key.size() && key[j] >= '0' && key[j] <= '9')
+            {
+                ++j;
+            }
+            key.replace(i, j - i, "#");
+            i += 1;
+        }
+        else
+        {
+            ++i;
+        }
+    }
+    // 打字机特效会把同一句逐字长出来（"已拾取: 稳" → "已拾取: 稳中求胜"），
+    // 已经记过它的前缀就不再重复占名额。
+    for (const auto& prev : seen)
+    {
+        if (key.size() > prev.size() && key.compare(0, prev.size(), prev) == 0)
+        {
+            return;
+        }
+    }
+    if (!seen.insert(key).second)
     {
         return;
     }
