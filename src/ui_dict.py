@@ -274,10 +274,16 @@ def build_all(mods_root, memory, out_dir, target_locale="", progress=None,
     单模组那一步不调这里，只动自己那一片。
 
     translated: {原文: 译文}，优先级高于 memory，放本次新翻的条目。
+
+    返回值多一个 per_mod：{目录名: {"buckets": {分片键: 提取条数},
+    "missing": 还没译文的条数}}。新架构下没有账本，这份统计就是「这个模组
+    进了哪些分片、还差几行」的唯一记录，模组列表靠它显示条数。
     """
+    translated = translated or {}
     names = sorted(d for d in os.listdir(mods_root)
                    if os.path.isdir(os.path.join(mods_root, d)))
     merged = {}
+    per_mod = {}
     stats = {"mods": 0, "mods_with_text": 0}
     for i, name in enumerate(names):
         try:
@@ -285,8 +291,21 @@ def build_all(mods_root, memory, out_dir, target_locale="", progress=None,
                                    target_locale=target_locale)
         except Exception:
             stats["mods"] += 1
+            per_mod[name] = {"buckets": {}, "missing": 0}
             continue
         stats["mods"] += 1
+        # 提取到多少条、其中几条现在还没有译文：模组列表拿这两个数画进度。
+        # 不必等 write_dicts 写完再反推，这里按同一套判据（有译文才落盘）数就行。
+        buckets = {k: len(v) for k, v in (frags or {}).items()}
+        miss = 0
+        for items in (frags or {}).values():
+            for src in items:
+                s = _clean(src)
+                if not s or has_cjk(s):
+                    continue
+                if not (translated.get(src) or memory.get(src)):
+                    miss += 1
+        per_mod[name] = {"buckets": buckets, "missing": miss}
         if not frags:
             continue
         stats["mods_with_text"] += 1
@@ -298,6 +317,7 @@ def build_all(mods_root, memory, out_dir, target_locale="", progress=None,
             progress(i, len(names))
     stats.update(write_dicts(out_dir, merged, memory, translated))
     stats["buckets"] = len(merged)
+    stats["per_mod"] = per_mod
     return stats
 
 

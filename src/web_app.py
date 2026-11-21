@@ -2382,8 +2382,8 @@ class Api(object):
         """预扫缓存里的「每个文件几条 / 还差几条」，转成清单要的形状。
 
         缓存里存的是 [路径, 总条数, 待翻条数] 三元组数组，比字典省一半体积；
-        这里转回 {"file": …, "total": …, "todo": …}，和账本
-        ``mod_ledger.file_stats`` 的输出保持同一个形状，前端不用分两套。
+        这里转回 {"file": …, "total": …, "todo": …}，和词典索引那边
+        （``_bucket_rows``）的输出保持同一个形状，前端不用分两套。
         """
         out = []
         for d in (sc.get("perFile") or []):
@@ -2425,20 +2425,8 @@ class Api(object):
                 import mod_batch as MB
                 items = MB.list_dirs(root)
                 cache = self._scan_cache_read(root)
-                # 账本里已经有记录的不用扫：它的条数是提取时数出来的，比再数一遍准。
-                have = set()
-                ldir = self._ledger_dir() or ""
-                try:
-                    with open(os.path.join(ldir, "index.json"),
-                              "r", encoding="utf-8") as f:
-                        idx = json.load(f)
-                    for m in (idx.get("mods") or []):
-                        if isinstance(m, dict):
-                            k = str(m.get("staging") or m.get("folder") or "")
-                            if k:
-                                have.add(k)
-                except Exception:    # noqa: BLE001 - 没账本就是全都要扫
-                    pass
+                # 导出过词典的不用扫：条数是提取时数出来的，比再数一遍准。
+                have = set((self._dict_index_read().get("mods") or {}).keys())
                 todo = [it for it in items
                         if self._scan_need(it, have, cache, force)]
                 total = len(todo)
@@ -2637,14 +2625,6 @@ class Api(object):
         def work():
             try:
                 import mod_batch as MB
-                # 开跑前先把模组名补齐：只扫注册写法（实测 310 个目录 1.1 秒）
-                # + 几次模型调用，比让 300 个模组各自补一遍划算，而且已经翻完、
-                # 这轮被续跑跳过的模组也能补到名。
-                try:
-                    nm = self.refresh_names(log=self._batch_log)
-                    self._batch_log("开跑前补模组名：%r" % (nm,))
-                except Exception as nex:     # noqa: BLE001 - 补名失败不该挡住批量
-                    self._batch_log("开跑前补模组名失败：%r" % (nex,))
                 ctx = MB.Ctx(spawn_worker=spawn, out_root=out_root,
                              with_archive=bool(with_archive),
                              skip_assets=bool(skip_assets),
@@ -3486,6 +3466,77 @@ class Api(object):
             d = r"E:\Vortex Mods"
         return os.path.join(d, PACK_ZIP_NAME)
 
+    def _dict_index_path(self):
+        """模组 → 分片词典的对照表：``userdata\\pack\\dict_index.json``。
+
+        新架构没有账本了，但模组列表还得显示「这个模组翻了多少条、进了哪些
+        分片」，所以在导出词典时顺手记一份索引。它只是产物的可读缓存，
+        删掉之后重跑一次批量就会重新长出来。
+        """
+        return os.path.join(config_dir(), "pack", "dict_index.json")
+
+    def _dict_index_read(self):
+        try:
+            with open(self._dict_index_path(), "r", encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception:            # noqa: BLE001 - 没索引就是没导出过
+            return {"mods": {}}
+        if not isinstance(d, dict):
+            return {"mods": {}}
+        if not isinstance(d.get("mods"), dict):
+            d["mods"] = {}
+        return d
+
+    def _dict_index_save(self, idx):
+        path = self._dict_index_path()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(idx, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, path)
+        except Exception:            # noqa: BLE001 - 写不进去不该挡住导出
+            pass
+        return idx
+
+    def _dict_index_mark(self, name, buckets, missing=0, full=False):
+        """记下某个模组这次进了哪些分片。
+
+        full=True 时整份重建（批量是全新词典，旧条目该消失就得消失）；
+        否则只改这一个模组（单模组导出是增量，别的模组一个字节都不动）。
+        buckets 是 {分片: 提取到的条数}，missing 是其中还没有译文的条数。
+        """
+        idx = {"at": time.time(), "mods": {}} if full else self._dict_index_read()
+        mods = idx.setdefault("mods", {})
+        b = {k: int(v) for k, v in (buckets or {}).items()}
+        total = int(sum(b.values()))
+        if b:
+            mods[name] = {"buckets": b, "entries": total,
+                          "filled": max(0, total - int(missing or 0)),
+                          "at": time.time()}
+        else:
+            mods.pop(name, None)
+        idx["at"] = time.time()
+        return self._dict_index_save(idx)
+
+    def _dict_index_rebuild(self, per_mod):
+        """批量导出后整份重建索引：只留这次真的进了词典的模组。
+
+        批量是全新词典，上一轮有、这一轮没提取到的模组必须消失，
+        否则模组列表会一直挂着已经不在包里的条目。
+        """
+        now = time.time()
+        mods = {}
+        for name, info in (per_mod or {}).items():
+            info = info or {}
+            b = {k: int(v) for k, v in (info.get("buckets") or {}).items()}
+            if not b:
+                continue
+            total = int(sum(b.values()))
+            mods[name] = {"buckets": b, "entries": total,
+                          "filled": max(0, total - int(info.get("missing") or 0)),
+                          "at": now}
+        return self._dict_index_save({"at": now, "mods": mods})
 
     def _apply_all(self, items, standalone=True):
         """应用 = 把当前模组的译文合并进分片词典，重打整个包。
@@ -3612,6 +3663,12 @@ class Api(object):
             return {"ok": False,
                     "error": self._tr("打包失败: %s").replace("%s", str(ex))}
 
+        # 记进模组索引：单模组导出是增量，只改自己那一条，别的模组不动
+        self._dict_index_mark(
+            os.path.basename(os.path.normpath(root)),
+            {k: len(v) for k, v in frags.items()},
+            missing=int(stats.get("missing") or 0))
+
         return {
             "ok": True,
             "zip": out_zip,
@@ -3674,7 +3731,12 @@ class Api(object):
             return {"ok": False,
                     "error": self._tr("打包失败: %s").replace("%s", str(ex))}
 
-        return dict(stats, ok=True, zip=out_zip)
+        # 索引整份重建：批量是全量词典，上一轮有、这一轮没提取到的必须消失
+        self._dict_index_rebuild(stats.get("per_mod"))
+
+        out = dict(stats, ok=True, zip=out_zip)
+        out.pop("per_mod", None)     # 只给索引用的中间结果，别塞给前端
+        return out
 
     def apply(self, items, force=False):
         """异步: 立刻返回, 结果通过 applied / error 事件回推"""
@@ -3755,66 +3817,38 @@ class Api(object):
         """模组清单：staging 里每个目录，以及它现在处于哪种状态。
 
         四种状态（对齐 CMT 的 Modlist 语义）：
-          done    已汉化 —— 有账本，已填 == 总条数，且目录在账本之后没被改过
-          todo    待翻译 —— 没账本（新装的），或已填 < 总条数，或目录比账本新（模组更新了）
+          done    已汉化 —— 导出过词典，且提取到的条目全都写进去了
+          todo    待翻译 —— 没导出过（新装的），或词典里还缺条目
           empty   无文本 —— 提取过，一个可翻的字符串都没有
-          orphan  孤立   —— 账本里有、目录已经不在了（Vortex 里卸了或改了名）
+          orphan  孤立   —— 索引里有、目录已经不在了（Vortex 里卸了或改了名）
 
-        只读。账本信息取自 ``userdata\\pack\\ledger\\index.json``，目录取自
-        设置里的安装缓存根。
+        只读。数据来自导出词典时记下的 ``userdata\\pack\\dict_index.json``
+        （新架构不再写账本），以及预扫描的条数缓存 ``userdata\\mods_scan.json``。
+
+        「文件」那一列现在列的是分片：``<归属键>.tsv`` 各几行。老账本按模组内
+        的源文件切，新词典按提取时的归属键切，前端沿用同一套形状。
         """
         def _clean(v):
             return str(v or "").strip().strip('"').strip("'")
 
         staging = _clean(self.settings.get("staging_dir"))
-        # 预扫描落盘的条数（userdata\mods_scan.json）：没有账本的模组靠它把
+        # 预扫描落盘的条数（userdata\mods_scan.json）：没导出过词典的模组靠它把
         # 「未分析」变成一个真实数字。没扫过就是空字典，一切照旧。
         scan = self._scan_cache_read(staging)
 
-        # 账本索引：staging 目录名 -> {folder, entries, filled, mtime}
-        led = {}
-        ldir = self._ledger_dir() or ""
-        idx_path = os.path.join(ldir, "index.json")
-        try:
-            with open(idx_path, "r", encoding="utf-8") as f:
-                idx = json.load(f)
-        except Exception:            # noqa: BLE001 - 索引坏了就当没有
-            idx = {}
-        for m in (idx.get("mods") or []):
-            if not isinstance(m, dict):
-                continue
-            key = str(m.get("staging") or m.get("folder") or "")
-            if not key:
-                continue
-            # 账本文件自己的时间戳：目录比它新就说明模组被更新过
-            mt = 0.0
-            rel = str(m.get("file") or "")
-            if rel:
-                try:
-                    mt = os.path.getmtime(os.path.join(ldir, rel.replace("/", os.sep)))
-                except OSError:
-                    mt = 0.0
-            led[key] = {"folder": str(m.get("folder") or ""),
-                        "entries": int(m.get("entries") or 0),
-                        # 老索引没有 filled：用 -1 表示「不知道」，按老规矩算已汉化，
-                        # 免得升级后所有模组一下子全变成待翻译。
-                        "filled": int(m["filled"]) if "filled" in m else -1,
-                        "rel": rel,
-                        "mtime": mt}
+        # 词典索引：staging 目录名 -> {buckets, entries, filled}
+        idx = self._dict_index_read().get("mods") or {}
+
+        def _bucket_rows(buckets):
+            """分片 -> 清单展开时用的 [{file, total, todo}] 形状。"""
+            out = [{"file": "%s.tsv" % (k or "_global"), "total": int(v),
+                    "todo": 0}
+                   for k, v in (buckets or {}).items()]
+            out.sort(key=lambda x: (-x["total"], x["file"]))
+            return out
 
         rows = []
         seen = set()
-        import mod_ledger as _ml
-
-        def _files_of(rel):
-            """这个模组账本里每个文件还要翻几条 —— 清单展开时显示。"""
-            if not rel:
-                return []
-            try:
-                return _ml.file_stats(os.path.join(ldir, rel.replace("/", os.sep)))
-            except Exception:        # noqa: BLE001 - 账本坏了不该拖垮清单
-                return []
-
         if staging and os.path.isdir(staging):
             try:
                 names = sorted(os.listdir(staging))
@@ -3825,9 +3859,9 @@ class Api(object):
                 if not os.path.isdir(full):
                     continue
                 seen.add(name)
-                hit = led.get(name)
+                hit = idx.get(name)
                 if not hit:
-                    # 没账本 = 新装的、还没提取过。扫过就用缓存里的真实条数，
+                    # 没导出过 = 新装的、还没提取过。扫过就用缓存里的真实条数，
                     # 没扫过 entries 只能是 0（前端据此显示「未分析」）。
                     sc = scan.get(name) or {}
                     e2 = int(sc.get("entries") or 0)
@@ -3838,38 +3872,41 @@ class Api(object):
                                  "files": self._scan_files(sc), "fileCount": int(
                                      sc.get("fileCount") or 0),
                                  "scanError": str(sc.get("error") or ""),
+                                 "buckets": {},
                                  # 扫过且一条都没有，是「确实没文本」，不是未知
                                  "status": ("empty" if (sc and e2 <= 0)
                                             else "todo")})
                     continue
-                entries = int(hit["entries"] or 0)
-                filled = int(hit["filled"])
-                if filled < 0:
-                    filled = entries          # 老索引：当作已填满
-                try:
-                    dir_mt = os.path.getmtime(full)
-                except OSError:
-                    dir_mt = 0.0
-                updated = bool(hit["mtime"]) and dir_mt > hit["mtime"] + 1
+                buckets = {str(k): int(v or 0)
+                           for k, v in (hit.get("buckets") or {}).items()}
+                entries = int(hit.get("entries") or 0) or sum(buckets.values())
+                filled = int(hit.get("filled") or 0)
+                if filled <= 0 and entries > 0:
+                    filled = entries
                 if entries <= 0:
                     status = "empty"
-                elif updated or filled < entries:
+                elif filled < entries:
                     status = "todo"
                 else:
                     status = "done"
-                rows.append({"name": name, "folder": hit["folder"],
+                rows.append({"name": name, "folder": "",
                              "entries": entries, "filled": filled,
-                             "files": _files_of(hit.get("rel") or ""),
+                             "buckets": buckets,
+                             "files": _bucket_rows(buckets),
                              "hasLedger": True, "orphan": False,
-                             "updated": updated, "status": status})
-        # 账本里有、staging 里没有：目录被删掉或改名了（Vortex 里卸了？）
-        for key, v in led.items():
-            if key in seen:
+                             "updated": False, "status": status})
+        # 索引里有、staging 里没有：目录被删掉或改名了（Vortex 里卸了？）
+        for name, v in idx.items():
+            if name in seen:
                 continue
-            rows.append({"name": key, "folder": v["folder"],
-                         "entries": int(v["entries"] or 0),
-                         "filled": (int(v["entries"] or 0)
-                                    if int(v["filled"]) < 0 else int(v["filled"])),
+            buckets = {str(k): int(x or 0)
+                       for k, x in (v.get("buckets") or {}).items()}
+            entries = int(v.get("entries") or 0) or sum(buckets.values())
+            rows.append({"name": name, "folder": "",
+                         "entries": entries,
+                         "filled": int(v.get("filled") or 0),
+                         "buckets": buckets,
+                         "files": _bucket_rows(buckets),
                          "hasLedger": True, "orphan": True,
                          "status": "orphan"})
         rows.sort(key=lambda r: (-int(r.get("entries") or 0),
@@ -3883,49 +3920,6 @@ class Api(object):
                             "orphan": cnt["orphan"],
                             "entries": sum(int(r.get("entries") or 0)
                                            for r in rows)}}
-
-    def refresh_names(self, log=None):
-        """扫一遍 staging 里所有模组的注册写法，把缺的模组名补齐。
-
-        只读 `.reds` / `.lua` 里的注册调用（ms 的 runtimeProperty、rcf 的
-        DVRCF.Register、nativeSettings 的 addTab），不碰正文，所以比跑一轮
-        批量便宜得多（实测扫 310 个目录 1.1 秒）。翻出来的名字写进 names.lua，
-        键和英文名各一份。
-
-        为什么要单独有这一轮：names.lua 以前只在「重跑某个模组」时才补，已经
-        翻完的模组不会回头补名，于是 MCM 列表里一半名字永远是英文。
-        """
-        import mod_ledger
-        log = log or self._batch_log
-        stg = str(self.settings.get("staging_dir") or "").strip()
-        if not stg or not os.path.isdir(stg):
-            return {"ok": False, "error": "没有设置安装缓存目录"}
-        # 汉化包自己在 staging 里的副本（是我们投出去的覆盖文件）别扫：
-        # 那里面已经是中文，扫进来只会多出一堆没用的键。
-        skip = os.path.splitext(os.path.basename(self._pack_zip_path()))[0]
-        pairs = []
-        for name in sorted(os.listdir(stg)):
-            d = os.path.join(stg, name)
-            if not os.path.isdir(d) or name == skip:
-                continue
-            try:
-                pairs.extend(mod_ledger.scan_name_pairs(d))
-            except Exception:            # noqa: BLE001 - 一个目录坏了不该毁整轮
-                continue
-        out = mod_ledger.ledger_dir(self.settings)
-        if not out:
-            return {"ok": False, "error": "账本目录为空"}
-        stat = mod_ledger.ensure_names(
-            out, pairs,
-            base=normalize_api_base(self.settings.get("api_base", "")),
-            model=str(self.settings.get("model") or "").strip(),
-            target=str(self.settings.get("target_lang") or "简体中文"),
-            log=log)
-        log("模组名：扫出 %d 个候选，names.lua 新增 %d 条（现有 %d）"
-            % (len(pairs), int(stat.get("added") or 0),
-               int(stat.get("have") or 0) + int(stat.get("added") or 0)))
-        return {"ok": True, "pairs": len(pairs), "added": stat.get("added"),
-                "todo": stat.get("todo"), "error": stat.get("error") or ""}
 
     def _pending_in_same_files(self, items):
         """这次要写的文件里，还有多少条没译的行。
