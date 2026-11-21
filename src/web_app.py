@@ -3391,6 +3391,40 @@ class Api(object):
         except Exception:        # noqa: BLE001 - 少了这一层不该挡住导出
             return 0
 
+    def _stamp_cet_hotkeys(self, work):
+        """把热键名翻译层塞进包里（bin\\x64\\...\\mods\\##000_CETHotkeysZh）。
+
+        为什么不并进 zzz_CP2077_CETZh：两层要求相反的加载位置。
+        CET 按 mods 目录名字母序加载 init.lua，'#'(0x23) 比所有字母数字都小，
+        所以 `##000_` 排最前 —— 它必须在任何 mod 调用 registerHotkey 之前把
+        这个全局函数包住（各 mod 都是在 init.lua 顶层注册，不是 onInit）；
+        而 zzz_ 前缀要排最后，等所有 mod 都把 ImGui 调用注册完。一个目录名
+        不可能同时满足两头，只能是两个独立 mod。
+
+        词表用独立的 hotkeys.tsv，不混进 dict.tsv：热键名是一批固定短标签，
+        混进 ImGui 那三万多条正文里既不好维护，也容易撞词。
+        """
+        import shutil
+
+        tpl = os.path.join(bundle_dir("pack"), "cet_hotkeys")
+        if not os.path.isdir(tpl):
+            return 0
+        dst = os.path.join(work, "bin", "x64", "plugins", "cyber_engine_tweaks",
+                           "mods", "##000_CETHotkeysZh")
+        try:
+            os.makedirs(dst, exist_ok=True)
+            shutil.copyfile(os.path.join(tpl, "init.lua"),
+                            os.path.join(dst, "init.lua"))
+            shutil.copyfile(os.path.join(tpl, "hotkeys.tsv"),
+                            os.path.join(dst, "hotkeys.tsv"))
+        except OSError:
+            return 0
+        try:
+            with open(os.path.join(dst, "hotkeys.tsv"), encoding="utf-8") as f:
+                return sum(1 for line in f if "\t" in line and not line.startswith("#"))
+        except OSError:
+            return 0
+
     def _stamp_archive(self, work):
         """把 ``pack\\archive`` 整棵合并进打包目录（ArchiveXL 的 onscreens 层）。
 
@@ -3563,6 +3597,9 @@ class Api(object):
         # CET 那层的入口（ImGui 文本）也一并塞进包，见 _stamp_cet_mod
         self._stamp_cet_mod(work, dict_dir)
 
+        # 热键名那层要排在所有 mod 之前，见 _stamp_cet_hotkeys
+        self._stamp_cet_hotkeys(work)
+
         # 归档层（ArchiveXL onscreens）：Codeware 管的那批键只能走这里
         self._stamp_archive(work)
 
@@ -3642,6 +3679,9 @@ class Api(object):
 
         # CET 那层的入口（ImGui 文本）也一并塞进包，见 _stamp_cet_mod
         self._stamp_cet_mod(work, dict_dir)
+
+        # 热键名那层要排在所有 mod 之前，见 _stamp_cet_hotkeys
+        self._stamp_cet_hotkeys(work)
 
         # 归档层（ArchiveXL onscreens）：Codeware 管的那批键只能走这里
         self._stamp_archive(work)
