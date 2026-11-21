@@ -58,11 +58,21 @@ constexpr size_t kMaxDictBytes = 64u << 20;
 // 热路径，每帧可能被调上万次，只做两次整数比较。
 // reg 号实测是 1858..1865 连续段（SetText / SetTextDirect / SetLocalizedText /
 // SetLocalizedTextString / SetLocalizationKey(2 个) / SetTextFromParts），
-// 外加第二套编号里的 1835。段内的 1862 不一定是文本函数，放进来无害 ——
-// 后面读不到有效英文串自然会返回。
+// 外加第二套编号里的 1835。
+//
+// **段里的 1862 必须排除。** 2026-11-21 的崩溃（crash-2026-11-21_130906.txt，
+// CP2077UITranslator.dll+0x58AA read at 0x10）就是它：1862 不是文本函数，
+// 调它的实例不是 inkTextWidget，+0x258 处不是 CString，长度字段恰好 >= 0x40000000，
+// CString::c_str() 于是把那 8 字节当 data 指针取出来，`cmp byte ptr [0x10],0`
+// 直接访问违例。以前注释写「放进来无害」，实测有害。
+// 掩码 0xEF = 0b1110_1111，bit4 正是 1862。
 __forceinline bool IsTextReg(uint32_t aReg)
 {
-    return (aReg >= 1858 && aReg <= 1865) || aReg == 1835;
+    if (aReg >= 1858 && aReg <= 1865)
+    {
+        return ((0xEFu >> (aReg - 1858)) & 1u) != 0;
+    }
+    return aReg == 1835;
 }
 
 uintptr_t g_widgetClass = 0;
@@ -306,17 +316,52 @@ void ReportHit(const char* aSrc, const char* aDst, const char* aScope)
 // 性能红线：这个函数每帧都会被 HUD 调几十次（血量 / 弹药 / 速度全走 SetText），
 // 所以里面只做「读串 → 查一张表 → 写回」三件事。爬调用链那套已经全部砍掉，
 // 分片在加载时并进总表了，运行时不需要知道模组是谁。
+// 对象 +0x30 是它的 nativeType（RED4ext::CClass*），沿 parent 链往上找
+// inkTextWidget。**只能 is-a，不能相等**：inkRichTextBox / inkTextRef 这类子类
+// 继承同样的字段布局（text 一样在 +0x258），但它们自己的 CClass 不等于
+// inkTextWidget —— 老版本用相等比较，把标题/分类整类滤掉了。
+//
+// 这道闸门 2026-11-21 补回来：此前为了覆盖子类把类型比对整个删掉，结果 reg 1862
+// 把非文本对象的 this 送进来，读 +0x258 取出 0x10 当指针，带崩游戏（+0x58AA）。
+// g_widgetClass 由 OnPostRegister 填；拿不到就一条都不改 —— 宁可漏翻，不可崩。
+__declspec(noinline) bool IsTextWidget(void* aCtx)
+{
+    if (g_widgetClass == 0)
+    {
+        return false;
+    }
+    __try
+    {
+        auto* cls = reinterpret_cast<RED4ext::CClass*>(ReadNativeType(aCtx));
+        for (int i = 0; i < 32 && cls != nullptr; ++i)
+        {
+            if (reinterpret_cast<uintptr_t>(cls) == g_widgetClass)
+            {
+                return true;
+            }
+            cls = cls->parent;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+    return false;
+}
+
 void ApplyTranslation(void* aCtx)
 {
     if (aCtx == nullptr)
     {
         return;
     }
-    // 不再比对 nativeType：SetText / SetLocalizedText 全是 inkTextWidget 的方法，
-    // 能调用它们的对象必然是 inkTextWidget 或其子类（inkRichTextBox 之类）。
-    // 子类继承同样的字段布局，text 一样在 +0x258。
-    // 之前只认「nativeType == inkTextWidget」这一种精确类型，把标题/分类这些
-    // 富文本控件整个滤掉了 —— 日志里明明命中 8 次，界面上纹丝不动。
+    // 类型闸门。SetText 那一套确实是 inkTextWidget 的方法，但兜底 hook 挂在
+    // InternalExecute 这个总入口上，aCtx 是「谁在调」，不先验一下就可能把
+    // 别的类的对象当 widget 读。
+    if (!IsTextWidget(aCtx))
+    {
+        return;
+    }
 
     const char* src = ReadWidgetText(aCtx);
     if (src == nullptr || src[0] == '\0' || src[1] == '\0')

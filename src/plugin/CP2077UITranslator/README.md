@@ -27,12 +27,15 @@ red4ext\plugins\CP2077UITranslator\
 ```powershell
 cmd /c "call C:\BuildTools\VC\Auxiliary\Build\vcvars64.bat >nul 2>&1 && ^
   cl /nologo /LD /std:c++20 /EHsc /O2 /utf-8 ^
-  /I""D:\Module Translation\_tmp\RED4ext.SDK\include"" ^
+  /I""D:\Module Translation\src\plugin\RED4ext.SDK\include"" ^
   /Fe:CP2077UITranslator.dll Main.cpp /link user32.lib"
 ```
 
-依赖 RED4ext.SDK 头文件（`_tmp\RED4ext.SDK\include`）。
+依赖 RED4ext.SDK 头文件，仓库里放在 `src\plugin\RED4ext.SDK`（浅克隆一份即可，
+曾经放在 `_tmp\RED4ext.SDK`，被清理工作区时删过）。
 产物是单个 DLL，不需要 plugin.toml —— 靠导出的 `Query` / `Main` / `Supports` 注册。
+编完要同时替换三处：`src\pack\ui_translator\...\CP2077UITranslator.dll`（打包源）、
+`dist\2077ModTranslator.exe`（重新打包）、以及导出的 zip。
 
 ## 挂钩方式：两级
 
@@ -76,10 +79,16 @@ SDK 的 `ExecuteNative` 里虽然写着 `auto func = GetHandler(GetRegIndex())`�
 1865 SetTextFromParts   1835（第二套编号）
 ```
 
-**不检查 `nativeType`**：`SetText` 系列是 `inkTextWidget` 的方法，能调用它们
-的对象必然是它或子类（`inkRichTextBox` 之类），子类继承同样的字段布局，
-`text` 一样在 `+0x258`。早期版本只认精确的 `inkTextWidget`，把标题那一整类
-富文本控件全滤掉了。
+**有类型闸门（is-a）**：`SetText` 系列是 `inkTextWidget` 的方法，但兜底 hook 挂在
+`InternalExecute` 总入口上，`aCtx` 是「谁在调」，不验一下就可能把别的类的对象当
+widget 读。`OnPostRegister` 存下 `inkTextWidget` 的 `CClass*`，运行时沿 `CClass::parent`
+链（`+0x10`）做 is-a —— 不能比相等，`inkRichTextBox` 这些子类 CClass 不同但布局相同，
+早期版本用相等比较把标题那一整类富文本控件全滤掉了。
+
+拿不到 class（`g_widgetClass == 0`）时一条都不改：宁可漏翻，不可崩。
+
+**1862 不算文本函数**：`kTextRegs` 里没有它，`IsTextReg` 用掩码 `0xEF` 把
+1858…1865 里的 bit4 关掉。2026-11-21 就是它带崩的游戏，见「已知问题」。
 
 ## 翻不到的部分
 
@@ -105,5 +114,10 @@ SDK 的 `ExecuteNative` 里虽然写着 `auto func = GetHandler(GetRegIndex())`�
 
 ## 已知问题
 
+- **2026-11-21 崩溃（已修）**：`+0x58AA cmp byte ptr [rbx],0`，`rbx = 0x10`。
+  `IsTextReg` 当时是范围判断 `(reg-1858) <= 7`，放行了 **1862**；1862 不是文本函数，
+  调它的对象不是 `inkTextWidget`，`+0x258` 处不是 `CString`，长度字段恰好
+  `>= 0x40000000`，`CString::c_str()` 就把那 8 字节当 data 指针取出来 → 访问违例。
+  修法：掩码剔除 1862 + 补 is-a 闸门。当天崩了两次（10:22、13:09），同一位置。
 - `CString` 赋值会在命中时分配一次内存，频率低（界面设置文本时才有）
 - 词典里的 key 是英文原文，跨模组同名文本会互相覆盖（42 处冲突，取先加载的）
