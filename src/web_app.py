@@ -3793,120 +3793,36 @@ class Api(object):
 
     # ------------------------------------------------------------ 分流
     def _apply_all(self, items, standalone=True):
-        """按通道分流：设置层写账本，其余写成覆盖文件进汉化包。
+        """应用 = 把当前模组的译文合并进分片词典，重打整个包。
 
-        原模组**一行不动**。含设置注册的文件整份留在原地（见 mod_pack.route），
-        那条路上的文案只能靠账本在显示层替换 —— 2026-11 因为直接改写设置文件，
-        整个模组不可用过一次，这条不能退。
+        新架构下不写账本、不往补丁包里合文件：产物只有一个 zip，
+        里面是内置插件 + 增量合并后的分片词典。
+        返回值保持前端 onApplied 期望的字段形状（ok / fail / mode / standalone /
+        report），免得再改一遍 apply.js。
         """
-        import mod_pack
-        root = self.root or ""
-        cls = mod_pack.classify(root, items)
-        self._batch_log("分流：账本 %d 条 / 汉化包 %d 条 / 归档 %d 条 / 跳过 %d 条"
-                        % (len(cls["ledger"]), len(cls["pack"]),
-                           len(cls["archive"]), cls["skip"]))
-        out = {"ok": 0, "fail": 0, "errors": [], "ledger": None, "pack": None,
-               "archive": None}
+        r = self.export_ui_dict()
+        if not r.get("ok"):
+            err = r.get("error") or self._tr("导出失败")
+            return {"ok": 0, "fail": 0, "mode": "dict", "errors": [err],
+                    "failedTotal": 1, "failed": [], "report": {}}
 
-        # 单模组：产物全部先落临时目录，最后打成一个独立 zip；
-        # 不写 staging，也不碰 CP2077 Localization Pack.zip（那是批量的总包）。
-        self._standalone_tmp = []
-        self._res_out_override = ""
-        self._pack_pending = None
-        if standalone:
-            td = tempfile.mkdtemp(prefix="zhsingle-")
-            self._standalone_tmp.append(td)
-            self._res_out_override = td
-            self._pack_pending = {"files": {}, "temp": [], "ok": 0, "fail": 0,
-                                  "errors": []}
-
-        if cls["ledger"]:
-            try:
-                lr = self._ledger_apply(cls["ledger"])
-                out["ok"] += int(lr.get("ok") or 0)
-                out["ledger"] = lr.get("ledger")
-            except Exception as ex:
-                out["errors"].append("账本写入失败：%s" % ex)
-
-        if cls["pack"]:
-            try:
-                pr = self._pack_apply(root, cls["pack"], collect=bool(standalone))
-                out["ok"] += int(pr.get("ok") or 0)
-                out["fail"] += int(pr.get("fail") or 0)
-                out["errors"].extend(pr.get("errors") or [])
-                out["pack"] = {"zip": pr.get("zip"),
-                               "files": pr.get("files"),
-                               "entries": pr.get("entries")}
-            except Exception as ex:
-                out["errors"].append("汉化包生成失败：%s" % ex)
-
-        # 归档层：交给现有的组包流程（它只写 _zh-cn.archive + .xl，原归档不动），
-        # 产物随后并进汉化包 zip 的 archive/pc/mod/ 下。
-        if cls.get("archive"):
-            try:
-                ar = self._do_apply(cls["archive"],
-                                    keep_backup=not standalone)
-                out["ok"] += int(ar.get("ok") or 0)
-                out["fail"] += int(ar.get("fail") or 0)
-                out["errors"].extend(ar.get("errors") or [])
-                out["archive"] = {"archive": ar.get("archive", ""),
-                                  "xl": ar.get("xl", ""),
-                                  "outdir": ar.get("outdir", "")}
-                # 单模组：归档产物只是 zip 的原料，别并进总包
-                if not standalone:
-                    self._merge_archive_into_zip(ar.get("archive"), ar.get("xl"))
-            except Exception as ex:
-                out["errors"].append("归档组包失败：%s" % ex)
-
-        if cls["settings_files"]:
-            self._batch_log("含设置注册、整份留在原地：%d 个文件"
-                            % len(cls["settings_files"]))
-
-        # 不管这轮走了哪条通道，zip 收尾时都必须是完整的补丁包
-        # （运行时 init.lua + 账本 + 说明）。重装 zip 会用它覆盖 staging，
-        # 缺的不只是译文，还有游戏侧替换设置文本的那个 mod。
-        if standalone:
-            # 单模组：产物打成一个只含这个模组的独立 zip；同一份产物**同时**
-            # 并进总包。以前总包在这里一个字不动，于是「单模组翻完 → 重新打包」
-            # 之后总包里还是旧账本，重装一次 zip 这个模组的译文就退回英文。
-            try:
-                extra = {}
-                ar = out.get("archive") or {}
-                for k in ("archive", "xl"):
-                    p = ar.get(k) or ""
-                    if p:
-                        extra["archive/pc/mod/" + os.path.basename(p)] = p
-                sp = self._build_standalone_zip(root, extra)
-                if sp.get("ok"):
-                    out["standalone"] = sp
-                else:
-                    out["errors"].append(sp.get("error") or "打包失败")
-
-                pend = getattr(self, "_pack_pending", None) or {}
-                total = dict(pend.get("files") or {})
-                total.update(extra)
-                out["patchSync"] = self._sync_ledger_to_zip(total)
-            except Exception as ex:      # noqa: BLE001 - 打包失败不该吞掉已写的账本
-                out["errors"].append("单模组打包失败：%s" % ex)
-        elif cls["ledger"] or cls["pack"] or cls.get("archive"):
-            try:
-                out["patchSync"] = self._sync_ledger_to_zip()
-            except Exception as ex:      # noqa: BLE001 - 同步失败不毁已写内容
-                out["errors"].append("补丁包同步失败：%s" % ex)
-
-        # 临时目录用完就删（里面的文件已经写进 zip 了）
-        import mod_pack as _mp
-        for d in getattr(self, "_standalone_tmp", []):
-            _mp.cleanup(d)
-        # collect 模式下 _pack_apply 把文件留在 zhpack-* 里等 _flush_pack 收尾，
-        # 单模组不走那条路，这里自己收（zip 已经写完了）
-        pend = getattr(self, "_pack_pending", None) or {}
-        for t in (pend.get("temp") or []):
-            _mp.cleanup(t)
-        self._standalone_tmp = []
-        self._res_out_override = ""
-        self._pack_pending = None
-        return out
+        files = int(r.get("files") or 0)
+        added = int(r.get("added") or 0)
+        missing = int(r.get("missing") or 0)
+        return {
+            "ok": files,                       # 这次写进词典的分片数
+            "fail": 0,
+            "candidates": files + missing,
+            "mode": "dict",
+            "added": added,
+            "missing": missing,
+            "zip": r.get("zip"),
+            "standalone": {"zip": r.get("zip")},
+            "created": [],
+            "providers": [],
+            "errors": [],
+            "report": {"zip": r.get("zip"), "added": added, "missing": missing},
+        }
 
     def _pack_pending_state(self):
         """批量暂存区：{"files": {zip路径: 磁盘路径}, "temp": [...], ...}。
@@ -3921,29 +3837,29 @@ class Api(object):
         return p
 
     def _flush_pack(self):
-        """把批量暂存的覆盖文件一次性合并进 zip，再同步账本。"""
-        import mod_pack
+        """批量收尾：全量重建分片词典，重打整个包。
+
+        以前这里是把各模组的临时覆盖文件一次性合进旧 zip（mod_pack.merge_into_zip）。
+        新架构不覆盖模组文件了，产物就是「内置插件 + 全量重建的词典」一个 zip。
+        """
         p = self._pack_pending_state()
-        zp = self._pack_zip_path()
-        files = dict(p["files"])
-        temps = list(p["temp"])
-        out = {"files": len(files), "zip": zp, "ok": p["ok"],
-               "fail": p["fail"], "errors": list(p["errors"])[:20]}
-        try:
-            if files:
-                mod_pack.merge_into_zip(zp, files, log=self._batch_log)
-                self._batch_log("覆盖文件合并：%d 个 → %s"
-                                % (len(files), os.path.basename(zp)))
-            out["patchSync"] = self._sync_ledger_to_zip()
-        finally:
-            for t in temps:
-                mod_pack.cleanup(t)
-            # 就地清空，不换新 dict —— worker 手里握着同一个引用
-            p["files"].clear()
-            p["temp"].clear()
-            p["errors"].clear()
-            p["ok"] = 0
-            p["fail"] = 0
+        r = self.export_all_dict()
+        out = {"files": int(r.get("files") or 0),
+               "zip": r.get("zip") or "",
+               "ok": p["ok"], "fail": p["fail"],
+               "errors": list(p["errors"])[:20]}
+        if not r.get("ok"):
+            out["errors"].append(r.get("error") or "重建词典失败")
+        else:
+            self._batch_log("词典重建：%d 片 / %d 条 → %s"
+                            % (int(r.get("files") or 0), int(r.get("entries") or 0),
+                               os.path.basename(out["zip"])))
+        # 暂存区就地清空（worker 手里握着同一个 dict 引用，不能换新的）
+        p["files"].clear()
+        p["temp"].clear()
+        p["errors"].clear()
+        p["ok"] = 0
+        p["fail"] = 0
         return out
 
     def _pack_apply(self, root, rows, collect=False):
@@ -4073,7 +3989,7 @@ class Api(object):
         else:
             os.makedirs(dict_dir, exist_ok=True)
 
-        stats = ui_dict.merge_into(dict_dir, frags, mem, translated)
+        stats = ui_dict.write_mod_full(dict_dir, frags, mem, translated)
 
         out_zip = os.path.join(os.path.dirname(self._pack_zip_path()),
                                self.UI_PACK_NAME)
@@ -4092,6 +4008,61 @@ class Api(object):
             "missing": stats.get("missing", 0),
             "buckets": len(frags),
         }
+
+    def export_all_dict(self):
+        """批量：全量重扫所有模组，重建分片词典并重打整个包。
+
+        跟 export_ui_dict（单模组增量）相对：这里从零建，不复用上一版词典。
+        用户口径是「批量翻译直接对产物重新打一个包」。
+        """
+        import shutil
+
+        import ui_dict
+
+        staging = str(self.settings.get("staging_dir") or "").strip().strip('"')
+        if not staging or not os.path.isdir(staging):
+            return {"ok": False, "error": self._tr("还没有设置模组目录。")}
+
+        tpl = os.path.join(bundle_dir("pack"), "ui_translator")
+        if not os.path.isdir(tpl):
+            return {"ok": False, "error": self._tr("内置插件资源缺失。")}
+
+        work = os.path.join(config_dir(), "ui_pack_all")
+        if os.path.isdir(work):
+            shutil.rmtree(work, ignore_errors=True)
+        shutil.copytree(tpl, work)
+        dict_dir = os.path.join(work, "red4ext", "plugins",
+                                "CP2077UITranslator", "dict")
+        os.makedirs(dict_dir, exist_ok=True)
+
+        try:
+            mem = ui_dict.load_memory(os.path.join(config_dir(), "memory.json"))
+        except Exception:
+            mem = {}
+
+        translated = {}
+        for r in (self.rows or []):
+            s = str(r.get("orig") or "").strip()
+            d = str(r.get("trans") or "").strip()
+            if s and d and s != d:
+                translated[s] = d
+
+        try:
+            stats = ui_dict.build_all(staging, mem, dict_dir, translated=translated)
+        except Exception as ex:
+            return {"ok": False,
+                    "error": self._tr("重建失败: %s").replace("%s", str(ex))}
+
+        out_zip = os.path.join(os.path.dirname(self._pack_zip_path()),
+                               self.UI_PACK_NAME)
+        try:
+            os.makedirs(os.path.dirname(out_zip), exist_ok=True)
+            ui_dict.pack(out_zip, work)
+        except Exception as ex:
+            return {"ok": False,
+                    "error": self._tr("打包失败: %s").replace("%s", str(ex))}
+
+        return dict(stats, ok=True, zip=out_zip)
 
     def apply(self, items, force=False):
         """异步: 立刻返回, 结果通过 applied / error 事件回推"""

@@ -352,6 +352,76 @@ def merge_into(out_dir, fragments, memory, translated=None):
     return stats
 
 
+def write_mod_full(out_dir, fragments, memory, translated=None):
+    """单模组「全量更新」：这个模组自己的分片整片重建，_global 只做合并。
+
+    和 merge_into 的区别：那个是只加不减 —— 模组升级后英文变了，旧译文还挂在
+    词典里，界面就会显示「新英文配旧中文」。这里按**当前提取结果**重建，
+    提取不到的条目直接从分片里消失。
+
+    _global 是所有模组共用的一片，没办到知道哪条属于哪个模组，只能合并。
+    """
+    translated = translated or {}
+    os.makedirs(out_dir, exist_ok=True)
+    stats = {"files": 0, "added": 0, "removed": 0, "missing": 0}
+    for key, items in fragments.items():
+        name = "%s.tsv" % (key if key else GLOBAL_KEY)
+        path = os.path.join(out_dir, name)
+        existing = load_tsv(path)
+        before = len(existing)
+
+        if key:
+            # 模组自己的分片：整片重建
+            rows = {}
+            for src in items:
+                s = _clean(src)
+                if not s or has_cjk(s):
+                    continue
+                dst = translated.get(src) or memory.get(src)
+                if not dst:
+                    stats["missing"] += 1
+                    continue
+                d = _clean(dst)
+                rows[s] = d
+                t = s.strip()
+                if t and t != s:
+                    rows.setdefault(t, d)
+            if not rows and not existing:
+                continue
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                for s, d in sorted(rows.items()):
+                    f.write(s + "\t" + d + "\n")
+            stats["files"] += 1
+            stats["removed"] += max(0, before - len(rows))
+            stats["added"] += max(0, len(rows) - before)
+        else:
+            # 共用分片：合并，只增不减
+            changed = 0
+            for src in items:
+                s = _clean(src)
+                if not s or has_cjk(s):
+                    continue
+                dst = translated.get(src) or memory.get(src)
+                if not dst:
+                    stats["missing"] += 1
+                    continue
+                d = _clean(dst)
+                if existing.get(s) != d:
+                    existing[s] = d
+                    changed += 1
+                t = s.strip()
+                if t and t != s and t not in existing:
+                    existing[t] = d
+                    changed += 1
+            if changed:
+                with open(path, "w", encoding="utf-8", newline="\n") as f:
+                    for s, d in sorted(existing.items()):
+                        f.write(s + "\t" + d + "\n")
+                stats["files"] += 1
+                stats["added"] += max(0, len(existing) - before)
+    return stats
+
+
 def pack(zip_path, package_dir):
     """把 package_dir 打成 Vortex 能直接装的 zip（路径一律 '/'）。"""
     import zipfile
