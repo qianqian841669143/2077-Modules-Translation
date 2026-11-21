@@ -22,6 +22,7 @@
 #include <RED4ext/Containers/DynArray.hpp>
 #include <RED4ext/Handle.hpp>
 #include <RED4ext/ResourcePath.hpp>
+#include <RED4ext/Scripting/Natives/Generated/localization/PersistenceOnScreenEntries.hpp>
 
 #include <Windows.h>
 
@@ -1163,18 +1164,15 @@ void LoadDictionary(const std::wstring& aDir)
 // 回调最后跑，所以这里写进去的中文不会再被 provider 的 en-us 覆盖。
 // 不依赖 Cosmopolitan、redscript、TweakXL 任何一个第三方模组。
 // ============================================================================
-struct OnScreenEntry
-{
-    uint64_t primaryKey;            // 00
-    RED4ext::CString secondaryKey;  // 08
-    RED4ext::CString femaleVariant; // 28
-    RED4ext::CString maleVariant;   // 48
-};
-
-struct OnScreenEntries
-{
-    RED4ext::DynArray<OnScreenEntry> entries;
-};
+// 类型必须用 SDK 里由游戏 Reflection 数据生成的那一份，不能自己手写。
+// 2026-11-21 16:52 那次闪退就是这么来的：我照着自己猜的布局写了个
+// { DynArray entries; }（entries 放在偏移 0），而真正的
+// localizationPersistenceOnScreenEntries 继承 ISerializable，entries 在 0x30，
+// 结构体总长 0x40。结果 Size() 读成 498（ISerializable 里的字段），
+// entry[0] 的 secondaryKey 是个野指针，游戏当场 0xC0000005。
+// SDK 那份带 RED4EXT_ASSERT_SIZE，布局由编译器替我们盯着。
+using OnScreenEntries = RED4ext::localization::PersistenceOnScreenEntries;
+using OnScreenEntry = RED4ext::localization::PersistenceOnScreenEntry;
 
 using LoadOnScreens_t = uint64_t (*)(RED4ext::Handle<OnScreenEntries>&, RED4ext::ResourcePath);
 
