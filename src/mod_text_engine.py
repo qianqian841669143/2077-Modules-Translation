@@ -35,7 +35,9 @@ except ImportError:                     # 单文件入口(pyinstaller / 直接�
 #   5: v3.1.0 条目表第 2 列 / 宿主 API 签名表 / UI 封装函数的形参名判定
 #   6: v3.1.1 数字前缀的 @runtimeProperty 查表键（01-DNR-Main 这类分类键）
 #   7: v3.1.2 displayValues 选项文本 / displayName 单词值放宽 / 比较位字符串不翻
-RULES_VERSION = 7
+#   8: RCF 构建器调用（Tab/Section/Slider/Tip…）算显示证据；
+#      AudioXLEqualizer 的 AXLEQ_DVRCF.reds 由 0 条变 13 条
+RULES_VERSION = 8
 
 TYPE_NAME = "显示名称"
 TYPE_DESC = "描述"
@@ -639,6 +641,16 @@ _UI_LABEL_CALLS = {
     "text", "settext", "setdefaulttext", "setplaceholdertext",
     "outlinebutton", "ghostbutton", "button", "addbutton", "label",
     "setlabel", "settooltip", "settextbyindex",
+    # RCF（DVRCF_SchemaBuilder）：b.Tab("Volume Sliders")、b.Section(...)、
+    # b.Slider(key, "Threshold (dB)", …)、b.Tip(...)。这类写法没有赋值目标，
+    # text_evidence 以前只看到 "plain"，精确档把整个文件都丢了
+    # —— AudioXLEqualizer 的 AXLEQ_DVRCF.reds 实测 0 条。
+    "tab", "addtab", "section", "header", "caption",
+    "slider", "sliderf", "slideri", "range",
+    "checkbox", "toggle", "dropdown", "combo", "option", "radio",
+    "tip", "note",
+    # RedWindows / TFP 这类自绘窗口
+    "window", "panel",
 }
 
 # 技术缩写不是给玩家念的词, 别因为「全大写单词」就收进来。
@@ -1591,6 +1603,11 @@ def text_evidence(text, pos, callee=""):
         return "internal", var
     if _looks_like_log_call(callee):
         return "internal", callee
+    # 调用者本身就是「把这串推给界面」的方法（b.Tab / b.Slider / b.Label …）。
+    # 这类字面量没有赋值目标，只看变量名会一律落到 plain，精确档全丢。
+    last = (callee or "").split(".")[-1]
+    if last and last.lower() in _UI_LABEL_CALLS:
+        return "display", last.lower()
     return "plain", ""
 
 
