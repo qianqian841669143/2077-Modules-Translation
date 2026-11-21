@@ -2463,6 +2463,10 @@ class Api(object):
                            if str(it.get("key")) in {str(k) for k in keys}
                            and it.get("upToDate")]
                 if skipped:
+                    # 全都没更新，但包缺这一轮该有的分片（归档层是后接的）：
+                    # 自动补一次重建，别让用户卡在「都跑完了」却拿不到新包。
+                    if self._pack_needs_rebuild():
+                        return self._start_repack_only(len(skipped))
                     return {"ok": True, "started": False, "upToDate": len(skipped),
                             "message": self._tr(
                                 "勾选的 %d 个模组自上次打包以来没有变化，已跳过。"
@@ -3360,6 +3364,67 @@ class Api(object):
                 return zp
             d = r"E:\Vortex Mods"
         return os.path.join(d, PACK_ZIP_NAME)
+
+    def _pack_needs_rebuild(self):
+        """这个包是不是缺了「这一轮应该有」的分片。
+
+        为什么需要它：批量在「所有模组都未更新」时会直接返回 started=False，
+        压根不跑 `_flush_pack`。可包本身可能是上一版打出来的 —— 比如归档层
+        是后来才接进流程的，06:34 那个包里就没有 `_archive.tsv`，而 309 个
+        模组全判未更新，用户点「开始」只会看到「都跑完了」，归档层永远补不上。
+
+        判据只认「缓存里明明有归档数据、包里却没有 _archive.tsv」这一条：
+        不靠时间戳猜，也不因为其它分片缺失就重建（那些是正常增量差异）。
+        """
+        zp = self._pack_zip_path()
+        if not os.path.isfile(zp):
+            return True                     # 压根没有包，必须建
+        try:
+            rows = self._load_archive_rows()
+        except Exception:
+            rows = {}
+        if not rows:
+            return False                    # 没有归档数据，就没什么该补的
+        try:
+            import zipfile
+            with zipfile.ZipFile(zp) as z:
+                names = {n.replace("\\", "/").lower() for n in z.namelist()}
+        except Exception:
+            return True                     # 读不了包，当成要重建
+        return not any(n.endswith("/dict/_archive.tsv") for n in names)
+
+    def _start_repack_only(self, skipped):
+        """模组全都没更新、但包里缺分片：只跑一次重建 + 打包。
+
+        复用批量的那套事件（mb-packing / mb-pack），前端不用改：用户看到的
+        就是遮罩上「正在重建词典包…」，打完自动关上。
+        """
+        self._mb_running = True
+        self._mb_cancel.clear()
+        self._mb_results = []
+        self._mb_push({"type": "mb-packing",
+                       "note": self._tr("正在重建词典包（%d 个模组未更新）…")
+                       % skipped})
+
+        def work():
+            try:
+                flushed = self._flush_pack()
+                self._mb_push({"type": "mb-pack",
+                               "zip": flushed.get("zip") or "",
+                               "files": int(flushed.get("files") or 0),
+                               "ok": int(flushed.get("ok") or 0)})
+            except Exception as ex:      # noqa: BLE001 - 交给前端 error 兜底
+                self._batch_log("repack failed: %r" % (ex,))
+                self._mb_push({"type": "error", "action": "mb-pack",
+                               "message": str(ex)})
+            finally:
+                self._mb_running = False
+
+        self._batch_log("repack only: %d 个模组未更新，包里缺分片" % skipped)
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True, "started": True, "rebuild": True, "total": 0,
+                "cached": skipped,
+                "message": self._tr("模组都没有更新，正在补齐词典包…")}
 
     def _dict_index_path(self):
         """模组 → 分片词典的对照表：``userdata\\pack\\dict_index.json``。

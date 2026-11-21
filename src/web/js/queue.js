@@ -644,6 +644,7 @@ function onMbPack(e) {
   const files = Number(e.files || 0);
   // 打包是批量流程的最后一步，遮罩到这里才摘（见 enterPackingMask）。
   // 中途失败也要摘：后端除了发 mb-pack 带空 zip，还可能只发 error(mb-pack)。
+  state.mbRunning = false;
   exitBatchMask();
   const pending = state.mbSummary || null;
   state.mbSummary = null;
@@ -655,6 +656,9 @@ function onMbPack(e) {
   // 批量结果那句 toast 一直压到这一步才弹（遮罩 z-index 400 > toasts 99）
   if (pending) toast(pending.msg, pending.err ? "err" : "ok");
   if (extra) toast(extra, "ok");
+  // 只有「补齐词典包」这条路径没有 mb-done，按钮状态得在这里放开
+  try { syncQueueStart(); } catch (_) {}
+  try { syncModsBar(); } catch (_) {}
 }
 
 async function startQueue() {
