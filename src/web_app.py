@@ -5078,6 +5078,30 @@ def _crash_ready():
             pass
 
 
+    def mark_as_code(self, file, orig):
+        """把 (相对路径, 原文) 记进「这是代码」排除表, 以后不再当候选。
+
+        用户点一次「标记为代码」，比每次应用都撞一次「疑似代码片段」有用得多；
+        这也是唯一能把用户判断留下来的形态（弹窗本身不留任何东西）。
+        """
+        import user_skip
+        root = self.root or ""
+        if not root or not file:
+            return {"ok": False, "error": self._tr("还没有加载模组。")}
+        ok, n = user_skip.add(root, file, orig)
+        if not ok:
+            return {"ok": False, "error": self._tr("写入排除表失败。")}
+        # 已经加载在表格里的行一并标掉, 不用重新加载
+        hit = 0
+        for r in (self.rows or []):
+            if (str(r.get("file") or "") == str(file)
+                    and str(r.get("orig") or "") == str(orig)):
+                r["skip"] = 1
+                r["codeMarked"] = 1
+                hit += 1
+        return {"ok": True, "marked": hit, "total": n}
+
+
     def remember_skips(self, items):
         """记住 / 忘掉「跳过」勾选，下次加载同一行默认就是勾上的。
 
