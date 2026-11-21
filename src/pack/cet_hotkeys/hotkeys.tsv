@@ -1,0 +1,55 @@
+Blood: clear all decals	血液：清除全部血迹
+Cancel current bounty	取消当前悬赏
+Decrease Time Scale	减慢时间流速
+ESDE SFX in first person	ESDE 第一人称音效
+ESDE debug state	ESDE 调试状态
+ESDE disable	ESDE 禁用
+ESDE enable	ESDE 启用
+ESDE reload effects	ESDE 重载特效
+ESDE toggle SFX	ESDE 音效开关
+Fly: on/off	飞行：开/关
+Freeze Time Toggle	冻结时间开关
+HDR	HDR
+Increase Time Scale	加快时间流速
+Next Favorite	下一个收藏
+Next LUT	下一个 LUT
+Previous Favorite	上一个收藏
+Previous LUT	上一个 LUT
+Random LUT	随机 LUT
+Randomize Clouds	随机云层
+Randomize Time	随机时间
+Randomize Weather	随机天气
+Randomize Weather & Time	随机天气与时间
+RayTracedV: Reset FPP Head State	RayTracedV：重置第一人称头部状态
+RayTracedV: restore normal rendering and stop mirror correction	RayTracedV：恢复正常渲染并停止镜面校正
+Request a bounty now (press twice to cancel)	立即请求悬赏（再按一次取消）
+Request a case file now (press twice to cancel)	立即请求案卷（再按一次取消）
+Request a special contract now (press twice to cancel)	立即请求特殊合同（再按一次取消）
+Reset Clouds	重置云层
+Reset Time Scale	重置时间流速
+Reset Weather	重置天气
+Royale quick menu (drop in / leave a match)	大逃杀快捷菜单（加入/离开对局）
+Show / hide the Royale Terminal	显示/隐藏大逃杀终端
+Toggle Active LUT	开关当前 LUT
+Toggle All Fog	开关全部雾效
+Toggle All Volumetrics and Clouds	开关全部体积云与云层
+Toggle Bloom	开关泛光
+Toggle Chromatic Aberration	开关色差
+Toggle Clouds	开关云层
+Toggle Crowd Spawning	开关人群生成
+Toggle Depth of Field	开关景深
+Toggle Distant Fog	开关远处雾效
+Toggle Distant Volumetric Fog	开关远处体积雾
+Toggle Film Grain	开关胶片颗粒
+Toggle Global Settings	开关全局设置
+Toggle HDR Mode	开关 HDR 模式
+Toggle Lens Flare	开关镜头光晕
+Toggle Motion Blur	开关动态模糊
+Toggle Screen Space Rain	开关屏幕空间雨
+Toggle Secondary LUT	开关次要 LUT
+Toggle Separate Particle Color	开关独立粒子颜色
+Toggle Vehicle Collisions	开关车辆碰撞
+Toggle Vehicle Spawning	开关车辆生成
+Toggle Volumetric Fog	开关体积雾
+Toggle Weather	开关天气
+Toggle Window Utils GUI	开关 Window Utils 界面
