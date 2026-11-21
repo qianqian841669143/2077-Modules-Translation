@@ -473,12 +473,18 @@ def resolve_all(root):
     return out
 
 
-def unpack(cli, target, workdir, want=None, log=None):
+def unpack(cli, target, workdir, want=None, log=None, pattern=None):
     """解出目标归档的资源，返回 {rel: 绝对路径}。
 
-    want 目前只作为提示保留：WolvenKit 的 -w 是通配符而非正则，拿路径列表
-    拼不出可靠的选择器，所以这里一律全量解包。大 mod（几百 MB）会慢几秒，
-    换来的是「绝不漏文件」。定向解包留作后续优化。
+    `want` 目前只作为提示保留：WolvenKit 的 `-w` 是通配符而非正则，拿一组
+    具体路径拼不出可靠的选择器。
+
+    `pattern` 现在是真能用的：本地化候选的判据只有「.json」（见
+    candidate_json —— 游戏里以 .json 结尾的 CR2W 资源基本只有本地化），
+    所以传 `*.json` 只解出候选，几百 MB 的服装/地图归档不必整包落盘。
+    实测 immersive_third_person（897 MB / 1396 文件）全量 2.9 s、
+    定向 2.1 s，省的是写入和 IO；小归档两者都是 2 秒上下（CLI 启动占大头），
+    所以默认仍不限，由调用方决定。
     """
     from . import wkit
 
@@ -487,7 +493,7 @@ def unpack(cli, target, workdir, want=None, log=None):
 
     out = Path(workdir)
     out.mkdir(parents=True, exist_ok=True)
-    wkit.unbundle(cli, target.archive_path, out, log=log)
+    wkit.unbundle(cli, target.archive_path, out, pattern=pattern, log=log)
     return map_files(out)
 
 

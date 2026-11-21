@@ -1406,6 +1406,15 @@ class Api(object):
         from concurrent.futures import ThreadPoolExecutor
 
         def _toc(target):
+            # 有 .xl 的直接读声明：纯文本解析，比一次 CLI 进程（约 2 秒）便宜得多。
+            # .xl 声明了 localization 却和归档对不上时，后面的 scan 会得到 0 行、
+            # 落进 emptyArchives —— 结果正确，只是多解一次包。
+            try:
+                cfg_xl = target.xl_cfg
+                if cfg_xl is not None and cfg_xl.resource_count():
+                    return True
+            except Exception:
+                pass
             try:
                 return bool(Lwkit.has_localization(cli, target.archive_path))
             except Exception:
@@ -1417,26 +1426,47 @@ class Api(object):
         except Exception:
             checks = [True] * len(targets)
 
-        for idx, (target, has_loc) in enumerate(zip(targets, checks), 1):
-            if not has_loc:
-                continue
-            # 归档名要露出来：多归档模组（AMM 有 3 个）用户才知道扫到第几个了
-            _say(self._tr("正在扫描归档 %d/%d：%s") % (idx, total, target.name))
+        # 解包 + 序列化是整次加载最慢的一段：每个归档要起两次 CLI 进程
+        # （unbundle、convert serialize），实测约 5 秒/个，42 个归档串行就是
+        # 三分半。每个归档有自己的 work 目录和自己的 CLI 进程，Session 之间
+        # 不共享状态，所以可以并发；4 路是预筛已经验证过的并发度。
+        jobs = [(idx, t) for idx, (t, has) in enumerate(zip(targets, checks), 1) if has]
+        total_jobs = len(jobs)
+        done = 0
 
-            work = os.path.join(
-                config_dir(), "work",
-                re.sub(r"[^A-Za-z0-9_.-]+", "_", target.name)[:60] or "mod")
-            sess = Lpipe.Session(target, cli, work, lang="zh-cn", log=_say,
-                                source_lang=cfg["source_lang"])
+        def _scan_one(job):
+            _idx, target = job
             try:
+                work = os.path.join(
+                    config_dir(), "work",
+                    re.sub(r"[^A-Za-z0-9_.-]+", "_", target.name)[:60] or "mod")
+                sess = Lpipe.Session(target, cli, work, lang="zh-cn", log=None,
+                                    source_lang=cfg["source_lang"])
                 sess.scan()
+                if not sess.rows:
+                    return ("empty", target, None, None, None)
+                got, skipped = self._filter_l10n_rows(sess, cfg)
+                return ("ok", target, sess, got, skipped)
             except Exception:
-                continue         # 一个归档坏了不该让其它归档一起哑掉
-            if not sess.rows:
+                return None      # 一个归档坏了不该让其它归档一起哑掉
+
+        results = []
+        try:
+            with ThreadPoolExecutor(max_workers=min(4, max(1, total_jobs))) as ex:
+                for res in ex.map(_scan_one, jobs):
+                    results.append(res)
+                    done += 1
+                    _say(self._tr("正在扫描模组归档（%d/%d）...") % (done, total_jobs))
+        except Exception:
+            results = [_scan_one(j) for j in jobs]
+
+        for res in results:
+            if res is None:
+                continue
+            kind, target, sess, got, skipped = res
+            if kind == "empty":
                 empty_arch.append(str(target.archive_path or ""))
                 continue
-
-            got, skipped = self._filter_l10n_rows(sess, cfg)
             for r in got:
                 r["layer"] = "resource"
                 # 资源行的 file 是归档内部路径，磁盘上没有这个文件。要定位到

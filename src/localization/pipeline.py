@@ -217,7 +217,10 @@ class Session(object):
         raw.mkdir(parents=True, exist_ok=True)
 
         self._say("解包 %s" % self.target.name)
-        files = archmod.unpack(self.cli, self.target, raw, log=None)
+        # 只解本地化候选。candidate_json 的判据就是「.json 且 CR2W」，
+        # 字幕注册表也是 .json，所以这个过滤不会漏任何可翻资源；服装/地图
+        # 归档里那几百 MB 的 mesh/texture 本来就不参与提取。
+        files = archmod.unpack(self.cli, self.target, raw, log=None, pattern="*.json")
         # 只读源语言 + 目标语言：其余十几种语言序列化一次要 2.8 秒（进程启动
         # 占大头），而它们从来不参与配对，纯属白等。实测 Nearby Auto Loot
         # 19 个语言文件 → 2 个，加载 58.8 s → 约 8 s。
