@@ -1491,6 +1491,27 @@ def visible_text(inner):
     return inner
 
 
+# ---------------------------------------------------------------- 转义序列
+#
+# redscript 里 `"a\nb"` 运行时是 a + 换行 + b，而提取器拿到的是**源码原文**
+# （反斜杠 + n 两个字符）。词典 key 按原文存、dll 拿运行时文本做精确比较，
+# 这两边永远对不上 —— 全库 249 条带换行的长文本（多行提示、错误信息、
+# BreachRoute 的调试面板）就是这么全灭的，译文翻得再准也不会显示。
+#
+# 提取端还原成真字符后，`_clean` 会把真换行统一成空格，词典 key 变成
+# 「空格分隔的单行」；dll 那边再把运行时文本里的 CR/LF 也归一化成空格，
+# 两边就落到同一个形态上了。
+_ESC_RE = re.compile(r'\\([nrt"\'\\])')
+_ESC_MAP = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "'": "'", "\\": "\\"}
+
+
+def unescape_text(s):
+    """把源码字符串里的转义序列还原成真字符。没反斜杠时原样返回。"""
+    if not s or "\\" not in s:
+        return s
+    return _ESC_RE.sub(lambda m: _ESC_MAP[m.group(1)], s)
+
+
 def _ctx(text, pos, take=28):
     seg = text[max(0, pos - take - 14):pos]
     seg = re.sub(r"\s+", " ", seg).strip()
@@ -1522,7 +1543,7 @@ def concat_literals(text):
         parts = re.findall(r'"((?:[^"\\\n]|\\.){1,400})"', seg)
         if len(parts) < 2:
             continue
-        joined = "".join(parts)
+        joined = unescape_text("".join(parts))
         if not is_label_text(joined):
             continue
         if NOISE.soft_family(joined):
@@ -2509,7 +2530,7 @@ def _extract_lua(text, loose=True, trace=False, noise=None, target_locale=""):
             take(lit, TYPE_LONG, callee)
 
     base = [(lit.line, taken[lit.start][0], taken[lit.start][1],
-             visible_text(lit.inner))
+             unescape_text(visible_text(lit.inner)))
             for lit in lits if lit.start in taken]
     # 纯字面量拼接：运行时值就是拼起来的整串，片段进词典永远不中。
     base.extend(concat_literals(text))
@@ -2640,7 +2661,7 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
             ctx = "StrReplaceAll[%s]" % chosen_locale[lit.start]
             if lit.start not in seen:
                 seen.add(lit.start)
-                out.append((lit.line, typ, ctx, lit.inner))
+                out.append((lit.line, typ, ctx, unescape_text(lit.inner)))
             continue
         if lit.start in skip_locale_starts:  # 同一替换表的其它语言
             continue
@@ -2738,7 +2759,7 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
                 seen.add(lit.start)
                 _ctx_s = (lit_callee(cmap, toks, starts, lit.start)
                           or _ctx(text, lit.start))
-                out.append((lit.line, TYPE_UI, _ctx_s, lit.inner))
+                out.append((lit.line, TYPE_UI, _ctx_s, unescape_text(lit.inner)))
                 continue
             call = lit_callee(cmap, toks, starts, lit.start) or ""
             tier, why = text_evidence(text, lit.start, call)
@@ -2773,7 +2794,7 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
         if lit.start in seen:
             continue
         seen.add(lit.start)
-        out.append((lit.line, typ, ctx, lit.inner))
+        out.append((lit.line, typ, ctx, unescape_text(lit.inner)))
     # 纯字面量拼接按整串收，见 concat_literals 的说明。
     out.extend(concat_literals(text))
     return out

@@ -355,7 +355,7 @@ def _text_pairs_ex(path, only_class=""):
         if lit.start in key_starts:
             continue
         if lit.start in values:
-            val = E.visible_text(lit.inner)
+            val = E.unescape_text(E.visible_text(lit.inner))
             if val.strip():
                 out.append((lit.line, val, values[lit.start]))
             continue

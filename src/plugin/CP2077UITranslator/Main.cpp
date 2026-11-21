@@ -277,6 +277,92 @@ const char* Lookup(Dict& aDict, const char* aText)
     return (it == aDict.map.end()) ? nullptr : it->second;
 }
 
+// ink 的文本里换行是**真字节**（redscript 里 "a\nb" 运行时就是 a + 0x0A + b），
+// 而词典的 key 在生成时被压成「空格分隔的单行」—— TSV 一行一条，真换行存不下。
+// 两边形态不同，逐字节比较永远不中：全库 249 条带换行的长文本（多行提示、
+// 错误信息、BreachRoute 的调试面板）就是这么一直翻不出来的，译文翻得再准
+// 也不会显示。
+//
+// 只在「原样查不到、且串里确实有 CR/LF」时才归一化，普通文本一次都不多扫。
+// 规则和 Python 的 _clean 对齐：CR/LF/TAB 变空格、连续空白并成一个、
+// 不 trim 首尾（两边都不 trim，才能逐字相同）。
+void NormalizeToSpace(const char* aIn, char* aOut, size_t aCap)
+{
+    size_t n = 0;
+    bool prevSpace = false;
+    for (const char* p = aIn; *p != '\0' && n + 1 < aCap; ++p)
+    {
+        char c = *p;
+        if (c == '\r' || c == '\n' || c == '\t')
+        {
+            c = ' ';
+        }
+        if (c == ' ')
+        {
+            if (prevSpace)
+            {
+                continue;
+            }
+            prevSpace = true;
+        }
+        else
+        {
+            prevSpace = false;
+        }
+        aOut[n++] = c;
+    }
+    aOut[n] = '\0';
+}
+
+const char* LookupText(Dict& aDict, const char* aText)
+{
+    const char* hit = Lookup(aDict, aText);
+    if (hit != nullptr || aText == nullptr)
+    {
+        return hit;
+    }
+    if (strchr(aText, '\n') == nullptr && strchr(aText, '\r') == nullptr)
+    {
+        return nullptr;                          // 没有换行，形态本来就一致
+    }
+    char buf[1024] = {};
+    NormalizeToSpace(aText, buf, sizeof(buf));
+    return Lookup(aDict, buf);
+}
+
+// 词典里的译文是从 memory 抄来的源文形态，`\n` 还是反斜杠+n 两个字符。
+// 写回 inkTextWidget 之前必须还原成真换行，否则多行译文会原样显示 "\n"。
+// 就地做：写指针始终不超过读指针，不需要额外缓冲。
+char* UnescapeInPlace(char* aText)
+{
+    char* w = aText;
+    for (const char* r = aText; *r != '\0'; ++r)
+    {
+        if (*r == '\\' && r[1] != '\0')
+        {
+            char out = 0;
+            switch (r[1])
+            {
+            case 'n': out = '\n'; break;
+            case 't': out = '\t'; break;
+            case 'r': out = '\r'; break;
+            case '"': out = '"'; break;
+            case '\\': out = '\\'; break;
+            default: break;
+            }
+            if (out != 0)
+            {
+                *w++ = out;
+                ++r;
+                continue;
+            }
+        }
+        *w++ = *r;
+    }
+    *w = '\0';
+    return aText;
+}
+
 Dict* FindModDict(const char* aKey)
 {
     for (auto& kv : g_modDicts)
@@ -371,7 +457,7 @@ void ApplyTranslation(void* aCtx)
 
     // 不再单独扫一遍 CJK：词典的 key 全是英文，中文串查表必然 miss，
     // 直接由 Lookup 的结果决定要不要写回，少扫一遍整串。
-    const char* hit = Lookup(g_global, src);
+    const char* hit = LookupText(g_global, src);
     if (hit == nullptr)
     {
         return;
@@ -559,7 +645,7 @@ bool ParseDict(Dict& aDict)
             if (tab != nullptr)
             {
                 *tab = '\0';
-                const char* dst = tab + 1;
+                char* dst = UnescapeInPlace(tab + 1);
                 if (*p != '\0' && *dst != '\0')
                 {
                     aDict.map.emplace(std::string_view(p), dst);

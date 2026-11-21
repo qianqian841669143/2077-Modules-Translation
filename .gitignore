@@ -46,3 +46,9 @@ src/web/__fake.js
 
 # RED4ext SDK headers (3rd party, ~8.7 MB). Clone per src/plugin/CP2077UITranslator/README.md; not tracked.
 src/plugin/RED4ext.SDK/
+
+# 插件编译产物（发布物是 src/pack/ui_translator 里那份，这里只是中间结果）
+src/plugin/CP2077UITranslator/*.dll
+src/plugin/CP2077UITranslator/*.obj
+src/plugin/CP2077UITranslator/*.lib
+src/plugin/CP2077UITranslator/*.exp

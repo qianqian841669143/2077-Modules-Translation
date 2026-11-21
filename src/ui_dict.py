@@ -258,6 +258,12 @@ def load_memory(path):
         if not has_cjk(d):
             continue
         out.setdefault(s, d)
+        # 归一化变体：memory 的 key 是**源码原文**（`"a\nb"` 里那个是反斜杠+n
+        # 两个字符），而提取器现在把转义还原成了真换行、_clean 再变成空格。
+        # 不补这一条，249 条带换行的长文本会从「已翻译」整片掉回「待翻译」。
+        t = _clean(ENGINE.unescape_text(s))
+        if t != s:
+            out.setdefault(t, d)
     return out
 
 
@@ -272,6 +278,20 @@ def _clean(text: str) -> str:
     while "  " in text:
         text = text.replace("  ", " ")
     return text
+
+
+def _pick_text(translated, memory, src, s):
+    """取译文：先按原文形态查，再按清理后的形态查一次。
+
+    提取端现在会把源码里的 `\\n` 还原成真换行、`_clean` 再变成空格，所以
+    memory 里按旧形态（字面反斜杠 n）存的那批译文用 src 查不到。load_memory
+    已经补了归一化变体（key 是空格形态），这里必须拿 s 再查一次才接得上 ——
+    否则 240 多条带换行的长文本会整片掉回「待翻译」。
+    """
+    v = translated.get(src) or memory.get(src)
+    if v is None and s != src:
+        v = translated.get(s) or memory.get(s)
+    return v
 
 
 def write_dicts(out_dir, fragments, memory, translated=None):
@@ -291,7 +311,7 @@ def write_dicts(out_dir, fragments, memory, translated=None):
             s = _clean(src)
             if not s or has_cjk(s):
                 continue
-            dst = translated.get(src) or memory.get(src)
+            dst = _pick_text(translated, memory, src, s)
             if not dst:
                 stats["missing"] += 1
                 if len(stats["missing_samples"]) < 200:
@@ -363,7 +383,7 @@ def build_all(mods_root, memory, out_dir, target_locale="", progress=None,
                 s = _clean(src)
                 if not s or has_cjk(s):
                     continue
-                if not (translated.get(src) or memory.get(src)):
+                if not _pick_text(translated, memory, src, s):
                     miss += 1
                     miss_by[k or GLOBAL_KEY] = miss_by.get(k or GLOBAL_KEY, 0) + 1
                     if len(samples) < 5:
@@ -433,7 +453,7 @@ def merge_into(out_dir, fragments, memory, translated=None):
             s = _clean(src)
             if not s or has_cjk(s):
                 continue
-            dst = translated.get(src) or memory.get(src)
+            dst = _pick_text(translated, memory, src, s)
             if not dst:
                 stats["missing"] += 1
                 continue
@@ -489,7 +509,7 @@ def write_mod_full(out_dir, fragments, memory, translated=None):
                 s = _clean(src)
                 if not s or has_cjk(s):
                     continue
-                dst = translated.get(src) or memory.get(src)
+                dst = _pick_text(translated, memory, src, s)
                 if not dst:
                     stats["missing"] += 1
                     _miss(key, s)
@@ -514,7 +534,7 @@ def write_mod_full(out_dir, fragments, memory, translated=None):
                 s = _clean(src)
                 if not s or has_cjk(s):
                     continue
-                dst = translated.get(src) or memory.get(src)
+                dst = _pick_text(translated, memory, src, s)
                 if not dst:
                     stats["missing"] += 1
                     _miss(key, s)
