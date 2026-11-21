@@ -1678,16 +1678,6 @@ class Api(object):
             return 0
         return saved
 
-    def l10n_official_stats(self):
-        try:
-            from localization import official_tm as Lotm
-        except Exception as ex:
-            return {"exists": False, "error": str(ex)}
-        try:
-            return Lotm.OfficialTM().stats()
-        except Exception as ex:
-            return {"exists": False, "error": str(ex)}
-
     def build_official_tm(self):
         """异步构建官方双语库；进度通过 busy 事件回推。"""
         if self._busy:
@@ -2376,10 +2366,6 @@ class Api(object):
             except Exception:
                 pass
         return {"ok": True}
-
-    def batch_results(self):
-        return {"ok": True, "running": self._mb_running,
-                "results": self._mb_results}
 
     def batch_info(self):
         """面板打开时取一次：staging 目录、输出根、上次扫描结果。"""
@@ -3476,6 +3462,209 @@ class Api(object):
         return {"ok": True, "css": theme_css(name)}
 
     # ------------------------------------------------ 汉化包状态（管理用）
+    def batch_clear(self):
+        """清空批量输出（下次重跑覆盖）。只清我们自己盖过章的目录。
+
+        目录可配置之后, 这段代码就是「递归删任意用户指定的目录」, 必须先确认
+        那目录是本工具建的: 没有 ``.mb-out-root`` 标记就拒绝。
+        """
+        if self._mb_running:
+            return {"ok": False, "error": self._tr("批量正在运行")}
+        d, why = self._batch_out_check(create=False)
+        if not d:
+            return {"ok": False, "error": why}
+        if not os.path.isfile(os.path.join(d, ".mb-out-root")):
+            # 旧版固定目录本来就是我们建的, 直接认领; 其余目录一律拒绝。
+            if os.path.normcase(d) != os.path.normcase(
+                    os.path.abspath(legacy_batch_out_dir())):
+                return {"ok": False,
+                        "error": self._tr("这个目录里没有批量产物标记 ("
+                                          ".mb-out-root), 已拒绝清空")}
+            self._batch_out_mark(d)
+        import shutil
+        n = 0
+        try:
+            for name in os.listdir(d):
+                if name == ".mb-out-root":
+                    continue
+                p = os.path.join(d, name)
+                try:
+                    if os.path.isdir(p):
+                        shutil.rmtree(p, ignore_errors=True)
+                    else:
+                        os.remove(p)
+                    n += 1
+                except OSError:
+                    pass
+        except Exception as ex:
+            return {"ok": False, "error": str(ex)}
+        # 续跑记录一起删掉，否则「清空输出」后重跑还会被当成已完成跳过。
+        try:
+            jp = self._mb_journal_path()
+            if jp and os.path.isfile(jp):
+                os.remove(jp)
+        except Exception:
+            pass
+        # 上一轮的导出报告也一起删：产物没了，那份报告只剩误导。
+        try:
+            lp = self._mb_last_run_path()
+            if lp and os.path.isfile(lp):
+                os.remove(lp)
+        except Exception:
+            pass
+        return {"ok": True, "removed": n}
+
+    def batch_forget(self, key):
+        """丢弃这个模组写进翻译记忆的译文，并删掉它的续跑记录。
+
+        复原流程是「重跑」，而翻译记忆里那一份（可能正是要丢掉的那份坏译文）
+        还在，重跑会先命中 TM、原样搬回来，看着像「改了没生效」。这里按这个
+        模组当前能提取到的原文逐条 forget，只删 machine/memory 来源，手改与
+        官方语料不动；再把 run.jsonl 里这个模组那行删掉，否则续跑还会跳过它。
+
+        判据以前取部署清单里的 (原文, 译文) 对，新架构不部署了，改成现场提取
+        一遍原文 —— 一个模组约 0.1 秒，比留着一份会过期的清单更可靠。
+        """
+        if self._mb_running:
+            return {"ok": False, "error": self._tr("批量正在运行")}
+        key = str(key or "")
+        root = ""
+        for it in (self._mb_items or []):
+            if str(it.get("key")) == key:
+                root = it.get("root") or ""
+                break
+        if not root:
+            staging = (self.settings.get("staging_dir") or "").strip()
+            cand = os.path.join(staging, key) if staging and key else ""
+            if cand and os.path.isdir(cand):
+                root = cand
+        if not root or not os.path.isdir(root):
+            return {"ok": False, "error": self._tr("找不到这个模组目录")}
+        import ui_dict
+        tgt = self.settings.get("target_lang", "简体中文")
+        try:
+            frags, _meta = ui_dict.collect(root)
+        except Exception as ex:      # noqa: BLE001 - 提取失败不该让面板崩
+            return {"ok": False, "error": str(ex)}
+        pairs = 0
+        n = 0
+        try:
+            for items in (frags or {}).values():
+                for src in items:
+                    s = str(src or "").strip()
+                    if not s:
+                        continue
+                    pairs += 1
+                    if self._memory_store.forget(s, tgt):
+                        n += 1
+        except Exception as ex:      # noqa: BLE001 - 记忆库坏了不该让面板崩
+            return {"ok": False, "error": str(ex)}
+        if n:
+            try:
+                self._memory_store.save()
+            except Exception:
+                pass
+        dropped = self._mb_journal_drop(key)
+        return {"ok": True, "forgotten": n, "journal": dropped,
+                "root": root, "pairs": pairs}
+
+    def cache_info(self):
+        """设置页问「各类缓存占多少地方」。只统计，不动任何文件。"""
+        import cache_tools
+        try:
+            out = cache_tools.scan(config_dir())
+        except Exception as ex:
+            return {"ok": False, "error": str(ex), "items": [], "total": 0}
+        out["ok"] = True
+        return out
+
+    def cache_clear(self, keys):
+        """清掉勾选的缓存。正在批量/机翻时拒绝——清的是别人正在写的目录。"""
+        if self._mb_running:
+            return {"ok": False,
+                    "error": self._tr("批量正在运行，先停下来再清理缓存")}
+        if self._busy:
+            return {"ok": False,
+                    "error": self._tr("机翻或写回正在运行，先等它结束")}
+        import cache_tools
+        try:
+            return cache_tools.clear(keys, config_dir())
+        except Exception as ex:
+            return {"ok": False, "error": str(ex), "freed": 0, "files": 0}
+
+    def clear_rows(self):
+        """清空当前提取结果和后端缓存的全部行。"""
+        if self._busy:
+            return {"ok": False, "error": "busy"}
+        self.rows = []
+        self.meta = {}
+        return {"ok": True}
+
+    def baseline_info(self):
+        """给设置页用：基线库状态 + 当前目标语言能不能用。"""
+        import baseline as Lbase
+        tgt = self.settings.get("target_lang", "简体中文")
+        ok, why = Lbase.can_use_official(tgt)
+        out = {"ok": True, "target": tgt, "usable": ok, "reason": why,
+               "enabled": bool(self.settings.get("use_official_tm", True))}
+        try:
+            from localization import official_tm as Lotm
+            st = Lotm.OfficialTM().stats()
+            out.update({k: st.get(k) for k in
+                        ("exists", "total", "onscreen", "subtitle", "built_at", "db")})
+        except Exception as ex:
+            out["exists"] = False
+            out["error"] = str(ex)
+        try:
+            out["memory"] = self._memory_store.origin_counts()
+        except Exception:
+            out["memory"] = {}
+        return out
+
+    def pack_status(self):
+        """汉化包状态：文件在不在、多大、什么时候打的、装了多少条。
+
+        新架构的包就是「内置插件 + 分片词典」一个 zip，没有账本、也没有
+        覆盖文本 / 归档 / 运行时这些分类。旧的分类字段仍然返回（全 0），
+        前端按老字段读的地方不会因为缺字段显示 undefined。
+        """
+        p = self._pack_zip_path()
+        out = {"ok": True, "zip": p, "exists": False, "size": 0, "mtime": "",
+               "entries": 0, "shards": 0, "files": 0, "mods": 0, "error": "",
+               "ledgerInZip": 0, "textInZip": 0, "archiveInZip": 0,
+               "overrideInZip": 0, "patchInZip": 0,
+               "hasRuntime": True, "packed": 0,
+               "ledger": {"dir": "", "files": 0, "mods": 0, "entries": 0,
+                          "all": 0, "mtime": "", "inSync": True}}
+        try:
+            st = os.stat(p)
+            out["exists"] = True
+            out["size"] = int(st.st_size)
+            out["mtime"] = time.strftime("%Y-%m-%d %H:%M",
+                                         time.localtime(st.st_mtime))
+        except OSError:
+            pass
+        idx = self._dict_index_read()
+        mods = idx.get("mods") or {}
+        total = sum(int(v.get("entries") or 0) for v in mods.values())
+        out["mods"] = len(mods)
+        out["entries"] = total
+        out["ledger"] = {"dir": os.path.dirname(self._dict_index_path()),
+                         "files": len(mods), "mods": len(mods),
+                         "entries": total, "all": 0,
+                         "mtime": out["mtime"], "inSync": True}
+        if out["exists"]:
+            try:
+                import zipfile
+                with zipfile.ZipFile(p) as z:
+                    names = z.namelist()
+                out["files"] = len(names)
+                out["shards"] = len([n for n in names if n.endswith(".tsv")])
+                out["ledgerInZip"] = out["shards"]
+            except Exception as ex:      # noqa: BLE001 - 包坏了要说出来
+                out["error"] = str(ex)
+        return out
+
     def list_mods(self):
         """模组清单：staging 里每个目录，以及它现在处于哪种状态。
 

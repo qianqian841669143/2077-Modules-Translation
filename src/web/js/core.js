@@ -149,7 +149,7 @@ function switchPage(name) {
   refreshNavStatus();
 }
 
-/* 顶栏 tab 上的计数 + 翻译页左栏底部的账本摘要。
+/* 顶栏 tab 上的计数 + 翻译页左栏底部的词典摘要。
    任何页面都看得到，所以放在切页里统一刷。 */
 async function refreshNavStatus() {
   let s = null;
@@ -162,7 +162,7 @@ async function refreshNavStatus() {
   foot.innerHTML =
     '<span class="tag">' + esc(T("包")) + "</span>" +
     (s && s.exists ? fmtBytes(s.size) : "—") + "<br>" +
-    '<span class="tag">' + esc(T("账本")) + "</span>" +
+    '<span class="tag">' + esc(T("词典")) + "</span>" +
     (lg.mods || 0) + " " + esc(T("模组")) + " · " +
     Number(lg.entries || 0).toLocaleString() + " " + esc(T("条"));
 }

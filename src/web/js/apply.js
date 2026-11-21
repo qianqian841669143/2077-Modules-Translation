@@ -22,12 +22,13 @@ async function applyAll() {
                  entryId: r.entryId || "", transSrc: r.transSrc || "" });
   });
   if (!items.length) { toast(T("还没有可应用的译文。"), "err"); return; }
-  // 分流：归档文本出归档包，设置层进账本，本地化文本进覆盖包（原模组不动）。
+  // 分流：归档文本并进词典的 _archive 分片，源码文本并进各模组自己的分片；
+  // 两边都不碰原模组文件，产物只有一个带插件的 zip。
   const resN = items.filter((x) => x.kind === "resource").length;
   const ask = resN
-    ? T("将提交 %d 条译文：%d 条是归档文本，其余按「设置进账本 / 本地化进覆盖包」分流。\n不会修改任何原模组文件。")
+    ? T("将提交 %d 条译文：%d 条来自归档，其余来自源码。\n译文会并进词典包，原模组文件一个字节都不动。")
         .replace("%d", items.length).replace("%d", resN)
-    : T("将把 %d 条译文应用（%s）。\n设置层写入账本，本地化文本并进覆盖包，不会修改任何原模组文件。")
+    : T("将把 %d 条译文并进词典包（%s）。\n不会修改任何原模组文件，产物只有一个带插件的 zip。")
         .replace("%d", items.length).replace("%s", state.root || state.modPath);
   if (!confirm(ask)) return;
   setBusy(true, T("正在生成汉化包 ..."));
@@ -89,21 +90,18 @@ function onApplied(r) {
       setStatus(line);
     } else {
       const parts = [];
-      if (r.ledger && r.ledger.entries) parts.push(T("账本 %d 条").replace("%d", r.ledger.entries));
-      if (r.pack && r.pack.entries) parts.push(T("覆盖包 %d 个文件").replace("%d", r.pack.files || 0));
-      if (r.archive && r.archive.archive) parts.push(T("归档包 1 个"));
+      if (r.added) parts.push(T("新增 %d 条").replace("%d", r.added));
+      if (r.archived) parts.push(T("其中归档 %d 条").replace("%d", r.archived));
       const detail = parts.length ? "（" + parts.join(" · ") + "）" : "";
-      // 单模组现在出独立 zip（<模组名>_<目标语言>.zip），不再并进总包
       if (r.standalone && r.standalone.zip) {
         const zn = baseName(r.standalone.zip);
-        toast(T("%d 条译文已应用%s。\n已生成 %s，装这一个包就行。")
-          .replace("%d", r.ok).replace("%s", detail).replace("%s", zn), "ok");
-        setStatus(T("应用完成: %d 条 · 已生成 %s")
-          .replace("%d", r.ok).replace("%s", zn));
+        toast(T("译文已并进词典%s。\n已生成 %s，Vortex 装这一个包就行。")
+          .replace("%s", detail).replace("%s", zn), "ok");
+        setStatus(T("应用完成: 新增 %d 条 · 已生成 %s")
+          .replace("%d", r.added || 0).replace("%s", zn));
       } else {
-        toast(T("%d 条译文已应用%s。\n设置层由 zzz_CP2077_Localization 运行时替换；其余已并入补丁包，重新安装该包即可覆盖。")
-          .replace("%d", r.ok).replace("%s", detail), "ok");
-        setStatus(T("应用完成: %d 条%s").replace("%d", r.ok).replace("%s", detail));
+        toast(T("译文已并进词典%s。").replace("%s", detail), "ok");
+        setStatus(T("应用完成: 新增 %d 条").replace("%d", r.added || 0));
       }
     }
   }
@@ -256,11 +254,10 @@ function renderApplyErrorList() {
   box.innerHTML = list.map((x, i) => {
     // soft = 形态可疑（可能误报），给单条覆盖；hard = 写进去必坏，不给开关
     const soft = (x.level || "") === "soft";
-    const acts = [];
-    if (soft) {
-      acts.push(`<button class="btn tiny force" data-force="${i}">${esc(T("仍要写入"))}</button>`);
-    }
-    acts.push(`<button class="btn tiny mark" data-mark="${i}">${esc(T("标记为代码"))}</button>`);
+    // 新架构不写回源文件，「仍要写入」那条路没有了，只留「标记为代码」
+    const acts = [
+      `<button class="btn tiny mark" data-mark="${i}">${esc(T("标记为代码"))}</button>`,
+    ];
     return `
       <div class="apply-error">
         <div class="apply-error-title">${i + 1}. ${esc(x.file || "-")}${x.line ? ":" + esc(String(x.line)) : ""}
@@ -271,28 +268,9 @@ function renderApplyErrorList() {
         <div class="apply-error-acts">${acts.join("")}</div>
       </div>`;
   }).join("");
-  box.querySelectorAll("button[data-force]").forEach((b) => {
-    b.onclick = () => forceApplyOne(Number(b.dataset.force));
-  });
   box.querySelectorAll("button[data-mark]").forEach((b) => {
     b.onclick = () => markAsCode(Number(b.dataset.mark));
   });
-}
-
-async function forceApplyOne(i) {
-  const x = (state.applyErrors || [])[i];
-  if (!x) return;
-  const ask = T("这一条被判为「疑似代码片段」，写进去可能把语法改坏。\n\n原文：%s\n译文：%s\n\n确认要单条写入吗？")
-    .replace("%s", x.orig || "").replace("%s", x.trans || "");
-  if (!confirm(ask)) return;
-  setBusy(true, T("正在写回模组文件 ..."));
-  startMbPoll();          // applied（单条）事件走 evbus
-  const r = await pywebview.api.apply_one_row({
-    root: state.root || state.modPath,
-    file: x.file, line: x.line, orig: x.orig, trans: x.trans,
-    target: x.target || "", ctx: x.ctx || "",
-  });
-  if (!r.ok) { setBusy(false); if (r.error !== "busy") toast(r.error || "error", "err"); }
 }
 
 async function markAsCode(i) {

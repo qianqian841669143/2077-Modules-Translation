@@ -92,11 +92,9 @@ function onLoaded(r) {
   state.modPath = $("path").value.trim();
   state.root = r.root || state.modPath;
   state.archive = r.archive || "";
-  $("btn-pack").style.display = state.archive ? "" : "none";
   state.meta = r.meta || {};
   state.resMode = r.mode === "resource";
-  // 换了一份数据，上一次的产物就与当前表格无关了：「安装到游戏」得收回，
-  // 否则会去装上一批译文打包出来的归档。
+  // 换了一份数据，上一次的导出结果就与当前表格无关了。
   state.resResult = null;
   state.raw = (r.rows || []).map((x, i) => ({ ...x, _i: i }));
   state.rows = state.raw;
@@ -219,10 +217,9 @@ function baseName(p) {
   return String(p || "").split(/[\\/]/).pop();
 }
 
-/* 两种模式的界面差异集中在这里：资源模式没有行号、没有 zip 打包。 */
+/* 两种模式的界面差异集中在这里：资源模式没有行号。 */
 function applyModeUi() {
   const on = !!state.resMode;
-  $("btn-pack").style.display = (!on && state.archive) ? "" : "none";
   const th = $("thead").querySelector(".th.line");
   if (th) th.textContent = on ? T("条目 ID") : T("行号");
   $("btn-apply").textContent = on ? T("处理中 ...") : T("应用");

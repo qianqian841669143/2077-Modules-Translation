@@ -218,24 +218,6 @@ function bind() {
   if (mScan) mScan.onclick = () => modsPrescan();
   const mStart = $("btn-mods-start");
   if (mStart) mStart.onclick = () => startModsBatch();
-  $("btn-pack-sync").onclick = async () => {
-    const b = $("btn-pack-sync");
-    b.disabled = true;
-    b.textContent = T("同步中 ...");
-    try {
-      const r = await pywebview.api.sync_pack();
-      if (!r.ok) { toast(r.error || "error", "err"); return; }
-      toast(T("账本已同步") + " · " + r.files + " " + T("个文件"), "ok");
-      if (r.status) renderPackStatus(r.status);
-    } finally {
-      b.disabled = false;
-      b.textContent = T("同步账本");
-    }
-  };
-  $("btn-pack-open").onclick = async () => {
-    const r = await pywebview.api.open_pack();
-    if (!r.ok) toast(r.error || "error", "err");
-  };
   $("btn-pack-refresh").onclick = () => refreshPackStatus();
   // ---- 资源模式（.archive 内的 CR2W 本地化）----
   $("btn-l10n").onclick = async () => {
@@ -269,10 +251,6 @@ function bind() {
     $("official-info").textContent = T("正在读取官方语言包，约 1 分钟 ...");
   };
   $("btn-locale").onclick = () => openLocale();  $("btn-loc-load").onclick = () => loadLocale();
-  // 「更多 → 重新打包」：把账本 + 运行时（含单模组刚翻完的产物）重新并进
-  // 汉化包总包，打完刷一遍状态。以前这里调 pack_zip()，那是个保存框，把当前
-  // 模组目录整份打成 *_translated.zip，跟总包一点关系都没有。
-  // （菜单里原来的「打包为 zip」是归档模式用的，由 table.js 控制显隐，别混）
   // 新架构唯一的产物出口：提取当前模组 → 合并进分片词典 → 带上内置插件打包
   const elExportDict = $("btn-export-dict");
   if (elExportDict) {
@@ -295,25 +273,6 @@ function bind() {
       }
     };
   }
-  $("btn-repack").onclick = async () => {
-    const b = $("btn-repack");
-    const old = b.textContent;
-    b.disabled = true;
-    b.textContent = T("打包中 ...");
-    try {
-      const r = await pywebview.api.sync_pack();
-      if (!r || !r.ok) { toast((r && r.error) || "error", "err"); return; }
-      toast(T("已打包: %s").replace("%s", r.path), "ok");
-      try { await refreshPackStatus(); } catch (_) {}
-    } finally {
-      b.disabled = false;
-      b.textContent = old || T("重新打包");
-    }
-  };
-  $("btn-pack").onclick = async () => {
-    const r = await pywebview.api.pack_zip();
-    if (r.ok) toast(T("已打包: %s").replace("%s", r.path), "ok");
-  };
   $("loc-src").onchange = () => renderLocaleList();
   $("btn-settings").onclick = () => openSettings();
   // 设置面板左侧分类：只显示当前分类
