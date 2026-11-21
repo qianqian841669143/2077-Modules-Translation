@@ -397,6 +397,10 @@ function renderMods() {
     const e = Number(m.entries || 0);
     const f = Number(m.filled || 0);
     const todo = Math.max(0, e - f);
+    // 后端按分片算出来的真实差额。只差零星几条（拼接碎片、Lua 注释这类模型
+    // 翻不出来的东西）时状态仍是「已汉化」，但把差几条标在标签上——用户要能
+    // 分清「99.9% 差几条」和「八成没翻」。老索引没有 gap 字段就退回 todo。
+    const gap = Number(m.gap || 0) || todo;
     // 没账本（或账本里一条都没有）= 还没提取过：条数是「不知道」，不是 0。
     // 「无文本」是提取过、确实没有可翻的字符串，那是已知结果，不打这个标。
     const unknown = st !== "empty" && st !== "orphan" && st !== "done" && !e;
@@ -415,7 +419,9 @@ function renderMods() {
         (st === "orphan" ? `<span class="o">${esc(T("目录已不在"))}</span>` : "") +
         (unknown ? `<span class="tag">${esc(T("未分析"))}</span>` : "") +
         `</span>
-        <span class="gs"><span class="pill ${s.cls}">${esc(T(s.txt))}</span></span>
+        <span class="gs"><span class="pill ${s.cls}">${esc(
+          st === "done" && gap > 0
+            ? T("已汉化（差 %d）").replace("%d", gap) : T(s.txt))}</span></span>
         <span class="mt">` +
         (e ? `<span class="minibar"><i style="width:${pct}%"></i></span>` : "") +
         (e
@@ -441,17 +447,25 @@ function renderMods() {
         // 要翻的排在前面（后端已排好），已翻完的照样列出来——用户要看的是
         // 这个模组到底有哪些文件、各多少条，不是只看还剩多少。
         const list = files.slice(0, 60);
+        // 还差的那几条原文。只写「差 5 条」用户没法判断该不该管：' was not
+        // started. ' 这种拼接碎片翻了也没用，'Neutralize the security team.'
+        // 才是真漏了。列出来一眼能分开。
+        const sm = (Array.isArray(m.samples) ? m.samples : []).slice(0, 5);
         parts.push(`<div class="mfiles">` + list.map((x) => {
           const td = Number(x.todo || 0);
           const tt = Number(x.total || 0);
           return `<div class="mfile" title="${esc(x.file || "")}">
             <span class="fpath mono">${esc(shortPath(x.file))}</span>
             <span class="fnum ${td ? "need" : ""}">${
-              td ? td + " " + esc(T("待翻译")) : esc(T("已翻完"))} / ${tt}</span>
+              td ? T("还差 %d 条").replace("%d", td) : esc(T("已翻完"))} / ${tt}</span>
           </div>`;
         }).join("") +
         (files.length > list.length ? `<div class="mfile empty">${esc(
           T("还有 %d 个文件没展开").replace("%d", files.length - list.length))}</div>` : "") +
+        (sm.length ? `<div class="mfile empty">${esc(T("还差这几条没有译文："))}</div>` : "") +
+        sm.map((x) => `<div class="mfile" title="${esc(x)}">` +
+          `<span class="fpath mono">${esc(x)}</span>` +
+          `<span class="fnum need">${esc(T("未译"))}</span></div>`).join("") +
         `</div>`);
       }
     }

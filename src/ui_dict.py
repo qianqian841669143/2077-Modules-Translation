@@ -296,16 +296,26 @@ def build_all(mods_root, memory, out_dir, target_locale="", progress=None,
         stats["mods"] += 1
         # 提取到多少条、其中几条现在还没有译文：模组列表拿这两个数画进度。
         # 不必等 write_dicts 写完再反推，这里按同一套判据（有译文才落盘）数就行。
+        #
+        # 差额还要**按分片**分开数（missingBy）：面板展开时会列「<分片>.tsv」，
+        # 只说「这个模组一共还差 5 条」的话，用户看到两片都写「已翻完」，
+        # 和外面的「待翻译」自相矛盾 —— 以前就是这样，todo 被写死成 0。
         buckets = {k: len(v) for k, v in (frags or {}).items()}
         miss = 0
-        for items in (frags or {}).values():
+        miss_by = {}
+        samples = []
+        for k, items in (frags or {}).items():
             for src in items:
                 s = _clean(src)
                 if not s or has_cjk(s):
                     continue
                 if not (translated.get(src) or memory.get(src)):
                     miss += 1
-        per_mod[name] = {"buckets": buckets, "missing": miss}
+                    miss_by[k or GLOBAL_KEY] = miss_by.get(k or GLOBAL_KEY, 0) + 1
+                    if len(samples) < 5:
+                        samples.append(s)
+        per_mod[name] = {"buckets": buckets, "missing": miss,
+                         "missingBy": miss_by, "missingSample": samples}
         if not frags:
             continue
         stats["mods_with_text"] += 1
@@ -383,7 +393,20 @@ def write_mod_full(out_dir, fragments, memory, translated=None):
     """
     translated = translated or {}
     os.makedirs(out_dir, exist_ok=True)
-    stats = {"files": 0, "added": 0, "removed": 0, "missing": 0}
+    stats = {"files": 0, "added": 0, "removed": 0, "missing": 0,
+             "missingBy": {}, "missingSample": []}
+
+    def _miss(key, src):
+        """一条「提取到了但没有译文」：总数、按分片、以及前几条原文。
+
+        面板展开时按分片显示「还差几条」，再列出几条原文，用户才能判断是
+        「模型翻不出来的拼接碎片」还是「真漏了」。只给一个总数，两种分不清。
+        """
+        k = key if key else GLOBAL_KEY
+        stats["missingBy"][k] = stats["missingBy"].get(k, 0) + 1
+        if len(stats["missingSample"]) < 5:
+            stats["missingSample"].append(src)
+
     for key, items in fragments.items():
         name = "%s.tsv" % (key if key else GLOBAL_KEY)
         path = os.path.join(out_dir, name)
@@ -400,6 +423,7 @@ def write_mod_full(out_dir, fragments, memory, translated=None):
                 dst = translated.get(src) or memory.get(src)
                 if not dst:
                     stats["missing"] += 1
+                    _miss(key, s)
                     continue
                 d = _clean(dst)
                 rows[s] = d
@@ -424,6 +448,7 @@ def write_mod_full(out_dir, fragments, memory, translated=None):
                 dst = translated.get(src) or memory.get(src)
                 if not dst:
                     stats["missing"] += 1
+                    _miss(key, s)
                     continue
                 d = _clean(dst)
                 if existing.get(s) != d:

@@ -46,6 +46,15 @@ def pack_dir():
 # 汉化包的落点：包名固定（Vortex 里重装时认的是同一个包），所在目录可改。
 PACK_ZIP_NAME = "CP2077 Localization Pack.zip"
 
+# 模组列表的「待翻译」判据：还差多少条才算没做完。
+#
+# 实测 130 个进过词典的模组里，87 个一条不缺、37 个只差 1~10 条 —— 那些差额
+# 几乎都是模型翻不出来的东西（动态拼接的半句、CET 的 Lua 注释），再跑十轮也
+# 是同一个数。用「差一条就待翻译」当判据，等于让这些模组永远显示未完成，
+# 用户看不出哪几个是真的没翻（DLSS4Unlocked 差 66/82 那种才该报警）。
+_GAP_MIN = 20          # 至少差这么多条
+_GAP_RATE = 0.05       # 或者差这个比例以上，两者取大
+
 
 # ---------------------------------------------------------------- 配色主题
 # 主题就是一份只覆盖 CSS 变量的 .css：浅色/深色仍由 dark_mode 切换的
@@ -1209,7 +1218,20 @@ class Api(object):
                 res_rows, res_sess = [], None
         if res_rows:
             self.l10n_session = res_sess
-        rows = list(loc_rows) + src_rows + res_rows
+
+        # ---- CET lang 层: bin\x64\plugins\cyber_engine_tweaks\mods\<Mod>\lang\en.txt
+        #
+        # 这是 key=value 纯文本，现有引擎按 .reds / .lua / .json 认文件，一条道
+        # 都不认它；而 FrameGenSM86 这类模组的整个设置界面文本都躺在里面。
+        # 词典重建那边（ui_dict.collect_lang_txt）早就收了，翻译这边不收，结果
+        # 就是索引记着 82 条、翻译只看得到 17 条，模组永远停在「待翻译」——
+        # 2026-11-21 排查「跑完批量还差几条」时挖出来的。
+        lang_rows = []
+        try:
+            lang_rows = self._lang_layer_rows(root)
+        except Exception:            # noqa: BLE001 - 这一层没有也不该拖垮加载
+            lang_rows = []
+        rows = list(loc_rows) + src_rows + res_rows + lang_rows
 
         # ---- 三层填充：手改 > 官方基线 > 机翻记忆
         #
@@ -1225,6 +1247,7 @@ class Api(object):
                           "types": src_types}
         meta["localeRows"] = len(loc_rows)
         meta["sourceRows"] = len(src_rows)
+        meta["langRows"] = len(lang_rows)
         meta["archive"] = self.archive
         meta["mode"] = mode
         if loc_meta:
@@ -1282,7 +1305,8 @@ class Api(object):
                "parseErrors": int(meta.get("parse_errors", 0) or 0),
                "parseErrorSample": list(meta.get("parse_error_sample") or [])[:5],
                "localeRows": len(loc_rows), "sourceRows": len(src_rows),
-               "resourceRows": len(res_rows), "userSkip": hidden_skip,
+               "resourceRows": len(res_rows), "langRows": len(lang_rows),
+               "userSkip": hidden_skip,
                "autoSkip": auto_skip}
         for k in ("source", "pairCount", "unpaired", "localeTotal", "sourceFiles"):
             if k in loc_info:
@@ -1295,6 +1319,39 @@ class Api(object):
         if hint:
             out["mapState"] = hint
         return out
+
+    def _lang_layer_rows(self, root):
+        """把模组自带 CET 语言文件（`lang/en*.txt`，key=value）变成翻译行。
+
+        目录布局是 `bin\\x64\\plugins\\cyber_engine_tweaks\\mods\\<Mod>\\lang\\en.txt`，
+        分片键取 `lang` 的父目录名（`FrameGenSM86`），和插件运行时从调用链取到的
+        键对得上就能精确命中，对不上也只是落 `_global`，不会更糟。
+
+        和 `ui_dict.collect_lang_txt` 用同一个提取器、同一条噪声判据，否则两边
+        数出来的条数对不上 —— 「索引说有 82 条、翻译只看到 17 条」就是这么来的。
+        """
+        import ui_dict
+
+        rows = []
+        try:
+            found = ui_dict.collect_lang_txt(root) or {}
+        except Exception:
+            return rows
+        for key, items in found.items():
+            for src, ctx in (items or {}).items():
+                if not src or ui_dict.NOISE.hard_family(src):
+                    continue
+                rows.append({
+                    "orig": src,
+                    "trans": "",
+                    # 磁盘上没有这个「文件」可打开，展示时给个模组内的可读路径
+                    "file": "%s/%s" % (key, ctx or "lang/en.txt"),
+                    "line": 1,
+                    "type": "lang",
+                    "layer": "lang",
+                    "module": key,
+                })
+        return rows
 
     def _scan_resource_layer(self, root):
         """把模组归档里的 localization 也扫进来，作为第三层。
@@ -3194,12 +3251,15 @@ class Api(object):
             pass
         return idx
 
-    def _dict_index_mark(self, name, buckets, missing=0, full=False):
+    def _dict_index_mark(self, name, buckets, missing=0, full=False,
+                         missing_by=None, samples=None):
         """记下某个模组这次进了哪些分片。
 
         full=True 时整份重建（批量是全新词典，旧条目该消失就得消失）；
         否则只改这一个模组（单模组导出是增量，别的模组一个字节都不动）。
         buckets 是 {分片: 提取到的条数}，missing 是其中还没有译文的条数。
+        missing_by/samples 把差额摊到具体分片、并留几条原文：面板展开时要靠
+        它们说清「还差几条、差在哪一片」，只给总数的话两片都显示「已翻完」。
         """
         idx = {"at": time.time(), "mods": {}} if full else self._dict_index_read()
         mods = idx.setdefault("mods", {})
@@ -3208,6 +3268,9 @@ class Api(object):
         if b:
             mods[name] = {"buckets": b, "entries": total,
                           "filled": max(0, total - int(missing or 0)),
+                          "missingBy": {k: int(v) for k, v in (missing_by or {}).items()
+                                        if int(v or 0) > 0},
+                          "missingSample": [str(x)[:160] for x in (samples or [])][:5],
                           "at": time.time()}
         else:
             mods.pop(name, None)
@@ -3230,6 +3293,11 @@ class Api(object):
             total = int(sum(b.values()))
             mods[name] = {"buckets": b, "entries": total,
                           "filled": max(0, total - int(info.get("missing") or 0)),
+                          "missingBy": {k: int(v) for k, v in
+                                        (info.get("missingBy") or {}).items()
+                                        if int(v or 0) > 0},
+                          "missingSample": [str(x)[:160]
+                                            for x in (info.get("missingSample") or [])][:5],
                           "at": now}
         return self._dict_index_save({"at": now, "mods": mods})
 
@@ -3401,7 +3469,9 @@ class Api(object):
             self._dict_index_mark(
                 os.path.basename(os.path.normpath(root)),
                 {k: len(v) for k, v in frags.items()},
-                missing=int(stats.get("missing") or 0))
+                missing=int(stats.get("missing") or 0),
+                missing_by=stats.get("missingBy"),
+                samples=stats.get("missingSample"))
 
         return {
             "ok": True,
@@ -3748,10 +3818,13 @@ class Api(object):
         """模组清单：staging 里每个目录，以及它现在处于哪种状态。
 
         四种状态（对齐 CMT 的 Modlist 语义）：
-          done    已汉化 —— 导出过词典，且提取到的条目全都写进去了
-          todo    待翻译 —— 没导出过（新装的），或词典里还缺条目
+          done    已汉化 —— 导出过词典；还差零星几条也算这一档（见 _GAP_MIN）
+          todo    待翻译 —— 没导出过（新装的），或差额大到不像「收尾剩下的」
           empty   无文本 —— 提取过，一个可翻的字符串都没有
           orphan  孤立   —— 索引里有、目录已经不在了（Vortex 里卸了或改了名）
+
+        done 但还差几条时，行上带 gap（差多少）和 samples（差的那几条原文），
+        前端据此显示「已汉化（差 5）」——「差 1 条」和「差 66 条」不该看起来一样。
 
         只读。数据来自导出词典时记下的 ``userdata\\pack\\dict_index.json``
         （新架构不再写账本），以及预扫描的条数缓存 ``userdata\\mods_scan.json``。
@@ -3770,12 +3843,19 @@ class Api(object):
         # 词典索引：staging 目录名 -> {buckets, entries, filled}
         idx = self._dict_index_read().get("mods") or {}
 
-        def _bucket_rows(buckets):
-            """分片 -> 清单展开时用的 [{file, total, todo}] 形状。"""
+        def _bucket_rows(buckets, missing_by=None):
+            """分片 -> 清单展开时用的 [{file, total, todo}] 形状。
+
+            todo 以前写死成 0，于是外面写「待翻译 1510 / 1515」、展开两片都写
+            「已翻完」——同一屏自相矛盾，用户根本看不出差在哪一片。索引里
+            missingBy（分片 -> 缺几条）是 _dict_index_rebuild 按分片数出来的，
+            老索引没有这个字段时才退回 0。
+            """
+            mb = missing_by or {}
             out = [{"file": "%s.tsv" % (k or "_global"), "total": int(v),
-                    "todo": 0}
+                    "todo": int(mb.get(k or "_global") or 0)}
                    for k, v in (buckets or {}).items()]
-            out.sort(key=lambda x: (-x["total"], x["file"]))
+            out.sort(key=lambda x: (-x["todo"], -x["total"], x["file"]))
             return out
 
         rows = []
@@ -3814,16 +3894,23 @@ class Api(object):
                 filled = int(hit.get("filled") or 0)
                 if filled <= 0 and entries > 0:
                     filled = entries
+                gap = max(0, entries - filled)
+                # 分档：差得多才算「待翻译」。实测 43 个有差额的模组里 37 个只差
+                # 1~10 条，那些基本都是模型翻不出来的拼接碎片和 Lua 注释（见
+                # _run_translate 的 _echo 判据）。把它们和「一条没翻」显示成同一个
+                # 状态，等于让 99.9% 的模组永远看不出已经做完了。
                 if entries <= 0:
                     status = "empty"
-                elif filled < entries:
+                elif gap > max(_GAP_MIN, int(entries * _GAP_RATE)):
                     status = "todo"
                 else:
                     status = "done"
                 rows.append({"name": name, "folder": "",
                              "entries": entries, "filled": filled,
+                             "gap": gap,
+                             "samples": list(hit.get("missingSample") or []),
                              "buckets": buckets,
-                             "files": _bucket_rows(buckets),
+                             "files": _bucket_rows(buckets, hit.get("missingBy")),
                              "hasLedger": True, "orphan": False,
                              "updated": False, "status": status})
         # 索引里有、staging 里没有：目录被删掉或改名了（Vortex 里卸了？）
@@ -3836,8 +3923,10 @@ class Api(object):
             rows.append({"name": name, "folder": "",
                          "entries": entries,
                          "filled": int(v.get("filled") or 0),
+                         "gap": max(0, entries - int(v.get("filled") or 0)),
+                         "samples": list(v.get("missingSample") or []),
                          "buckets": buckets,
-                         "files": _bucket_rows(buckets),
+                         "files": _bucket_rows(buckets, v.get("missingBy")),
                          "hasLedger": True, "orphan": True,
                          "status": "orphan"})
         rows.sort(key=lambda r: (-int(r.get("entries") or 0),
