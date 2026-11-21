@@ -300,6 +300,31 @@ def start_dev_server(root, theme="light", theme_name=""):
     return srv.server_address[1]
 
 
+def fill_resource_entry_ids(items, rows):
+    """给缺 entryId 的归档行按 (file, 原文) 反查补齐，返回仍缺主键的条数。
+
+    归档条目用 entryId 做主键。前端历史上只传了 file/原文，少了主键，会话里
+    一条都对不上——整批以「没有可提交的译文」失败，用户看到的却是「归档读取
+    之后应用失败」，方向完全错了。这里做一层兜底：只认唯一命中，同一个文件里
+    同原文有多条时没法判断是哪一条，宁可留着让调用方报错。
+    """
+    index = {}
+    for r in rows or ():
+        eid = r.get("entryId")
+        if not eid:
+            continue
+        key = (str(r.get("file") or ""), str(r.get("orig") or ""))
+        index.setdefault(key, set()).add(str(eid))
+    for it in items or ():
+        if it.get("entryId"):
+            continue
+        key = (str(it.get("file") or ""), str(it.get("orig") or ""))
+        hits = index.get(key) or ()
+        if len(hits) == 1:
+            it["entryId"] = next(iter(hits))
+    return sum(1 for it in (items or ()) if not it.get("entryId"))
+
+
 def _change_digest(entries, limit=24, max_chars=1800):
     """把本轮已经翻好、写回去的条目压成一段「改动摘要」, 随提示词交给模型。
 
@@ -1678,6 +1703,89 @@ class Api(object):
             xls.append(os.path.join(outdir, name + ".archive.xl"))
         return outs, xls
 
+
+    def _apply_resource(self, items):
+        """资源模式的应用：归档条目的译文并入词典包，不再重打归档。
+
+        归档里的文本（对话 / 任务 / 字幕）由游戏自己的 localization 系统加载，
+        不经过 redscript 的取文本函数，插件在运行时替换不到它们。并进同一份
+        词典没有坏处：哪一条如果最终是经由 SetText 显示到界面上的，命中就是
+        白赚；命不中的那条英文照旧，跟以前一模一样。
+
+        产物只有那个 zip —— 和源码行走同一个出口，用户不用再区分两条链路。
+        """
+        sess = self.l10n_session
+        if sess is None:
+            return {"ok": 0, "fail": len(items), "mode": "resource",
+                    "errors": [self._tr("没有进行中的归档会话，请重新打开 mod。")]}
+        # 缺 entryId 的行按 (file, 原文) 反查补齐：会话里靠它定位条目。
+        fill_resource_entry_ids(items, sess.rows)
+
+        pairs = {}
+        for it in items:
+            s = str(it.get("orig") or "")
+            d = str(it.get("trans") or "")
+            if s and d and s != d:
+                pairs[s] = d
+        if not pairs:
+            return {"ok": 0, "fail": len(items), "mode": "resource",
+                    "errors": [self._tr("没有可提交的译文")]}
+
+        r = self.export_ui_dict(extra_pairs=pairs)
+        if not r.get("ok"):
+            return {"ok": 0, "fail": len(items), "mode": "resource",
+                    "errors": [r.get("error") or self._tr("导出失败")]}
+
+        saved = self._remember_applied(items, None)
+        return {
+            "ok": len(pairs), "fail": 0, "mode": "resource",
+            "errors": [],
+            "added": len(pairs), "missing": 0,
+            "zip": r.get("zip"),
+            "standalone": {"zip": r.get("zip")},
+            "canInstall": False,
+            "memorySaved": saved,
+            "report": {"zip": r.get("zip"), "added": len(pairs)},
+        }
+
+    @staticmethod
+    def _memory_origin(kind):
+        """把行上的 transSrc 映射成记忆来源。规则见 baseline.memory_origin()。"""
+        import baseline as Lbase
+        return Lbase.memory_origin(kind)
+
+    def _remember_applied(self, items, applied):
+        """把真正写成功的行记进翻译记忆，返回写入条数。
+
+        applied 是 (file, entryId) 的白名单；传 None 表示不筛选。
+        """
+        if not items:
+            return 0
+        keep = {tuple(k) for k in applied} if applied is not None else None
+        # 资源模式固定产出 zh-cn，所以记忆语言必须写死，不能跟着
+        # settings.target_lang 走——否则用户把目标语言切到英文时，这批中文
+        # 译文会被塞进英文记忆槽。
+        tgt = "简体中文"
+        saved = 0
+        try:
+            for it in items:
+                orig = str(it.get("orig") or "")
+                trans = str(it.get("trans") or "")
+                if not orig or not trans:
+                    continue
+                if keep is not None:
+                    key = (str(it.get("file") or ""), str(it.get("entryId") or ""))
+                    if key not in keep:
+                        continue
+                self._memory_store.put(
+                    orig, tgt, trans,
+                    origin=self._memory_origin(it.get("transSrc")))
+                saved += 1
+            if saved:
+                self._memory_store.save()
+        except Exception:
+            return 0
+        return saved
 
     def l10n_official_stats(self):
         try:
@@ -3216,7 +3324,14 @@ class Api(object):
         里面是内置插件 + 增量合并后的分片词典。
         返回值保持前端 onApplied 期望的字段形状（ok / fail / mode / standalone /
         report），免得再改一遍 apply.js。
+
+        资源模式（.archive 里的本地化条目）走 _apply_resource：那批译文并进
+        同一份词典的 _archive.tsv，产物还是这一个 zip。
         """
+        kinds = {str(it.get("kind") or "") for it in (items or [])}
+        if kinds == {"resource"}:
+            return self._apply_resource(items)
+
         r = self.export_ui_dict()
         if not r.get("ok"):
             err = r.get("error") or self._tr("导出失败")
@@ -3261,30 +3376,36 @@ class Api(object):
                                os.path.basename(out["zip"])))
         return out
 
-    def export_ui_dict(self):
+    def export_ui_dict(self, extra_pairs=None):
         """把当前模组的译文整理成分片词典，带上内置插件打成一个包。
 
         这是新架构的产物出口：不改模组文件、不写账本，只产出一个 zip。
         插件和 config.ini 从 src\\pack\\ui_translator 走（已打进 exe），
         所以每一份包的结构完全一致，跟用户本机装没装过插件无关。
+
+        extra_pairs: {原文: 译文}，资源模式（.archive）那批条目。它们不属于
+        任何模组的 module，单独进 _archive.tsv，而且只增不减 —— 批量重建
+        词典时不会碰这一片，归档译文不会被冲掉。
         """
         import shutil
 
         import ui_dict
 
+        extra_pairs = dict(extra_pairs or {})
         root = (self.root or "").strip()
-        if not root:
-            return {"ok": False, "error": self._tr("还没有加载模组。")}
-
-        try:
-            frags, meta = ui_dict.collect(root)
-        except Exception as ex:
-            return {"ok": False,
-                    "error": self._tr("提取失败: %s").replace("%s", str(ex))}
-        if not frags:
+        frags = {}
+        if root:
+            try:
+                frags, meta = ui_dict.collect(root)
+            except Exception as ex:
+                return {"ok": False,
+                        "error": self._tr("提取失败: %s").replace("%s", str(ex))}
+        if not frags and not extra_pairs:
+            if not root:
+                return {"ok": False, "error": self._tr("还没有加载模组。")}
             return {"ok": False, "error": self._tr("这个模组没有提取到可翻文本。")}
 
-        translated = {}
+        translated = dict(extra_pairs)
         for r in (self.rows or []):
             s = str(r.get("orig") or "").strip()
             d = str(r.get("trans") or "").strip()
@@ -3324,6 +3445,13 @@ class Api(object):
             os.makedirs(dict_dir, exist_ok=True)
 
         stats = ui_dict.write_mod_full(dict_dir, frags, mem, translated)
+        if extra_pairs:
+            # 归档条目单独一片，只增不减：批量 build_all 只重写它扫到的分片，
+            # 不会碰 _archive.tsv，所以这批译文能一直留着。
+            arch = ui_dict.merge_into(
+                dict_dir, {"_archive": {s: "" for s in extra_pairs}},
+                mem, extra_pairs)
+            stats["archived"] = int(arch.get("added") or 0)
 
         # 包名沿用输出目录那套写死的 PACK_ZIP_NAME，用户已经习惯这个名字
         out_zip = self._pack_zip_path()
@@ -3334,18 +3462,20 @@ class Api(object):
             return {"ok": False,
                     "error": self._tr("打包失败: %s").replace("%s", str(ex))}
 
-        # 记进模组索引：单模组导出是增量，只改自己那一条，别的模组不动
-        self._dict_index_mark(
-            os.path.basename(os.path.normpath(root)),
-            {k: len(v) for k, v in frags.items()},
-            missing=int(stats.get("missing") or 0))
+        if root:
+            # 记进模组索引：单模组导出是增量，只改自己那一条，别的模组不动
+            self._dict_index_mark(
+                os.path.basename(os.path.normpath(root)),
+                {k: len(v) for k, v in frags.items()},
+                missing=int(stats.get("missing") or 0))
 
         return {
             "ok": True,
             "zip": out_zip,
             "files": stats.get("files", 0),
-            "added": stats.get("added", 0),
+            "added": int(stats.get("added") or 0) + int(stats.get("archived") or 0),
             "missing": stats.get("missing", 0),
+            "archived": int(stats.get("archived") or 0),
             "buckets": len(frags),
         }
 
