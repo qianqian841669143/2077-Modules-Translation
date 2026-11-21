@@ -3835,6 +3835,8 @@ class Api(object):
         def _clean(v):
             return str(v or "").strip().strip('"').strip("'")
 
+        import ui_dict             # 只用来判「这个目录是不是我们自己打的包」
+
         staging = _clean(self.settings.get("staging_dir"))
         # 预扫描落盘的条数（userdata\mods_scan.json）：没导出过词典的模组靠它把
         # 「未分析」变成一个真实数字。没扫过就是空字典，一切照旧。
@@ -3868,6 +3870,10 @@ class Api(object):
             for name in names:
                 full = os.path.join(staging, name)
                 if not os.path.isdir(full):
+                    continue
+                # 我们自己的汉化包也会被 Vortex 解压进 staging，别把它当成一个
+                # 待翻译的模组挂在列表里。
+                if ui_dict.is_own_pack(full):
                     continue
                 seen.add(name)
                 hit = idx.get(name)

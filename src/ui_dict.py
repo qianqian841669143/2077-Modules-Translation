@@ -41,6 +41,27 @@ _CLASS_RE = re.compile(
 
 GLOBAL_KEY = "_global"
 
+# 汉化包自己也会被 Vortex 解压进 staging。它带着我们的运行时目录，被当成模组
+# 扫进来就是「翻译器在翻自己的产物」：索引里多出一个「CP2077 Localization
+# Pack」，条目还会混进 _global 分片。mod_batch 早就在复制前挡过一道
+# （`_is_own_output`），但重建词典和模组清单这两条路没挡 —— 2026-11-21
+# 建索引时实测多出这一条。新版包认 red4ext 插件目录，旧版认那三个 CET 入口。
+_OWN_PACK_MARKS = (
+    os.path.join("red4ext", "plugins", "CP2077UITranslator"),
+    os.path.join("bin", "x64", "plugins", "cyber_engine_tweaks", "mods",
+                 "zzz_CP2077_Localization"),
+    os.path.join("bin", "x64", "plugins", "cyber_engine_tweaks", "mods",
+                 "zzz_mod_text_override"),
+    os.path.join("bin", "x64", "plugins", "cyber_engine_tweaks", "mods",
+                 "zzz_mcm_label_override"),
+)
+
+
+def is_own_pack(root):
+    """这个目录是不是我们自己产出的汉化包（不是用户装的模组）。"""
+    return any(os.path.isdir(os.path.join(root, m)) for m in _OWN_PACK_MARKS)
+
+
 
 def owner_key_of_text(text: str) -> str:
     """从一份 .reds 源码里取出它所属的模组键；取不到返回空串。"""
@@ -281,7 +302,8 @@ def build_all(mods_root, memory, out_dir, target_locale="", progress=None,
     """
     translated = translated or {}
     names = sorted(d for d in os.listdir(mods_root)
-                   if os.path.isdir(os.path.join(mods_root, d)))
+                   if os.path.isdir(os.path.join(mods_root, d))
+                   and not is_own_pack(os.path.join(mods_root, d)))
     merged = {}
     per_mod = {}
     stats = {"mods": 0, "mods_with_text": 0}
