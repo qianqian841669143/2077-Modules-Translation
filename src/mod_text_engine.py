@@ -1476,10 +1476,18 @@ def lit_callee(m, toks, starts, pos):
 
 
 def visible_text(inner):
-    """ImGui 标签 "文字##内部ID" : 只把 ## 之前的部分交给译者"""
+    """ImGui 标签 "文字##内部ID" : 只把 ## 之前的部分交给译者。
+
+    `##` 在开头时没有可见文字（`"##allowBedrot"` / `"###vgroup"`），返回空串
+    让调用方跳过 —— 以前这里 return 原串，于是 13 个纯 ID 被当成界面文本收进
+    词典、还翻成了 `##允许床摇` 这种条目。它们是 ImGui 的内部标识，渲染时根本
+    不会出现在这个形状上，翻了纯属占位。
+    """
     i = inner.find("##")
     if i > 0:
         return inner[:i].rstrip()
+    if i == 0:
+        return ""
     return inner
 
 
