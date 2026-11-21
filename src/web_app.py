@@ -2277,10 +2277,6 @@ class Api(object):
         w._glossary = self._glossary_store
         w._terms = self._terms
         w._emit = lambda obj: None
-        # 覆盖文件的暂存区必须**共享**同一个 dict：文件由 worker 的 _pack_apply
-        # 产生，收尾在主会话里一次性合并（见 _flush_pack）。两个实例各拿一份
-        # 的话，flush 看到的是空字典，zip 里永远不会有覆盖文件。
-        w._pack_pending = self._pack_pending_state()
         return w
 
     def batch_audit(self, force=False):
@@ -3490,117 +3486,6 @@ class Api(object):
             d = r"E:\Vortex Mods"
         return os.path.join(d, PACK_ZIP_NAME)
 
-    def _pack_work_dir(self):
-        """工具自己的补丁包工作目录（``userdata\\pack``）。
-
-        刻意不放在 Vortex 的 staging 里：那边归 Vortex 管，而工具是先产 zip、
-        用户才安装，两个动作之间有窗口期。写进 staging 只会两头不讨好——
-        Vortex 不认这些文件（不部署），装包时又被 zip 内容盖掉。
-        """
-        return os.path.join(config_dir(), "pack")
-
-    def _patch_map(self):
-        """工作目录 → {zip 内路径: 磁盘路径}。
-
-            pack\\fix\\init.lua    → .../zzz_CP2077_Localization/init.lua
-            pack\\fix\\README.txt  → .../zzz_CP2077_Localization/README.txt
-            pack\\ledger\\names.lua → .../zzz_CP2077_Localization/names.lua
-            pack\\ledger\\其他      → .../zzz_CP2077_Localization/ledger/...
-
-        names.lua 刻意提到账本目录的**上一级**：init.lua 的 loadNames(dir)
-        找的就是 `<账本目录的上一级>/names.lua`，留在 ledger\\ 里读不到——
-        2026-11-20 之前一直是这个位置，于是模组名从来没生效过。
-        """
-        out = {}
-        root = self._pack_work_dir()
-
-        # 运行时（init.lua / imgui_hook.lua / README.txt）以仓库里的 src\pack
-        # 为准，userdata\pack\fix 只用来补内置里没有的文件：以前只有 userdata
-        # 那一份，升级后老副本会把新代码顶掉（还没法 diff、没法回滚）。
-        fix = os.path.join(root, "fix")
-        builtin = os.path.join(pack_dir(), "fix")
-        for fix_dir in (fix, builtin):
-            if not os.path.isdir(fix_dir):
-                continue
-            for base, _dirs, files in os.walk(fix_dir):
-                for fn in files:
-                    p = os.path.join(base, fn)
-                    rel = os.path.relpath(p, fix_dir).replace("\\", "/")
-                    out[self._PACK_MOD_DIR + rel] = p
-
-        led = os.path.join(root, "ledger")
-        if os.path.isdir(led):
-            for base, _dirs, files in os.walk(led):
-                for fn in files:
-                    p = os.path.join(base, fn)
-                    rel = os.path.relpath(p, led).replace("\\", "/")
-                    if rel == "names.lua":
-                        out[self._PACK_MOD_DIR + "names.lua"] = p
-                    else:
-                        out[self._LEDGER_ZIP_REL + rel] = p
-        return out
-
-    def _has_runtime(self):
-        """有没有运行时 init.lua（没它装上去也不生效）。
-
-        内置（src\\pack）和 userdata 各查一遍：内置那份是仓库里的正式副本。
-        """
-        for d in (os.path.join(self._pack_work_dir(), "fix"),
-                  os.path.join(pack_dir(), "fix")):
-            if os.path.isfile(os.path.join(d, "init.lua")):
-                return True
-        return False
-
-    def _ledger_zip_map(self):
-        """账本目录 → {zip 内路径: 磁盘路径}，只收 .lua / .json。"""
-        out = {}
-        d = self._ledger_dir()
-        if not d or not os.path.isdir(d):
-            return out
-        for base, _dirs, files in os.walk(d):
-            for fn in files:
-                if not fn.lower().endswith((".lua", ".json")):
-                    continue
-                p = os.path.join(base, fn)
-                rel = os.path.relpath(p, d).replace("\\", "/")
-                out[self._LEDGER_ZIP_REL + rel] = p
-        return out
-
-    def _all_lua_subset(text, folder):
-        """从 all.lua 里只挑出指定模组那一段。
-
-        单模组包要是带全量 all.lua，装两个单模组包会互相覆盖（后装的把先装的
-        整份挤掉）。all.lua 的格式由 mod_ledger._rebuild_all 生成，每个模组一段
-        `  ['<folder>'] = { … },`，按行切就够。找不到就返回空串，调用方跳过
-        all.lua（宁可不带，也不带错）。
-        """
-        def un(s):
-            return s.replace("\\'", "'").replace("\\\\", "\\")
-
-        head, blocks, cur, buf = [], {}, None, []
-        for ln in text.splitlines():
-            m = re.match(r"^  \['(.*)'\] = \{$", ln)
-            if m:
-                if cur is not None:
-                    blocks[cur] = buf
-                cur, buf = m.group(1), [ln]
-                continue
-            if cur is not None:
-                buf.append(ln)
-                if ln == "  },":
-                    blocks[cur], cur, buf = buf, None, []
-                continue
-            head.append(ln)
-        if cur is not None:
-            blocks[cur] = buf
-        want = un(folder)
-        pick = [v for k, v in blocks.items() if un(k) == want]
-        if not pick:
-            return ""
-        head = [h for h in head if h.strip() not in ("return {", "")]
-        head.append("-- 单模组包：只含 %s 这一份账本。" % want)
-        head.append("return {")
-        return "\n".join(head + pick[0] + ["}", ""])
 
     def _apply_all(self, items, standalone=True):
         """应用 = 把当前模组的译文合并进分片词典，重打整个包。
@@ -3634,42 +3519,24 @@ class Api(object):
             "report": {"zip": r.get("zip"), "added": added, "missing": missing},
         }
 
-    def _pack_pending_state(self):
-        """批量暂存区：{"files": {zip路径: 磁盘路径}, "temp": [...], ...}。
-
-        300+ 个模组逐个重写一次 zip 会把时间全花在读写旧包上，所以批量走
-        collect：文件留在各自临时目录，收尾一次性合并（见 _flush_pack）。
-        """
-        p = getattr(self, "_pack_pending", None)
-        if p is None:
-            p = {"files": {}, "temp": [], "ok": 0, "fail": 0, "errors": []}
-            self._pack_pending = p
-        return p
-
     def _flush_pack(self):
         """批量收尾：全量重建分片词典，重打整个包。
 
-        以前这里是把各模组的临时覆盖文件一次性合进旧 zip（mod_pack.merge_into_zip）。
-        新架构不覆盖模组文件了，产物就是「内置插件 + 全量重建的词典」一个 zip。
+        新架构不覆盖模组文件，产物就是「内置插件 + 全量重建的词典」一个 zip。
         """
-        p = self._pack_pending_state()
         r = self.export_all_dict()
+        ok = bool(r.get("ok"))
         out = {"files": int(r.get("files") or 0),
                "zip": r.get("zip") or "",
-               "ok": p["ok"], "fail": p["fail"],
-               "errors": list(p["errors"])[:20]}
-        if not r.get("ok"):
+               "ok": 1 if ok else 0,
+               "fail": 0 if ok else 1,
+               "errors": []}
+        if not ok:
             out["errors"].append(r.get("error") or "重建词典失败")
         else:
             self._batch_log("词典重建：%d 片 / %d 条 → %s"
                             % (int(r.get("files") or 0), int(r.get("entries") or 0),
                                os.path.basename(out["zip"])))
-        # 暂存区就地清空（worker 手里握着同一个 dict 引用，不能换新的）
-        p["files"].clear()
-        p["temp"].clear()
-        p["errors"].clear()
-        p["ok"] = 0
-        p["fail"] = 0
         return out
 
     def export_ui_dict(self):
