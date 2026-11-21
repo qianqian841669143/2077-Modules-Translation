@@ -256,26 +256,6 @@ def copy_mod(src, dst, with_archive=False, skip_assets=True, cancel=None):
     return stat
 
 
-def drop_backups(root):
-    """删掉副本里的 `*.bak`，返回删掉的个数。
-
-    副本里的 `.bak` 全是本工具写回时留的（复制阶段已经跳过源目录的 `.bak`），
-    所以这里可以无条件清：它不是模组内容，留着只会被一起部署进游戏目录。
-    撤销记录同理，批量里已经关掉了（见 `run_one` 里的 `_do_apply`）。
-    """
-    n = 0
-    for dirpath, _dirnames, filenames in os.walk(root):
-        for fn in filenames:
-            if not fn.lower().endswith(".bak"):
-                continue
-            try:
-                os.remove(os.path.join(dirpath, fn))
-                n += 1
-            except OSError:
-                pass
-    return n
-
-
 # ---------------------------------------------------------------- 执行
 
 
@@ -285,7 +265,7 @@ class Ctx(object):
     def __init__(self, spawn_worker, out_root, with_archive=False,
                  skip_assets=True, base="", model="", target="简体中文",
                  on_event=None, cancel=None, deploy=False, deploy_dry=True,
-                 ledger=False, ledger_dir="", log=None):
+                 log=None):
         self.spawn_worker = spawn_worker
         self.out_root = out_root
         self.with_archive = with_archive
@@ -298,8 +278,6 @@ class Ctx(object):
         self.worker = None
         self.deploy = deploy            # 跑完把副本按文件覆盖回原模组目录
         self.deploy_dry = deploy_dry    # 只算不写
-        self.ledger = ledger            # 只写账本（mods/<文件夹>.lua），不回写模组
-        self.ledger_dir = ledger_dir    # 账本输出目录，空则用 out_root
         # 诊断日志（宿主的 _batch_log → logs/batch.log）。以前这条链没接，
         # 账本合并 / 模组名翻译的日志在批量里全是静默的，出问题只能靠猜。
         self.log = log or (lambda _m: None)
@@ -320,22 +298,6 @@ class Ctx(object):
                            "label": label, "seconds": seconds})
         except Exception:
             pass
-
-
-def _skip_reason(ctx, cand):
-    """S6：已经部署好、源文件也没动的模组，整块跳过。
-
-    只有「跑完覆盖回原模组」真开着才有意义：部署关掉时产物就在副本里，跳过等于
-    这个模组什么都不产出。判据全在部署清单里（`mod_deploy.up_to_date`），不读
-    模组内容——上一轮还有漏译的不会跳，用户解压还原过的也不会跳。
-    """
-    if not (ctx.deploy and not ctx.deploy_dry):
-        return ""
-    try:
-        import mod_deploy
-        return mod_deploy.up_to_date(cand.get("root") or "")
-    except Exception:
-        return ""
 
 
 def prepare(ctx, cand):
@@ -367,11 +329,6 @@ def prepare(ctx, cand):
     prep = {"dst": dst, "cp": {}, "w": None, "load": None,
             "error": "", "skip": "", "seconds": 0.0}
     t0 = time.time()
-    skip = _skip_reason(ctx, cand)
-    if skip:
-        prep["skip"] = skip
-        prep["seconds"] = round(time.time() - t0, 2)
-        return prep
     if os.path.isdir(dst):
         shutil.rmtree(dst, ignore_errors=True)
 
@@ -467,138 +424,15 @@ def finish(ctx, cand, prep, r):
              and str(x.get("trans")).strip() != str(x.get("orig") or "").strip()]
     r["machine"] = sum(1 for x in items
                        if (x.get("transSrc") or "") == "machine")
-    if items and getattr(ctx, "ledger", False):
-        # 账本模式：设置层的文案进账本（显示层替换），其余的写成覆盖文件。
-        # 2026-11-20 之前这里写完账本就 return，语言包 / tweakdb / 源码里的
-        # 文案一条都没产出——账本只在 MCM 显示层生效，拦不到文件里的文本，
-        # 于是「全量汉化」跑完只剩设置项是中文。
-        import mod_ledger
-        got = mod_ledger.write(
-            ctx.ledger_dir or ctx.out_root, dst, items,
-            staging_name=cand.get("name") or "",
-            target=ctx.target, base=ctx.base, model=ctx.model,
-            log=ctx.log)
-        r["ledger"] = got
-        r["ledgerEntries"] = int(got.get("entries") or 0)
-
-        # 覆盖文件交给宿主的 _pack_apply（collect：先攒，收尾统一合并进 zip）。
-        # 归档行不能走这里：它们的 file 是归档内部路径，磁盘上没有这个文件，
-        # build_pack 只会报「源文件不存在」。归档行单独重建归档再并进 zip。
-        import mod_pack
-        res_items = [x for x in items if str(x.get("kind") or "") == "resource"]
-        src_items = [x for x in items if str(x.get("kind") or "") != "resource"]
-        cls = mod_pack.classify(dst, src_items)
-        r["routes"] = {"ledger": len(cls["ledger"]), "pack": len(cls["pack"]),
-                       "archive": len(res_items), "skip": cls["skip"]}
-        r["applied"] = 0
-        r["failed"] = 0
-        errs = []
-        w.root = dst
-
-        if res_items:
-            # 组包：只把改动过的资源打进 <名字>_zh-cn.archive（不是整份重打），
-            # 产物落在副本的原归档旁边，再按 archive/pc/mod/ 并进汉化包 zip。
-            try:
-                ar = w._apply_resource(res_items)
-                r["archive"] = ar.get("archive") or ""
-                r["xl"] = ar.get("xl") or ""
-                r["applied"] += int(ar.get("ok") or 0)
-                r["failed"] += int(ar.get("fail") or 0)
-                errs.extend(str(x) for x in (ar.get("errors") or [])[:5])
-                if ar.get("archive"):
-                    # 和覆盖文件走同一个暂存区，收尾一次性并进 zip：87 个归档逐个
-                    # 合并等于把 6.5 MB 的总包重写 87 遍。
-                    pend = w._pack_pending_state()
-                    for one in (ar.get("archive"), ar.get("xl")):
-                        if one and os.path.isfile(one):
-                            pend["files"]["archive/pc/mod/"
-                                        + os.path.basename(one)] = one
-                    r["archiveMerged"] = True
-                ctx.stage(cand.get("key"), cand.get("name"), "归档",
-                          round(time.time() - t_tr, 2))
-            except Exception as ex:      # noqa: BLE001 - 归档炸了不该毁掉整轮
-                r["failed"] += len(res_items)
-                errs.append("归档组包失败: %s" % ex)
-
-        pack_apply = getattr(w, "_pack_apply", None)
-        if cls["pack"] and callable(pack_apply):
-            pr = pack_apply(dst, cls["pack"], collect=True)
-            r["applied"] += int(pr.get("ok") or 0)
-            r["failed"] += int(pr.get("fail") or 0)
-            errs.extend(str(x) for x in (pr.get("errors") or [])[:20])
-            r["packFiles"] = int(pr.get("files") or 0)
-            ctx.stage(cand.get("key"), cand.get("name"), "覆盖",
-                      round(time.time() - t_tr, 2))
-
-        r["errors"] = errs[:20]
-        r["ok"] = True
-        if not res_items and not cls["pack"]:
-            ctx.stage(cand.get("key"), cand.get("name"), "账本",
-                      round(time.time() - t_tr, 2))
-        return
-    if items:
-        # 批量写的是输出根里的副本：这份副本接下来会被整个部署进游戏目录，
-        # 所以不要 `.bak`（127 份冗余，实测 19 MB）。写错了重跑一次批量即可。
-        res = w._do_apply(items, keep_backup=False)
-        r["baks"] = drop_backups(dst)
-        r["applied"] = int(res.get("ok") or 0)
-        r["settled"] = int(res.get("settled") or 0)
-        r["failed"] = int(res.get("fail") or 0)
-        r["errors"] = [str(x) for x in (res.get("errors") or [])][:20]
-        # 失败原因必须能落到 journal 里。只有总数的话，881 条失败查不下去：
-        # 不知道是「没匹配到原文」还是「代码骨架被拒」还是「目标文件没有该 key」。
-        reasons = {}
-        for f in (res.get("failed") or []):
-            why = str(f.get("reason") or "?").strip() or "?"
-            reasons[why] = reasons.get(why, 0) + 1
-        r["failReasons"] = dict(sorted(reasons.items(),
-                                       key=lambda kv: -kv[1])[:8])
-        if res.get("archive"):
-            r["archive"] = res.get("archive")
-            r["xl"] = res.get("xl") or ""
-    t_ap = time.time()
-    ctx.stage(cand.get("key"), cand.get("name"), "写回",
-              round(t_ap - t_tr, 2))
-    if ctx.deploy and items:
-        r["deploy"] = _deploy_one(ctx, cand, dst, items, r)
-        ctx.stage(cand.get("key"), cand.get("name"), "部署",
-                  round(time.time() - t_ap, 2))
+    # 新架构只做「提取 → 翻译」：译文在 _run_translate 里已经进 memory 并落盘，
+    # 收尾的 _flush_pack → export_all_dict 会从 staging 重扫、拿记忆重建词典包。
+    # 所以这里不写账本、不生成覆盖文件、不重打归档，也不部署回原模组。
+    r["applied"] = len(items)
+    r["failed"] = 0
+    r["errors"] = []
     r["ok"] = True
+    return
 
-
-def _deploy_one(ctx, cand, dst, items, r=None):
-    """把副本按文件覆盖回原模组目录，返回报告（不抛异常）。
-
-    顺便把这一轮的「行数 / 未译 / 失败」记进部署清单：下一次跑的时候，
-    这三个数就是「这个模组能不能整块跳过」的判据（S6）。
-    """
-    rep = {"ok": False, "dry": bool(ctx.deploy_dry), "overwritten": 0,
-           "added": 0, "same": 0, "notes": [], "error": ""}
-    root = cand.get("root") or ""
-    if not root or not os.path.isdir(root):
-        rep["error"] = "原模组目录不存在"
-        return rep
-    stats = {}
-    if r:
-        stats = {"rows": int(r.get("rows") or 0),
-                 "applied": int(r.get("applied") or 0),
-                 "untranslated": int(r.get("untranslated") or 0),
-                 "failed": int(r.get("failed") or 0)}
-    try:
-        import mod_deploy
-        got = mod_deploy.deploy_mod(
-            dst, root, dry_run=ctx.deploy_dry,
-            pairs_list=[(x.get("orig"), x.get("trans")) for x in (items or [])],
-            done=stats)
-        rep["ok"] = bool(got.get("ok"))
-        rep["overwritten"] = int(got.get("overwritten") or 0)
-        rep["added"] = int(got.get("added") or 0)
-        rep["same"] = int(got.get("same") or 0)
-        rep["notes"] = list(got.get("notes") or [])[:20]
-        rep["error"] = got.get("error") or ""
-    except Exception as ex:      # noqa: BLE001 - 部署失败不该让整队停
-        rep["error"] = str(ex)
-    return rep
 
 
 def run(ctx, cands):
