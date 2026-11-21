@@ -3658,9 +3658,17 @@ class Api(object):
                 import zipfile
                 with zipfile.ZipFile(p) as z:
                     names = z.namelist()
-                out["files"] = len(names)
-                out["shards"] = len([n for n in names if n.endswith(".tsv")])
-                out["ledgerInZip"] = out["shards"]
+                    tsv = [n for n in names if n.endswith(".tsv")]
+                    out["files"] = len(names)
+                    out["shards"] = len(tsv)
+                    out["ledgerInZip"] = len(tsv)
+                    # 条目数直接数字典里的行：索引里的 entries 是「每个模组
+                    # 提取到多少条」，同一句原文在多个模组里会被重复计数，
+                    # 加起来比包里实际的行数多。
+                    n_rows = 0
+                    for name in tsv:
+                        n_rows += z.read(name).count(b"\n")
+                    out["entries"] = n_rows
             except Exception as ex:      # noqa: BLE001 - 包坏了要说出来
                 out["error"] = str(ex)
         return out
