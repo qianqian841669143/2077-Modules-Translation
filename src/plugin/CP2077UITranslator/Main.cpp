@@ -515,37 +515,51 @@ __declspec(noinline) bool IsTextWidget(void* aCtx)
     return false;
 }
 
-// 类型判定的缓存版。nativeType 指针的取值种类很少（几十个类），缓存下来之后
-// 每次只剩「一次数组读 + 一次比较」，可以放进每秒百万级的路径。
-// verbose>=3 的全路径探针要靠它，否则每帧一万五千次爬 CClass::parent 链会掉帧。
-constexpr size_t kClsCacheSize = 4096;
-constexpr size_t kClsCacheMask = kClsCacheSize - 1;
-uintptr_t g_clsCacheKey[kClsCacheSize] = {};
-uint8_t g_clsCacheVal[kClsCacheSize] = {};   // 0=未填 1=是 2=否
+// 判断「这个**函数**是不是 inkTextWidget 的方法」。
+//
+// 关键：看函数挂在哪个类上（RTI 里的 CClass），**完全不碰实例内存**。
+// 2026-11-21 15:41 的崩溃（CP2077UITranslator.dll+0x6EB3，mov rcx,[rcx+10h]
+// 读 0xFFFFFFFFFFFFFFFF）就是因为上一版拿每个调用的 aCtx 去读 +0x30 当
+// nativeType、再顺着 CClass::parent 爬 —— 一百多万次/分钟，撞上一个
+// 不是 IScriptable 的 this 就是野指针。函数归属是反射数据，安全得多。
+//
+// 缓存按函数对象地址（只有几百个，不是几百万），命中路径只剩一次数组读。
+constexpr size_t kFnCacheSize = 4096;
+constexpr size_t kFnCacheMask = kFnCacheSize - 1;
+void* g_fnCacheKey[kFnCacheSize] = {};
+uint8_t g_fnCacheVal[kFnCacheSize] = {};   // 0=未填 1=是 2=否
 
-__declspec(noinline) bool IsTextWidgetFast(void* aCtx)
+__declspec(noinline) bool IsTextWidgetFunction(RED4ext::IFunction* aFn)
 {
-    uintptr_t nt = 0;
+    if (aFn == nullptr || g_widgetClass == 0)
+    {
+        return false;
+    }
+    const size_t idx = (reinterpret_cast<uintptr_t>(aFn) >> 4) & kFnCacheMask;
+    if (g_fnCacheKey[idx] == aFn)
+    {
+        return g_fnCacheVal[idx] == 1;
+    }
+    bool ok = false;
     __try
     {
-        nt = ReadNativeType(aCtx);
+        auto* cls = aFn->GetParent();
+        for (int i = 0; i < 32 && cls != nullptr; ++i)
+        {
+            if (reinterpret_cast<uintptr_t>(cls) == g_widgetClass)
+            {
+                ok = true;
+                break;
+            }
+            cls = cls->parent;
+        }
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
-        return false;
+        ok = false;
     }
-    if (nt == 0)
-    {
-        return false;
-    }
-    const size_t idx = (nt >> 4) & kClsCacheMask;
-    if (g_clsCacheKey[idx] == nt)
-    {
-        return g_clsCacheVal[idx] == 1;
-    }
-    const bool ok = IsTextWidget(aCtx);
-    g_clsCacheKey[idx] = nt;
-    g_clsCacheVal[idx] = ok ? 1 : 2;
+    g_fnCacheKey[idx] = aFn;
+    g_fnCacheVal[idx] = ok ? 1 : 2;
     return ok;
 }
 
@@ -645,10 +659,30 @@ void SafeCopy(char* aOut, size_t aCap, const char* aIn)
     aOut[i] = '\0';
 }
 
+// 读 widget->text(+0x258) 也要带保护：CString::c_str() 遇到坏的长度字段会
+// 把那 8 字节当数据指针解引用。ApplyTranslation 那条路上有 reg 闸门兜着，
+// 探针这条路闸门更宽，读之前必须先确认这次读不会崩。
+__declspec(noinline) void CopyWidgetText(void* aCtx, char* aOut, size_t aCap)
+{
+    if (aOut == nullptr || aCap == 0)
+    {
+        return;
+    }
+    aOut[0] = '\0';
+    __try
+    {
+        SafeCopy(aOut, aCap, ReadWidgetText(aCtx));
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        aOut[0] = '\0';
+    }
+}
+
 void ProbeCall(RED4ext::IFunction* aFn, uint32_t aReg, void* aCtx)
 {
     const uint64_t n = g_probeCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (!IsTextWidgetFast(aCtx))
+    if (!IsTextWidgetFunction(aFn))
     {
         if ((n % 100000) == 0)
         {
@@ -669,7 +703,7 @@ void ProbeCall(RED4ext::IFunction* aFn, uint32_t aReg, void* aCtx)
     }
 
     char text[200] = {};
-    SafeCopy(text, sizeof(text), ReadWidgetText(aCtx));
+    CopyWidgetText(aCtx, text, sizeof(text));
 
     char key[160] = {};
     const uint64_t hash = ReadTextIdHash(aCtx);
