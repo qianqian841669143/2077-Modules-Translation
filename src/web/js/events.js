@@ -94,6 +94,17 @@ function onEvt(e) {
     toast(e.message || "error", "err");
     return;
   }
+  if (e.type === "error" && e.action === "mb-pack") {
+    // 打包失败。遮罩这时候还盖着（onMbDone → enterPackingMask），不在这里
+    // 收掉的话用户只能关程序；批量那句结果 toast 也一并补上。
+    exitBatchMask();
+    const pending = state.mbSummary || null;
+    state.mbSummary = null;
+    if (pending) toast(pending.msg, pending.err ? "err" : "ok");
+    toast(e.message || "error", "err");
+    setStatus(T("打包失败: %s").replace("%s", e.message || ""));
+    return;
+  }
   if (e.type === "busy") { setBusy(!!e.on, e.text); return; }
   if (e.type === "rows") {
     // 机翻结果落到表里也算「未应用的改动」（P6）：以前这些结果不算 dirty，

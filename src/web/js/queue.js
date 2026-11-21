@@ -43,12 +43,43 @@ function exitBatchMask() {
   const ov = $("overlay");
   if (ov) ov.classList.remove("on", "batch");
   const st = $("btn-tr-stop");
-  if (st) { delete st.dataset.mode; st.textContent = T("停止机翻"); st.disabled = false; }
+  // display 也要还原：打包阶段 enterPackingMask 把它藏起来了（那一段停不掉）
+  if (st) {
+    delete st.dataset.mode;
+    st.textContent = T("停止机翻");
+    st.disabled = false;
+    st.style.display = "";
+  }
   const now = $("ov-now");
   if (now) { now.textContent = ""; delete now.dataset.name; }
   const app = document.querySelector("main.app");
   if (app) app.inert = false;
   state.busy = false;
+}
+
+/* 翻译全跑完、正在重建词典包（重扫全部模组 + 重打 zip）。
+ *
+ * 2026-11-22 之前遮罩在 mb-done 就摘了，只留状态栏一行字。问题是这一步实测
+ * 35~50 秒：界面看着能点，点「批量」还会撞上后端 _mb_running，用户只能猜
+ * 后台到底有没有在干活。现在遮罩一路盖到 mb-pack（见 onMbPack）。
+ *
+ * 这期间已经没有可停的东西了：batch_cancel 只置标志位喊 worker，重建和打包
+ * 都不看它。所以把「停止批量」按钮收起来，不给一个按了没反应的入口。 */
+function enterPackingMask() {
+  const ov = $("overlay");
+  if (!ov) return;
+  ov.classList.add("on", "batch");
+  const t = $("overlay-text");
+  if (t) t.textContent = T("正在重建词典包…");
+  const cnt = $("ov-count");
+  if (cnt) cnt.textContent = "";
+  const now = $("ov-now");
+  if (now) { now.textContent = T("重扫全部模组，重新打包"); delete now.dataset.name; }
+  const st = $("btn-tr-stop");
+  if (st) { delete st.dataset.mode; st.disabled = true; st.style.display = "none"; }
+  const app = document.querySelector("main.app");
+  if (app) app.inert = true;
+  state.busy = true;
 }
 
 async function pickMbOutDir() {
@@ -484,7 +515,9 @@ function onMbDone(e) {
   $("btn-q-cancel").style.display = "none";
   $("q-progress").classList.remove("on");
   $("q-bar").style.width = "0%";
-  exitBatchMask();
+  // 不摘遮罩：后端紧接着就重扫重建词典包（35~50 秒），见 enterPackingMask。
+  // 摘遮罩的时机挪到 onMbPack / 打包失败。
+  enterPackingMask();
   const rs = e.results || [];
   const ok = rs.filter((r) => r.ok && !r.error).length;
   const err = rs.filter((r) => r.error && r.error !== "cancelled").length;
@@ -503,7 +536,9 @@ function onMbDone(e) {
   }
   if (e.cancelled) msg = T("已取消。") + " " + msg;
   $("q-summary").textContent = msg;
-  toast(msg, err ? "err" : "ok");
+  // toast 排到 mb-pack 之后：toasts 的 z-index 是 99，遮罩是 400，
+  // 现在弹出来会被盖住，用户什么也看不到。
+  state.mbSummary = { msg: msg, err: !!err };
   refreshQueueInfo(true);     // 刚收到 mb-done：只刷目录信息，别再盖遮罩
   syncQueueStart();     // 跑完了把「全选 / 反选 / 开始」重新放开
   // 状态变了：模组列表页那几条要重新读一遍，批量条的按钮也要跟着放开
@@ -511,29 +546,40 @@ function onMbDone(e) {
   try { if (typeof syncModsBar === "function") syncModsBar(); } catch (_) {}
 }
 
-/* 翻译全跑完、正在把覆盖文件并进汉化包的那几秒（本机实测 4 秒左右）。
- * 这时候遮罩已经摘掉了（见 refreshQueueInfo 的 noMask），所以这句话写在
- * 状态栏上。数字由后端从本轮结果里算，比前端累计准：前端漏掉了被续跑
- * 跳过、没发 mb-item 的那些模组。 */
+/* 翻译全跑完、正在重建词典包。2026-11-22 起这一段遮罩一直盖着（见
+ * enterPackingMask），所以条数要同时写到遮罩第三行和状态栏。
+ * 数字由后端从本轮结果里算，比前端累计准：前端漏掉了被续跑跳过、
+ * 没发 mb-item 的那些模组。 */
 function onMbPacking(e) {
   const rows = Number(e.rows || 0);
   const done = Number(e.done || 0);
   const msg = T("正在把补丁并入汉化包…");
-  setStatus(rows
-    ? msg + " " + T("已翻译 %d / %d 条")
-      .replace("%d", done.toLocaleString()).replace("%d", rows.toLocaleString())
-    : msg);
+  const nums = T("已翻译 %d / %d 条")
+    .replace("%d", done.toLocaleString()).replace("%d", rows.toLocaleString());
+  enterPackingMask();
+  const now = $("ov-now");
+  // note 是归档扫描那段的进展（"正在扫描模组归档（30/306）..."），
+  // 它比条数统计更能说明「现在卡在哪」，有就优先显示。
+  if (now) now.textContent = e.note || (rows ? nums : msg);
+  setStatus(e.note || (rows ? msg + " " + nums : msg));
 }
 
 function onMbPack(e) {
   const zip = e.zip || "";
   const files = Number(e.files || 0);
-  if (!zip) return;
-  const extra = T("覆盖文件已并入汉化包：%d 个 → %s")
-    .replace("%d", files).replace("%s", zip);
+  // 打包是批量流程的最后一步，遮罩到这里才摘（见 enterPackingMask）。
+  // 中途失败也要摘：后端除了发 mb-pack 带空 zip，还可能只发 error(mb-pack)。
+  exitBatchMask();
+  const pending = state.mbSummary || null;
+  state.mbSummary = null;
+  const extra = zip
+    ? T("覆盖文件已并入汉化包：%d 个 → %s").replace("%d", files).replace("%s", zip)
+    : "";
   const el = $("q-summary");
-  if (el) el.textContent = (el.textContent ? el.textContent + " " : "") + extra;
-  toast(extra, "ok");
+  if (extra && el) el.textContent = (el.textContent ? el.textContent + " " : "") + extra;
+  // 批量结果那句 toast 一直压到这一步才弹（遮罩 z-index 400 > toasts 99）
+  if (pending) toast(pending.msg, pending.err ? "err" : "ok");
+  if (extra) toast(extra, "ok");
 }
 
 async function startQueue() {
