@@ -609,19 +609,22 @@ def write_mod_full(out_dir, fragments, memory, translated=None):
 
 
 def dedupe_dir(out_dir):
-    """同名 key 只留一份，规则：先通用（`_global`）、再单片。
+    """同名 key 只留一份，规则：分片优先，`_global` 让位。
 
     为什么要做：插件加载分片时 `_global` 先、其余按 FindFirstFile 的枚举序，
-    同一个 key 用 `map.emplace` 的先到先得 —— 也就是说「先通用再单片」本来
-    就是运行时的查找语义。但包里同名条目仍散在多个分片里，谁是第一份取决于
-    文件系统的枚举顺序：实测 871 个跨分片重复 key 里有 53 个译文不一样
-    （`BACK` 在 `_global` 是「背部」、在 6 个模组分片是「返回」），最终显示
-    哪一个没法预期。
+    同一个 key 用 `map.emplace` 的先到先得 —— 871 个跨分片重复 key 里有 53 个
+    译文不一样，最终显示哪一个取决于文件系统枚举顺序，没法预期。
 
-    收敛规则和运行时一致：
-      1. `_global` 里有的，就用它，其他分片里的同名条删掉
-      2. `_global` 没有的，按文件名序取第一个（等价于「先加载先赢」，只是把
-         不确定的枚举序换成确定的字母序）
+    为什么是分片赢而不是 `_global` 赢：分片来自 `.reds` 的 module 归属，语境
+    具体；`_global` 是 lua/json 那批没有归属的文本，同一个词在不同模组里会撞
+    出不同译法。最典型的是 `BACK` —— 6 个模组分片都是「返回」，而 `_global`
+    里是某个服装模组留下的「背部」。按「通用优先」收敛，所有模组的返回按钮
+    都会变成「背部」。
+
+    收敛规则：
+      1. 任何分片（非 `_global`）里有的，就用它，`_global` 里的同名条删掉
+      2. 只有分片都没有的 key，才保留在 `_global`（全局兜底还是它）
+      3. 分片之间冲突时按文件名序取第一个 —— 把不确定的枚举序换成确定的字母序
 
     分片只是维护视图 —— `FindModDict` 那条「按模组查分片」的路从来没被调用
     过（g_modDicts 只用来并入总表），所以删掉重复不影响功能。
@@ -631,10 +634,10 @@ def dedupe_dir(out_dir):
     names = [n for n in sorted(os.listdir(out_dir)) if n.lower().endswith(".tsv")]
     if len(names) < 2:
         return {"removed": 0, "conflicts": 0}
-    order = (["_global.tsv"] if "_global.tsv" in names else []) + \
-            [n for n in names if n != "_global.tsv"]
+    order = [n for n in names if n != "_global.tsv"] + \
+            (["_global.tsv"] if "_global.tsv" in names else [])
 
-    data, owner, value, conflicts = {}, {}, {}, 0
+    data, occ, conflicts = {}, {}, 0
     for n in order:
         try:
             with open(os.path.join(out_dir, n), encoding="utf-8",
@@ -651,10 +654,24 @@ def dedupe_dir(out_dir):
             continue
         data[n] = rows
         for k, v in rows:
-            if k not in owner:
-                owner[k], value[k] = n, v
-            elif value[k] != v:
-                conflicts += 1
+            occ.setdefault(k, []).append((n, v))
+
+    # 定 winner：分片优先；分片之间按票数，平票按文件名序
+    owner = {}
+    for k, lst in occ.items():
+        if len({v for _, v in lst}) > 1:
+            conflicts += 1
+        mods = [(n, v) for n, v in lst if n != "_global.tsv"]
+        pool = mods or lst          # 只有 _global 有的才用它兜底
+        cnt = {}
+        for _n, v in pool:
+            cnt[v] = cnt.get(v, 0) + 1
+        best = max(cnt.values())
+        # 票数达标的译文里，取文件名序最靠前的那个分片
+        for n, v in sorted(pool, key=lambda x: x[0]):
+            if cnt[v] == best:
+                owner[k] = n
+                break
 
     removed = 0
     for n in names:
