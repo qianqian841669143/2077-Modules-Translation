@@ -575,28 +575,6 @@ class Api(object):
                 pass
         return stats
 
-    def baseline_info(self):
-        """给设置页用：基线库状态 + 当前目标语言能不能用。"""
-        import baseline as Lbase
-        tgt = self.settings.get("target_lang", "简体中文")
-        ok, why = Lbase.can_use_official(tgt)
-        out = {"ok": True, "target": tgt, "usable": ok, "reason": why,
-               "enabled": bool(self.settings.get("use_official_tm", True))}
-        try:
-            from localization import official_tm as Lotm
-            st = Lotm.OfficialTM().stats()
-            out.update({k: st.get(k) for k in
-                        ("exists", "total", "onscreen", "subtitle", "built_at", "db")})
-        except Exception as ex:
-            out["exists"] = False
-            out["error"] = str(ex)
-        try:
-            out["memory"] = self._memory_store.origin_counts()
-        except Exception:
-            out["memory"] = {}
-        return out
-
-    # ------------------------------------------------------------ 启动
     def boot(self):
         _startup_log("Api.boot begin")
         try:
@@ -774,27 +752,6 @@ class Api(object):
                 "method": info.get("method", "")}
 
     # ------------------------------------------------------------ 窗口
-    def win_min(self):
-        self._window.minimize()
-
-    def win_max(self):
-        if self._maxed:
-            self._window.restore()
-            self._maxed = False
-        else:
-            self._window.maximize()
-            self._maxed = True
-        return self._maxed
-
-    def win_close(self):
-        if not self._confirm_exit():
-            return                      # 用户点了「取消」：窗口留着
-        try:
-            self._window.destroy()
-        except Exception:
-            pass
-        threading.Timer(0.25, lambda: os._exit(0)).start()
-
     def _local_model_target(self):
         """本地模型还值不值得问一句：返回 (api_base, model, backend)。
 
@@ -882,12 +839,6 @@ class Api(object):
                 pass
         return True
 
-    def win_resize(self, w, h):
-        try:
-            self._window.resize(max(900, int(w)), max(600, int(h)))
-        except Exception:
-            pass
-
     def open_dir(self, root, rel):
         """在资源管理器里定位到某个文件"""
         try:
@@ -973,35 +924,6 @@ class Api(object):
         with zipfile.ZipFile(path) as z:
             z.extractall(base)
         return base
-
-    def pack_zip(self):
-        if not self.root or not os.path.isdir(self.root):
-            return {"ok": False, "error": "no root"}
-        default = os.path.join(
-            os.path.dirname(self.archive) if self.archive else self.root,
-            (os.path.splitext(os.path.basename(self.archive))[0]
-             if self.archive else os.path.basename(self.root)) + "_translated.zip")
-        try:
-            path = self._window.create_file_dialog(
-                webview.SAVE_DIALOG, save_filename=default,
-                file_types=("Zip (*.zip)",))
-        except Exception:
-            path = ""
-        if isinstance(path, (list, tuple)):
-            path = path[0] if path else ""
-        if not path:
-            return {"ok": False}
-        try:
-            import zipfile
-            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-                for dirpath, _dirs, files in os.walk(self.root):
-                    for fn in files:
-                        full = os.path.join(dirpath, fn)
-                        arc = os.path.relpath(full, self.root).replace("\\", "/")
-                        z.write(full, arc)
-        except Exception as ex:
-            return {"ok": False, "error": str(ex)}
-        return {"ok": True, "path": path}
 
     def pick_xlsx_open(self):
         try:
@@ -2029,44 +1951,6 @@ class Api(object):
             return 0
         return saved
 
-    def l10n_install(self):
-        """把刚组好的产物装进游戏（只写 archive\\pc\\mod 下两个文件）。"""
-        from localization import archive as Larch
-        from localization import builder as Lbuild
-
-        if self.l10n_result is None:
-            return {"ok": False, "error": self._tr("还没有可安装的产物")}
-        game = Larch.find_game(self._l10n_cfg()["game_dir"] or None)
-        if not game:
-            return {"ok": False,
-                    "error": self._tr("未找到游戏目录，请先在设置里指定")}
-        try:
-            written = Lbuild.install(self.l10n_result, game)
-        except Exception as ex:
-            return {"ok": False, "error": str(ex)}
-        return {"ok": True, "files": [str(p) for p in written], "game": game}
-
-    def l10n_uninstall(self):
-        from localization import archive as Larch
-        from localization import builder as Lbuild
-
-        if self.l10n_result is None:
-            return {"ok": False, "error": self._tr("还没有可移除的产物")}
-        game = Larch.find_game(self._l10n_cfg()["game_dir"] or None)
-        if not game:
-            return {"ok": False, "error": self._tr("未找到游戏目录")}
-        try:
-            removed = Lbuild.uninstall(self.l10n_result, game)
-        except Exception as ex:
-            return {"ok": False, "error": str(ex)}
-        return {"ok": True, "files": [str(p) for p in removed]}
-
-    # ------------------------------------------------------------ 官方语料
-    #
-    # 官方语言包按主键对齐后可得到 en→zh 的现成译文（约 6 万条 onscreen +
-    # 十余万条字幕）。模组里凡是引用官方文本的条目都能直接命中，
-    # 术语与语气天然一致，比机翻可靠。
-
     def l10n_official_stats(self):
         try:
             from localization import official_tm as Lotm
@@ -2978,45 +2862,6 @@ class Api(object):
             return {"ok": False, "error": str(ex)}
         return {"ok": True, "path": d}
 
-    def batch_forget(self, key):
-        """丢弃这个模组上一轮写进翻译记忆的译文，并删掉它的续跑记录。
-
-        复原流程是「解压还原 → 重跑」，而还原只把文件换回原件：翻译记忆里那一
-        份（可能正是要丢掉的那份坏译文）还在，重跑会先命中 TM、原样搬回来，看着
-        像「改了没生效」。这里按部署清单记的 (原文, 译文) 对调 `forget()`，只删
-        machine/memory 来源，手改与官方语料不动；再把 run.jsonl 里这个模组那行
-        删掉，否则续跑还会整行跳过它。
-        """
-        if self._mb_running:
-            return {"ok": False, "error": self._tr("批量正在运行")}
-        key = str(key or "")
-        root = ""
-        for it in (self._mb_items or []):
-            if str(it.get("key")) == key:
-                root = it.get("root") or ""
-                break
-        if not root:
-            staging = (self.settings.get("staging_dir") or "").strip()
-            cand = os.path.join(staging, key) if staging and key else ""
-            if cand and os.path.isdir(cand):
-                root = cand
-        if not root or not os.path.isdir(root):
-            return {"ok": False, "error": self._tr("找不到这个模组目录")}
-        import mod_deploy
-        tgt = self.settings.get("target_lang", "简体中文")
-        try:
-            n = mod_deploy.forget_in(root, self._memory_store, tgt)
-        except Exception as ex:      # noqa: BLE001 - 记忆库坏了不该让面板崩
-            return {"ok": False, "error": str(ex)}
-        if n:
-            try:
-                self._memory_store.save()
-            except Exception:
-                pass
-        dropped = self._mb_journal_drop(key)
-        return {"ok": True, "forgotten": n, "journal": dropped,
-                "root": root, "pairs": len(mod_deploy.pairs(root))}
-
     def _mb_journal_drop(self, key):
         """把 run.jsonl 里这个模组那行删掉（续跑就不会再跳过它）。"""
         p = self._mb_journal_path()
@@ -3054,59 +2899,6 @@ class Api(object):
         except Exception:
             return False
 
-    def batch_clear(self):
-        """清空批量输出（下次重跑覆盖）。只清我们自己盖过章的目录。
-
-        目录可配置之后, 这段代码就是「递归删任意用户指定的目录」, 必须先确认
-        那目录是本工具建的: 没有 ``.mb-out-root`` 标记就拒绝。
-        """
-        if self._mb_running:
-            return {"ok": False, "error": self._tr("批量正在运行")}
-        d, why = self._batch_out_check(create=False)
-        if not d:
-            return {"ok": False, "error": why}
-        if not os.path.isfile(os.path.join(d, ".mb-out-root")):
-            # 旧版固定目录本来就是我们建的, 直接认领; 其余目录一律拒绝。
-            if os.path.normcase(d) != os.path.normcase(
-                    os.path.abspath(legacy_batch_out_dir())):
-                return {"ok": False,
-                        "error": self._tr("这个目录里没有批量产物标记 ("
-                                          ".mb-out-root), 已拒绝清空")}
-            self._batch_out_mark(d)
-        import shutil
-        n = 0
-        try:
-            for name in os.listdir(d):
-                if name == ".mb-out-root":
-                    continue
-                p = os.path.join(d, name)
-                try:
-                    if os.path.isdir(p):
-                        shutil.rmtree(p, ignore_errors=True)
-                    else:
-                        os.remove(p)
-                    n += 1
-                except OSError:
-                    pass
-        except Exception as ex:
-            return {"ok": False, "error": str(ex)}
-        # 续跑记录一起删掉，否则「清空输出」后重跑还会被当成已完成跳过。
-        try:
-            jp = self._mb_journal_path()
-            if jp and os.path.isfile(jp):
-                os.remove(jp)
-        except Exception:
-            pass
-        # 上一轮的导出报告也一起删：产物没了，那份报告只剩误导。
-        try:
-            lp = self._mb_last_run_path()
-            if lp and os.path.isfile(lp):
-                os.remove(lp)
-        except Exception:
-            pass
-        return {"ok": True, "removed": n}
-
-    # ------------------------------------------------------------ 语言包
     def locale_scan(self):
         import locale_pack
         root = self.root or ""
@@ -3668,15 +3460,6 @@ class Api(object):
         dropped = self._forget_memory_for(picked)
         return {"ok": True, "count": len(picked), "forgot": dropped}
 
-    def clear_rows(self):
-        """清空当前提取结果和后端缓存的全部行。"""
-        if self._busy:
-            return {"ok": False, "error": "busy"}
-        self.rows = []
-        self.meta = {}
-        return {"ok": True}
-
-    # ------------------------------------------------------------ 账本
     def _ledger_dir(self):
         """账本输出目录（默认在用户自己的 CET 补丁包里，见 mod_ledger）。"""
         try:
@@ -4301,91 +4084,6 @@ class Api(object):
         return {"ok": True, "css": theme_css(name)}
 
     # ------------------------------------------------ 汉化包状态（管理用）
-    def pack_status(self):
-        """一眼看清汉化包里到底有什么：zip 本身 + 账本 + 覆盖进度。
-
-        「对不上」以前只能去资源管理器翻 staging 和 zip：zip 里 3 个条目、
-        staging 里 30 个文件，肉眼很难发现账本压根没进包。这里把三方数字
-        摆在一起，ledgerInZip < ledgerFiles 就是没同步。
-        """
-        import zipfile
-        import mod_pack
-
-        zp = self._pack_zip_path()
-        out = {
-            "zip": zp, "exists": False, "size": 0, "mtime": "",
-            "entries": 0, "ledgerInZip": 0, "textInZip": 0,
-            "archiveInZip": 0, "overrideInZip": 0, "patchInZip": 0,
-            "patchFiles": 0, "workDir": self._pack_work_dir(),
-            "hasRuntime": self._has_runtime(),
-            "ledger": {"dir": self._ledger_dir(), "files": 0, "mods": 0,
-                       "entries": 0, "all": 0, "mtime": "", "inSync": False},
-            "packed": 0, "error": "",
-        }
-        if os.path.isfile(zp):
-            try:
-                with zipfile.ZipFile(zp, "r") as z:
-                    names = z.namelist()
-                out["exists"] = True
-                out["size"] = os.path.getsize(zp)
-                out["mtime"] = time.strftime(
-                    "%Y-%m-%d %H:%M:%S",
-                    time.localtime(os.path.getmtime(zp)))
-                out["entries"] = len(names)
-                _mod = "/zzz_CP2077_Localization/"
-                out["ledgerInZip"] = sum(
-                    1 for n in names if _mod + "ledger/" in n)
-                out["overrideInZip"] = sum(
-                    1 for n in names if n.endswith(_mod + "init.lua"))
-                out["archiveInZip"] = sum(
-                    1 for n in names if n.startswith("archive/pc/mod/"))
-                out["patchInZip"] = sum(
-                    1 for n in names
-                    if _mod in n and _mod + "ledger/" not in n
-                    and not n.endswith(_mod + "init.lua"))
-                out["textInZip"] = (out["entries"] - out["ledgerInZip"]
-                                    - out["overrideInZip"]
-                                    - out["archiveInZip"]
-                                    - out["patchInZip"])
-            except Exception as ex:      # noqa: BLE001 - 坏 zip 不该卡住界面
-                out["error"] = "zip 读不动：%s" % ex
-
-        pm = self._patch_map()
-        out["patchFiles"] = len(pm)
-        d = out["ledger"]["dir"]
-        if d and os.path.isdir(d):
-            files = self._ledger_zip_map()
-            out["ledger"]["files"] = len(files)
-            lp = os.path.join(d, "all.lua")
-            if os.path.isfile(lp):
-                out["ledger"]["all"] = os.path.getsize(lp)
-                out["ledger"]["mtime"] = time.strftime(
-                    "%Y-%m-%d %H:%M:%S",
-                    time.localtime(os.path.getmtime(lp)))
-            ip = os.path.join(d, "index.json")
-            if os.path.isfile(ip):
-                try:
-                    with open(ip, "r", encoding="utf-8") as f:
-                        idx = json.load(f)
-                    ms = [m for m in (idx.get("mods") or [])
-                          if isinstance(m, dict)]
-                    out["ledger"]["mods"] = len(ms)
-                    out["ledger"]["entries"] = sum(
-                        int(m.get("entries") or 0) for m in ms)
-                except Exception:        # noqa: BLE001 - 索引坏了不影响结论
-                    pass
-            in_zip = (out["ledgerInZip"] + out["patchInZip"]
-                      + out["overrideInZip"])
-            out["ledger"]["inSync"] = bool(
-                out["exists"] and pm and in_zip >= len(pm))
-
-        try:
-            st = mod_pack.load_state(mod_pack.state_path(self.settings))
-            out["packed"] = len(st.get("mods") or {})
-        except Exception:                # noqa: BLE001 - 状态库坏了不致命
-            pass
-        return out
-
     def list_mods(self):
         """模组清单：staging 里每个目录，以及它现在处于哪种状态。
 
@@ -4561,89 +4259,6 @@ class Api(object):
                int(stat.get("have") or 0) + int(stat.get("added") or 0)))
         return {"ok": True, "pairs": len(pairs), "added": stat.get("added"),
                 "todo": stat.get("todo"), "error": stat.get("error") or ""}
-
-    def sync_pack(self):
-        """手动把账本同步进 zip（界面上点「同步账本」/「重新打包」）。
-
-        以前「重新打包」走的是 `pack_zip()`：弹保存框、把当前模组目录整份打成
-        `*_translated.zip` —— 那是「覆盖文件」时代的东西。账本模式下它跟总包
-        完全不是一回事：用户点完以为总包更新了，其实一条新译文都没进去。
-
-        顺手补一轮模组名：这条路上补名最便宜（只扫注册写法、不重译正文），
-        扫完再同步，zip 里的 names.lua 才是全的。
-        """
-        if self._busy:
-            return {"ok": False, "error": "busy"}
-        names = {}
-        try:
-            names = self.refresh_names()
-        except Exception as ex:          # noqa: BLE001 - 补名失败不该挡住同步
-            self._batch_log("补模组名失败：%r" % (ex,))
-        try:
-            r = self._sync_ledger_to_zip()
-        except Exception as ex:          # noqa: BLE001 - 回给界面显示
-            return {"ok": False, "error": str(ex)}
-        return {"ok": True, "files": r.get("files"), "zip": r.get("zip"),
-                "path": r.get("zip"), "names": names,
-                "status": self.pack_status()}
-
-    def open_pack(self):
-        """在资源管理器里定位汉化包 zip（选中它）。"""
-        zp = self._pack_zip_path()
-        if not os.path.isfile(zp):
-            return {"ok": False, "error": self._tr("汉化包还不存在，先应用一次。")}
-        try:
-            import subprocess
-            subprocess.Popen(["explorer", "/select,", os.path.normpath(zp)])
-        except Exception as ex:          # noqa: BLE001 - 打不开就给提示
-            return {"ok": False, "error": str(ex)}
-        return {"ok": True}
-
-    def mark_as_code(self, file, orig):
-        """把 (相对路径, 原文) 记进「这是代码」排除表, 以后不再当候选。
-
-        用户点一次「标记为代码」，比每次应用都撞一次「疑似代码片段」有用得多；
-        这也是唯一能把用户判断留下来的形态（弹窗本身不留任何东西）。
-        """
-        import user_skip
-        root = self.root or ""
-        if not root or not file:
-            return {"ok": False, "error": self._tr("还没有加载模组。")}
-        ok, n = user_skip.add(root, file, orig)
-        if not ok:
-            return {"ok": False, "error": self._tr("写入排除表失败。")}
-        # 已经加载在表格里的行一并标掉, 不用重新加载
-        hit = 0
-        for r in (self.rows or []):
-            if (str(r.get("file") or "") == str(file)
-                    and str(r.get("orig") or "") == str(orig)):
-                r["skip"] = 1
-                r["codeMarked"] = 1
-                hit += 1
-        return {"ok": True, "marked": hit, "total": n}
-
-    def remember_skips(self, items):
-        """记住 / 忘掉「跳过」勾选，下次加载同一行默认就是勾上的。
-
-        items: [[相对路径, 原文, 是否跳过], …]。只对明文层（.reds/.lua）生效——
-        跳过状态是按 (相对路径, 原文 sha1) 记的，归档层的行没有磁盘路径。
-        """
-        import user_skip
-        root = self.root or ""
-        if not root:
-            return {"ok": False, "error": self._tr("还没有加载模组。")}
-        n = 0
-        for it in (items or []):
-            try:
-                rel, orig, value = it[0], it[1], bool(it[2])
-            except Exception:
-                continue
-            if not rel or not str(orig or "").strip():
-                continue
-            ok, _cnt = user_skip.set_skip(root, rel, orig, value)
-            if ok:
-                n += 1
-        return {"ok": True, "remembered": n}
 
     def _pending_in_same_files(self, items):
         """这次要写的文件里，还有多少条没译的行。
@@ -5232,31 +4847,6 @@ class Api(object):
         return {"ok": True}
 
     # ------------------------------------------------------------ 缓存清理
-    def cache_info(self):
-        """设置页问「各类缓存占多少地方」。只统计，不动任何文件。"""
-        import cache_tools
-        try:
-            out = cache_tools.scan(config_dir())
-        except Exception as ex:
-            return {"ok": False, "error": str(ex), "items": [], "total": 0}
-        out["ok"] = True
-        return out
-
-    def cache_clear(self, keys):
-        """清掉勾选的缓存。正在批量/机翻时拒绝——清的是别人正在写的目录。"""
-        if self._mb_running:
-            return {"ok": False,
-                    "error": self._tr("批量正在运行，先停下来再清理缓存")}
-        if self._busy:
-            return {"ok": False,
-                    "error": self._tr("机翻或写回正在运行，先等它结束")}
-        import cache_tools
-        try:
-            return cache_tools.clear(keys, config_dir())
-        except Exception as ex:
-            return {"ok": False, "error": str(ex), "freed": 0, "files": 0}
-
-    # ------------------------------------------------------------ 其它
     def test_api(self, url):
         import mt_client
         base = normalize_api_base(url)
@@ -5456,6 +5046,30 @@ def _crash_ready():
         faulthandler.enable(f, all_threads=True)
     except Exception:
         pass
+
+    def remember_skips(self, items):
+        """记住 / 忘掉「跳过」勾选，下次加载同一行默认就是勾上的。
+
+        items: [[相对路径, 原文, 是否跳过], …]。只对明文层（.reds/.lua）生效——
+        跳过状态是按 (相对路径, 原文 sha1) 记的，归档层的行没有磁盘路径。
+        """
+        import user_skip
+        root = self.root or ""
+        if not root:
+            return {"ok": False, "error": self._tr("还没有加载模组。")}
+        n = 0
+        for it in (items or []):
+            try:
+                rel, orig, value = it[0], it[1], bool(it[2])
+            except Exception:
+                continue
+            if not rel or not str(orig or "").strip():
+                continue
+            ok, _cnt = user_skip.set_skip(root, rel, orig, value)
+            if ok:
+                n += 1
+        return {"ok": True, "remembered": n}
+
 
     def _hook(kind):
         def _dump(exc_type, exc, tb):
