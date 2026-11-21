@@ -308,6 +308,29 @@ def _pick_text(translated, memory, src, s):
     return v
 
 
+def _add_upper_variant(rows, s, d):
+    """补一条全大写形态的 key。
+
+    游戏 UI 会按样式把标签转成全大写：GangRetaliation 的
+    `this.Text("GR-MenuIntel", "Intel gathered")` 在面板上显示成
+    `INTEL GATHERED`，`"Vacant"` 显示成 `VACANT`，`"Boss"` 显示成 `BOSS`。
+    词典里只存源码的原大小写、DLL 又是逐字节比较，那批标签就一直是英文。
+
+    只给短标签补（<=24 字符、最多 3 个词、纯 ASCII、原文确实含小写）。
+    UI 的大写样式只用在标题/按钮这类短文本上，长句不会被大写；放宽到
+    32 字符会让词典凭空涨一半（实测 +11,683 条），多出来的全是长句变体。
+    """
+    if len(s) > 24 or s.count(" ") > 2:
+        return
+    if not all(ord(c) < 128 for c in s):
+        return
+    if not any(c.islower() for c in s):
+        return
+    u = s.upper()
+    if u != s:
+        rows.setdefault(u, d)
+
+
 def write_dicts(out_dir, fragments, memory, translated=None):
     """把分片写成 tsv。返回统计。
 
@@ -339,6 +362,7 @@ def write_dicts(out_dir, fragments, memory, translated=None):
             t = s.strip()
             if t and t != s:
                 rows.setdefault(t, d)
+            _add_upper_variant(rows, s, d)
         if not rows:
             continue
         pair_list = sorted(rows.items())
@@ -542,6 +566,7 @@ def write_mod_full(out_dir, fragments, memory, translated=None):
                 t = s.strip()
                 if t and t != s:
                     rows.setdefault(t, d)
+                _add_upper_variant(rows, s, d)
             if not rows and not existing:
                 continue
             with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -569,6 +594,10 @@ def write_mod_full(out_dir, fragments, memory, translated=None):
                 t = s.strip()
                 if t and t != s and t not in existing:
                     existing[t] = d
+                    changed += 1
+                before_up = len(existing)
+                _add_upper_variant(existing, s, d)
+                if len(existing) != before_up:
                     changed += 1
             if changed:
                 with open(path, "w", encoding="utf-8", newline="\n") as f:
