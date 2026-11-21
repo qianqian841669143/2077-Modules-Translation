@@ -3807,6 +3807,13 @@ class Api(object):
                 mem, extra_pairs)
             stats["archived"] = int(arch.get("added") or 0)
 
+        # 同名条目收敛成一份：先 _global、再分片（和插件的查找语义一致），
+        # 免得最终显示哪个译文取决于文件系统枚举顺序。见 ui_dict.dedupe_dir。
+        try:
+            stats["dedupe"] = ui_dict.dedupe_dir(dict_dir)
+        except Exception as dex:     # noqa: BLE001 - 去重坏了不该挡住打包
+            self._batch_log("去重失败: %r" % (dex,))
+
         # CET 那层的入口（ImGui 文本）也一并塞进包，见 _stamp_cet_mod
         self._stamp_cet_mod(work, dict_dir)
 
@@ -4114,6 +4121,12 @@ class Api(object):
             self._batch_log("归档层：%d 条进 _archive.tsv %s"
                             % (len(arch_pairs), arch_info))
         stats["archive"] = arch_info
+
+        # 同名条目收敛成一份：先 _global、再分片。见 ui_dict.dedupe_dir。
+        try:
+            stats["dedupe"] = ui_dict.dedupe_dir(dict_dir)
+        except Exception as dex:     # noqa: BLE001 - 去重坏了不该挡住打包
+            self._batch_log("去重失败: %r" % (dex,))
 
         # CET 那层的入口（ImGui 文本）也一并塞进包，见 _stamp_cet_mod
         self._stamp_cet_mod(work, dict_dir)

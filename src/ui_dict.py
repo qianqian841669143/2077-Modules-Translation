@@ -608,6 +608,71 @@ def write_mod_full(out_dir, fragments, memory, translated=None):
     return stats
 
 
+def dedupe_dir(out_dir):
+    """同名 key 只留一份，规则：先通用（`_global`）、再单片。
+
+    为什么要做：插件加载分片时 `_global` 先、其余按 FindFirstFile 的枚举序，
+    同一个 key 用 `map.emplace` 的先到先得 —— 也就是说「先通用再单片」本来
+    就是运行时的查找语义。但包里同名条目仍散在多个分片里，谁是第一份取决于
+    文件系统的枚举顺序：实测 871 个跨分片重复 key 里有 53 个译文不一样
+    （`BACK` 在 `_global` 是「背部」、在 6 个模组分片是「返回」），最终显示
+    哪一个没法预期。
+
+    收敛规则和运行时一致：
+      1. `_global` 里有的，就用它，其他分片里的同名条删掉
+      2. `_global` 没有的，按文件名序取第一个（等价于「先加载先赢」，只是把
+         不确定的枚举序换成确定的字母序）
+
+    分片只是维护视图 —— `FindModDict` 那条「按模组查分片」的路从来没被调用
+    过（g_modDicts 只用来并入总表），所以删掉重复不影响功能。
+
+    返回 {"removed": 删掉的行数, "conflicts": 译文不一致的 key 数}。
+    """
+    names = [n for n in sorted(os.listdir(out_dir)) if n.lower().endswith(".tsv")]
+    if len(names) < 2:
+        return {"removed": 0, "conflicts": 0}
+    order = (["_global.tsv"] if "_global.tsv" in names else []) + \
+            [n for n in names if n != "_global.tsv"]
+
+    data, owner, value, conflicts = {}, {}, {}, 0
+    for n in order:
+        try:
+            with open(os.path.join(out_dir, n), encoding="utf-8",
+                      errors="replace") as f:
+                rows = []
+                for line in f:
+                    line = line.rstrip("\n").rstrip("\r")
+                    if not line or line[0] == "#" or "\t" not in line:
+                        continue
+                    k, v = line.split("\t", 1)
+                    if k:
+                        rows.append((k, v))
+        except OSError:
+            continue
+        data[n] = rows
+        for k, v in rows:
+            if k not in owner:
+                owner[k], value[k] = n, v
+            elif value[k] != v:
+                conflicts += 1
+
+    removed = 0
+    for n in names:
+        rows = data.get(n) or []
+        keep = [(k, v) for k, v in rows if owner.get(k) == n]
+        if len(keep) == len(rows):
+            continue
+        removed += len(rows) - len(keep)
+        try:
+            with open(os.path.join(out_dir, n), "w", encoding="utf-8",
+                      newline="\n") as f:
+                for k, v in keep:
+                    f.write(k + "\t" + v + "\n")
+        except OSError:
+            continue
+    return {"removed": removed, "conflicts": conflicts}
+
+
 def merge_tsv_dir(src_dir, out_file, skip=()):
     """把 dict 目录下所有 tsv 合成一个文件，给 CET 那边的入口用。
 
