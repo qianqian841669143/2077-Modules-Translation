@@ -489,6 +489,40 @@ def write_mod_full(out_dir, fragments, memory, translated=None):
     return stats
 
 
+def merge_tsv_dir(src_dir, out_file):
+    """把 dict 目录下所有 tsv 合成一个文件，给 CET 那边的入口用。
+
+    CET 的 ImGui 文本没有 module 归属（`ImGui.Text("Enable mod")` 里没有类名），
+    分片对它没意义，所以要的是一张总表。但分片里有 `_global` 没有的条目，
+    所以全部并进来，先到先得（`_global` 先读，和插件侧的合并顺序一致）。
+
+    返回写进去的条数。
+    """
+    names = [n for n in sorted(os.listdir(src_dir)) if n.lower().endswith(".tsv")]
+    names.sort(key=lambda n: (n != "_global.tsv", n))
+    seen = {}
+    for name in names:
+        try:
+            with open(os.path.join(src_dir, name), encoding="utf-8",
+                      errors="replace") as f:
+                for line in f:
+                    line = line.rstrip("\n").rstrip("\r")
+                    if not line or line[0] == "#":
+                        continue
+                    src, _, dst = line.partition("\t")
+                    if src and dst and src != dst and src not in seen:
+                        seen[src] = dst
+        except OSError:
+            continue
+    parent = os.path.dirname(out_file)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(out_file, "w", encoding="utf-8", newline="\n") as f:
+        for src, dst in seen.items():
+            f.write(src + "\t" + dst + "\n")
+    return len(seen)
+
+
 def pack(zip_path, package_dir):
     """把 package_dir 打成 Vortex 能直接装的 zip（路径一律 '/'）。"""
     import zipfile

@@ -3360,6 +3360,37 @@ class Api(object):
                                os.path.basename(out["zip"])))
         return out
 
+    def _stamp_cet_mod(self, work, dict_dir):
+        """把 CET 那边的翻译入口写进包里（bin\\x64\\...\\mods\\zzz_CP2077_CETZh）。
+
+        为什么要它：包里那个 CP2077UITranslator.dll 挂的是 inkTextWidget 的文本
+        函数，游戏原生 UI 和 MCM 桥接到 ink 的面板都归它管；但 CET 自己的浮层
+        （nativeSettings 面板、各 mod 的设置窗口）走 ImGui::Text，一个字节都不
+        经过 ink。这个 Lua mod 在内存里给 ImGui 的文本函数加一层转发，查同一份
+        词典，补上那条通道。
+
+        词典合并成单文件 `dict.tsv`：ImGui 的调用没有 module 归属，分片对它没用，
+        而 Lua 侧逐个读 90 多个文件太慢。
+        """
+        import shutil
+
+        tpl = os.path.join(bundle_dir("pack"), "cet_zh")
+        if not os.path.isdir(tpl):
+            return 0
+        dst = os.path.join(work, "bin", "x64", "plugins", "cyber_engine_tweaks",
+                           "mods", "zzz_CP2077_CETZh")
+        try:
+            os.makedirs(dst, exist_ok=True)
+            shutil.copyfile(os.path.join(tpl, "init.lua"),
+                            os.path.join(dst, "init.lua"))
+        except OSError:
+            return 0
+        try:
+            import ui_dict
+            return int(ui_dict.merge_tsv_dir(dict_dir, os.path.join(dst, "dict.tsv")))
+        except Exception:        # noqa: BLE001 - 少了这一层不该挡住导出
+            return 0
+
     def export_ui_dict(self, extra_pairs=None):
         """把当前模组的译文整理成分片词典，带上内置插件打成一个包。
 
@@ -3456,6 +3487,9 @@ class Api(object):
                 mem, extra_pairs)
             stats["archived"] = int(arch.get("added") or 0)
 
+        # CET 那层的入口（ImGui 文本）也一并塞进包，见 _stamp_cet_mod
+        self._stamp_cet_mod(work, dict_dir)
+
         # 包名沿用输出目录那套写死的 PACK_ZIP_NAME，用户已经习惯这个名字
         try:
             os.makedirs(os.path.dirname(out_zip), exist_ok=True)
@@ -3528,6 +3562,9 @@ class Api(object):
         except Exception as ex:
             return {"ok": False,
                     "error": self._tr("重建失败: %s").replace("%s", str(ex))}
+
+        # CET 那层的入口（ImGui 文本）也一并塞进包，见 _stamp_cet_mod
+        self._stamp_cet_mod(work, dict_dir)
 
         # 包名沿用输出目录那套写死的 PACK_ZIP_NAME
         out_zip = self._pack_zip_path()
