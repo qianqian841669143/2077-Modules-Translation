@@ -1,0 +1,4 @@
+localization:
+  onscreens:
+    zh-cn:
+      - sensen_zh\localization\zh-cn\onscreens.json
