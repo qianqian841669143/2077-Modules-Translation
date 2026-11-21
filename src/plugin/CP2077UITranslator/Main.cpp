@@ -431,7 +431,9 @@ void ReportMiss(const char* aText)
         return;
     }
     const size_t len = std::strlen(aText);
-    if (len < 8 || len > 300 || std::strchr(aText, ' ') == nullptr)
+    // verbose>=3 是「全量采集」模式：连不含空格的单词也记（Kerenzikov 这种
+    // 单词名字以前被这条空格规则整个漏掉）。
+    if (len < 8 || len > 300 || (g_verbose < 3 && std::strchr(aText, ' ') == nullptr))
     {
         return;
     }
@@ -513,6 +515,40 @@ __declspec(noinline) bool IsTextWidget(void* aCtx)
     return false;
 }
 
+// 类型判定的缓存版。nativeType 指针的取值种类很少（几十个类），缓存下来之后
+// 每次只剩「一次数组读 + 一次比较」，可以放进每秒百万级的路径。
+// verbose>=3 的全路径探针要靠它，否则每帧一万五千次爬 CClass::parent 链会掉帧。
+constexpr size_t kClsCacheSize = 4096;
+constexpr size_t kClsCacheMask = kClsCacheSize - 1;
+uintptr_t g_clsCacheKey[kClsCacheSize] = {};
+uint8_t g_clsCacheVal[kClsCacheSize] = {};   // 0=未填 1=是 2=否
+
+__declspec(noinline) bool IsTextWidgetFast(void* aCtx)
+{
+    uintptr_t nt = 0;
+    __try
+    {
+        nt = ReadNativeType(aCtx);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+    if (nt == 0)
+    {
+        return false;
+    }
+    const size_t idx = (nt >> 4) & kClsCacheMask;
+    if (g_clsCacheKey[idx] == nt)
+    {
+        return g_clsCacheVal[idx] == 1;
+    }
+    const bool ok = IsTextWidget(aCtx);
+    g_clsCacheKey[idx] = nt;
+    g_clsCacheVal[idx] = ok ? 1 : 2;
+    return ok;
+}
+
 // 只读 textIdKey(+0x278) 那 8 字节哈希。带 __try 的这个函数里不碰任何
 // 需要「静态初始化守卫」的东西 —— 和 OnPostRegister 同理，混在一起不能展开。
 __declspec(noinline) uint64_t ReadTextIdHash(void* aCtx)
@@ -576,6 +612,93 @@ void ReportKeyOf(void* aCtx)
         return;
     }
     ReportKey(NameToString(RED4ext::CName(hash)));
+}
+
+// ---------------------------------------------------------------- 全路径探针
+//
+// verbose>=3 用，默认路径一行都不执行。
+//
+// 不再猜「义体走哪个函数」：凡是 aCtx 确实是 inkTextWidget（含子类）的
+// InternalExecute 调用，不管 reg 是不是那 8 个文本函数，都把 reg 号、
+// 函数全名、当时的 text、textIdKey 记一条（按 reg+text+key 去重）。
+//
+//   * 义体走的是没进白名单的函数  -> 这里会直接打出那个 reg 和函数名
+//   * 这里一条都不出             -> 只剩「C++ 直写 widget，不经过脚本 VM」
+//                                   一种解释，那就得从 localization 那一层下手
+//
+// 另外每 10 万次调用打一行累计，用来区分「零命中」和「根本没调用」。
+std::atomic<uint64_t> g_probeCalls{0};
+std::atomic<uint64_t> g_probeWidgets{0};
+
+void SafeCopy(char* aOut, size_t aCap, const char* aIn)
+{
+    if (aOut == nullptr || aCap == 0)
+    {
+        return;
+    }
+    size_t i = 0;
+    for (; aIn != nullptr && aIn[i] != '\0' && i + 1 < aCap; ++i)
+    {
+        const char c = aIn[i];
+        aOut[i] = (c == '\n' || c == '\r' || c == '\t') ? ' ' : c;
+    }
+    aOut[i] = '\0';
+}
+
+void ProbeCall(RED4ext::IFunction* aFn, uint32_t aReg, void* aCtx)
+{
+    const uint64_t n = g_probeCalls.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (!IsTextWidgetFast(aCtx))
+    {
+        if ((n % 100000) == 0)
+        {
+            Log("[probe] InternalExecute=%llu textWidget=%llu",
+                static_cast<unsigned long long>(n),
+                static_cast<unsigned long long>(g_probeWidgets.load(std::memory_order_relaxed)));
+        }
+        return;
+    }
+    g_probeWidgets.fetch_add(1, std::memory_order_relaxed);
+
+    static std::unordered_set<std::string> seen;
+    static std::unordered_map<uint32_t, std::string> names;
+    static uint32_t count = 0;
+    if (count >= kMissDetails)
+    {
+        return;
+    }
+
+    char text[200] = {};
+    SafeCopy(text, sizeof(text), ReadWidgetText(aCtx));
+
+    char key[160] = {};
+    const uint64_t hash = ReadTextIdHash(aCtx);
+    if (hash != 0)
+    {
+        SafeCopy(key, sizeof(key), NameToString(RED4ext::CName(hash)));
+    }
+
+    std::string sig;
+    sig.reserve(sizeof(aReg) + sizeof(text) + sizeof(key));
+    sig.append(reinterpret_cast<const char*>(&aReg), sizeof(aReg));
+    sig.push_back('|');
+    sig.append(text);
+    sig.push_back('|');
+    sig.append(key);
+    if (!seen.insert(sig).second)
+    {
+        return;
+    }
+
+    std::string& fn = names[aReg];
+    if (fn.empty())
+    {
+        const char* full = FuncFullName(aFn);
+        fn = (full != nullptr) ? full : "?";
+    }
+    ++count;
+    Log("[probe #%u reg=%u %s] text=\"%s\" key=\"%s\"",
+        count, aReg, fn.c_str(), text, key);
 }
 
 void ApplyTranslation(void* aCtx)
@@ -720,12 +843,22 @@ bool HookInternalExecute(RED4ext::IFunction* aFn, RED4ext::IScriptable* aCtx,
     {
         return g_orig(aFn, aCtx, aFrame, aOut, a4);
     }
-    if (!IsTextReg(CachedRegIndex(aFn)))
+    const uint32_t reg = CachedRegIndex(aFn);
+    const bool isText = IsTextReg(reg);
+    // verbose<3 时行为和以前一模一样：不是文本函数就直接透传，连计数都不碰。
+    if (!isText && g_verbose < 3)
     {
         return g_orig(aFn, aCtx, aFrame, aOut, a4);
     }
     const bool result = g_orig(aFn, aCtx, aFrame, aOut, a4);
-    ApplyTranslation(aCtx);
+    if (isText)
+    {
+        ApplyTranslation(aCtx);
+    }
+    if (g_verbose >= 3)
+    {
+        ProbeCall(aFn, reg, aCtx);               // 全路径观察，只读不写
+    }
     return result;
 }
 
