@@ -3651,6 +3651,7 @@ class Api(object):
         p = self._pack_zip_path()
         out = {"ok": True, "zip": p, "exists": False, "size": 0, "mtime": "",
                "entries": 0, "shards": 0, "files": 0, "mods": 0, "error": "",
+               "shardsDetail": [],
                "ledgerInZip": 0, "textInZip": 0, "archiveInZip": 0,
                "overrideInZip": 0, "patchInZip": 0,
                "hasRuntime": True, "packed": 0,
@@ -3677,18 +3678,29 @@ class Api(object):
             try:
                 import zipfile
                 with zipfile.ZipFile(p) as z:
-                    names = z.namelist()
-                    tsv = [n for n in names if n.endswith(".tsv")]
-                    out["files"] = len(names)
+                    infos = z.infolist()
+                    tsv = [i for i in infos if i.filename.endswith(".tsv")]
+                    out["files"] = len(infos)
                     out["shards"] = len(tsv)
                     out["ledgerInZip"] = len(tsv)
-                    # 条目数直接数字典里的行：索引里的 entries 是「每个模组
-                    # 提取到多少条」，同一句原文在多个模组里会被重复计数，
-                    # 加起来比包里实际的行数多。
+                    # 每个分片各多少条：条目数直接数字典里的行。索引里的
+                    # entries 是「每个模组提取到多少条」，同一句原文在多个
+                    # 模组里会被重复计数，加起来比包里实际的行数多。
+                    detail = []
                     n_rows = 0
-                    for name in tsv:
-                        n_rows += z.read(name).count(b"\n")
+                    for it in tsv:
+                        stem = it.filename.rsplit("/", 1)[-1][:-4]
+                        rows = z.read(it.filename).count(b"\n")
+                        n_rows += rows
+                        detail.append({"name": stem, "rows": rows,
+                                       "bytes": it.file_size})
+                    detail.sort(key=lambda d: (-d["rows"], d["name"].lower()))
                     out["entries"] = n_rows
+                    out["shardsDetail"] = detail
+                    # 模组数按分片算：_global 是所有模组共用的池，_archive 是
+                    # 归档模式那批，都不属于某一个模组。
+                    out["mods"] = len([d for d in detail
+                                       if d["name"] not in ("_global", "_archive")])
             except Exception as ex:      # noqa: BLE001 - 包坏了要说出来
                 out["error"] = str(ex)
         return out

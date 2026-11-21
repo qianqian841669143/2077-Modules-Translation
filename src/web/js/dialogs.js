@@ -176,7 +176,19 @@ function renderPackStatus(s) {
     row(T("包内文件"), n(s.files)) +
     "</div>");
 
-  // 2) 检查：哪里会出问题就写在这里
+  // 2) 分片明细：每个 .tsv 就是一个模组的词典，看得到各多少条
+  const sd = Array.isArray(s.shardsDetail) ? s.shardsDetail : [];
+  if (sd.length) {
+    const tot = sd.reduce((a, d) => a + Number(d.rows || 0), 0);
+    cards.push('<div class="pcard pwide">' +
+      head("ok", T("分片明细"), tf("%d 个 · %d 条", sd.length, tot), "ok") +
+      '<div class="pshards">' +
+      sd.map((d) => '<div class="psh"><span title="' + esc(d.name) + '.tsv">' +
+        esc(d.name || "") + "</span><b>" + n(d.rows) + "</b></div>").join("") +
+      "</div></div>");
+  }
+
+  // 3) 检查：哪里会出问题就写在这里
   const warns = [];
   if (!s.exists) warns.push(T("包还没生成：点一次「应用」就会产出。"));
   if (s.error) warns.push(s.error);
