@@ -259,16 +259,6 @@ function bind() {
       el.textContent = (r.problems || []).concat(r.error ? [r.error] : []).join(" · ");
     }
   };
-  $("btn-l10n-install").onclick = async () => {
-    const r = await pywebview.api.l10n_install();
-    if (!r.ok) { toast(r.error || "error", "err"); return; }
-    toast(T("已安装 %d 个文件到游戏").replace("%d", (r.files || []).length), "ok");
-    setStatus(T("已安装到游戏 · 启动游戏后生效"));
-  };
-  $("btn-l10n-out").onclick = async () => {
-    const r = await pywebview.api.l10n_open_output();
-    if (!r.ok) toast(r.error || "error", "err");
-  };
   $("btn-build-official").onclick = async () => {
     startMbPoll();        // official-built / busy 事件走 evbus
     const r = await pywebview.api.build_official_tm();

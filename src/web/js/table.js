@@ -222,8 +222,6 @@ function baseName(p) {
 /* 两种模式的界面差异集中在这里：资源模式没有行号、没有 zip 打包。 */
 function applyModeUi() {
   const on = !!state.resMode;
-  $("btn-l10n-out").style.display = on ? "" : "none";
-  $("btn-l10n-install").style.display = (on && state.resResult) ? "" : "none";
   $("btn-pack").style.display = (!on && state.archive) ? "" : "none";
   const th = $("thead").querySelector(".th.line");
   if (th) th.textContent = on ? T("条目 ID") : T("行号");

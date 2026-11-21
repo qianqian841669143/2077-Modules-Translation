@@ -1461,89 +1461,6 @@ class Api(object):
             res = None
         return res[0] if res else ""
 
-    def l10n_output_dir(self):
-        """批量/兜底产物目录。
-
-        单个 mod「生成翻译 mod」现在直接写到它自己的 .archive 旁边（见
-        _resource_outdir），这里留给批量队列集中收集，以及 mod 目录不可写时
-        的退路。刻意不写游戏目录，避免批量跑时污染游戏。
-        """
-        d = os.path.join(config_dir(), "output")
-        try:
-            os.makedirs(d, exist_ok=True)
-        except Exception:
-            return ""
-        return d
-
-    @staticmethod
-    def _archive_mod_root(archive_path):
-        r"""从 .archive 的绝对路径反推 mod 根目录。
-
-        归档通常躺在 <mod>\archive\pc\mod\ 下，往上找到名为 archive 的那层，
-        它的上一级就是模组根。撤销功能删掉之后暂时没有调用者，但它是
-        「这个归档属于哪个模组」的唯一判断依据，留着给定位产物用。
-        """
-        p = str(archive_path or "")
-        if not p:
-            return ""
-        cur = os.path.dirname(os.path.abspath(p))
-        while True:
-            parent = os.path.dirname(cur)
-            if parent == cur:
-                break
-            if os.path.basename(cur).lower() == "archive":
-                return parent
-            cur = parent
-        return os.path.dirname(os.path.abspath(p))
-
-    def _resource_outdir(self, sess=None):
-        """资源模式产物目录：归档所在的 mod 目录，和原 .archive 并排。
-
-        以前固定落 userdata\\output，用户还得自己拖回 mod 目录；可产物本来就是
-        「这个 mod 的中文版」，跟原归档放一起才算落在它该在的地方。只有目录
-        不可写（只读盘、权限不足）才退回 output，不让整个应用失败。
-
-        例外：单模组「应用」现在出独立 zip（`<模组名>_<目标语言>.zip`），
-        产物只是 zip 的原料，不该再往 staging 里丢。那条路会先设
-        `_res_out_override` 指向临时目录，这里优先用它。
-        """
-        ov = str(getattr(self, "_res_out_override", "") or "")
-        if ov:
-            try:
-                os.makedirs(ov, exist_ok=True)
-                return ov
-            except Exception:
-                self._res_out_override = ""
-        sess = sess if sess is not None else self.l10n_session
-        target = getattr(sess, "target", None) if sess is not None else None
-        arch = getattr(target, "archive_path", None) if target is not None else None
-        if arch:
-            try:
-                d = os.path.dirname(os.path.abspath(str(arch)))
-                os.makedirs(d, exist_ok=True)
-                if os.access(d, os.W_OK):
-                    return d
-            except Exception:
-                pass
-        return self.l10n_output_dir()
-
-    def l10n_open_output(self):
-        """打开产物目录：应用过就开归档旁边，还没应用才是 output。"""
-        d = ""
-        result = getattr(self, "l10n_result", None)
-        arch = getattr(result, "archive", None) if result is not None else None
-        if arch:
-            d = os.path.dirname(os.path.abspath(str(arch)))
-        if not d or not os.path.isdir(d):
-            d = self.l10n_output_dir()
-        if not d or not os.path.isdir(d):
-            return {"ok": False, "error": self._tr("输出目录不可用")}
-        try:
-            os.startfile(d)          # noqa: S606 - 桌面应用主动打开资源管理器
-        except Exception as ex:
-            return {"ok": False, "error": str(ex)}
-        return {"ok": True, "path": d}
-
     def load_resource(self, path, opts=None):
         """异步：解析归档并抽出条目，结果走 loaded 事件。"""
         opts = opts or {}
@@ -1676,32 +1593,6 @@ class Api(object):
             skipped += dropped_other
             return from_src, skipped
         return keep, skipped
-
-    # ------------------------------------------------------------ 归档复用
-
-    def _archive_sources(self, sess):
-        """这次组包用到的源归档路径；有归档缺路径就返回空表（= 不复用）。"""
-        out = []
-        for one in getattr(sess, "sessions", [sess]):
-            arch = str(getattr(getattr(one, "target", None),
-                               "archive_path", "") or "")
-            if not arch:
-                return []
-            out.append(arch)
-        return out
-
-    def _archive_outputs(self, sess, outdir):
-        """算这次会产出的 (归档路径列表, .xl 路径列表)，与组包用的名字一致。"""
-        from localization import builder as Lbuild
-        outs, xls = [], []
-        for one in getattr(sess, "sessions", [sess]):
-            target = getattr(one, "target", None)
-            name = Lbuild.default_output_name(
-                getattr(target, "name", ""),
-                getattr(one, "lang", "zh-cn") or "zh-cn")
-            outs.append(os.path.join(outdir, name + ".archive"))
-            xls.append(os.path.join(outdir, name + ".archive.xl"))
-        return outs, xls
 
 
     def _apply_resource(self, items):

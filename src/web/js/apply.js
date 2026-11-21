@@ -189,7 +189,6 @@ function onAppliedResource(r) {
     }
   }
   warns.slice(0, 3).forEach((w) => toast(w, "err"));
-  $("btn-l10n-install").style.display = "";
   applyModeUi();
 }
 
