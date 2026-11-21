@@ -405,7 +405,9 @@ function toast(msg, kind) {
 /* ---------------- 窗口边缘缩放 ---------------- */
 let resizing = null;
 function edgeAt(e) {
-  const t = 6;
+  // 12px 而不是 6px：窗口是 frameless，没有系统边框，拖拽热区全靠这段判断。
+  // 6px 在高分屏上基本点不中，鼠标稍微往里一点就变回普通箭头。
+  const t = 12;
   const w = window.innerWidth, h = window.innerHeight;
   const right = e.clientX > w - t, bottom = e.clientY > h - t;
   if (right && bottom) return "rb";
