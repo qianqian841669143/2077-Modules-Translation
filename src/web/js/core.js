@@ -66,7 +66,6 @@ async function boot() {
     _booted = false;
     console.error("boot failed", e);
     const detail = (e && (e.stack || e.message || String(e))) || String(e);
-    try { pywebview.api.probe("BOOT FAILED: " + detail); } catch (_) {}
     try {
       document.getElementById("status").textContent = "BOOT ERROR: " + detail;
     } catch (_) {}

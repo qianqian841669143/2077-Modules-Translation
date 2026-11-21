@@ -4100,12 +4100,6 @@ class Api(object):
     # 结果成了死代码 —— Api 上没有这些名字，前端 pywebview.api.win_min
     # 永远是 undefined，三个按钮点下去只会报 not a function。
     # ------------------------------------------------------------------
-    def probe(self, msg):
-        """前端探针：把一条消息记进 crash.log，用来分清「点击没到前端」还是
-        「到了但后端没动」。排查完可以删。"""
-        _note_log("probe: %s" % (msg,))
-        return {"ok": True}
-
     def win_min(self):
         _note_log("win_min")
         self._window.minimize()
