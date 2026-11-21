@@ -3317,7 +3317,11 @@ class Api(object):
         except Exception:
             live = ""
         if live and os.path.isdir(live):
-            shutil.copytree(live, dict_dir)
+            # 游戏目录里那份是 Vortex 部署出来的，旁边有 __folder_managed_by_vortex
+            # 标记文件；拷进我们的包毫无意义，装回去还会在游戏目录里多留一个。
+            shutil.copytree(live, dict_dir,
+                            ignore=shutil.ignore_patterns(
+                                "__folder_managed_by_vortex"))
         else:
             os.makedirs(dict_dir, exist_ok=True)
 
