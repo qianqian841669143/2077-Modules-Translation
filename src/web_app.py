@@ -3305,25 +3305,40 @@ class Api(object):
 
         dict_dir = os.path.join(work, "red4ext", "plugins",
                                 "CP2077UITranslator", "dict")
-        # 上一版词典取游戏里正在用的那份：单模组导出是增量合并，
-        # 不能把别的模组的条目冲掉（尤其所有模组共用的 _global.tsv）。
-        live = ""
-        try:
-            from localization import archive as Larch
-            game = Larch.find_game(self.settings.get("game_dir") or None)
-            if game:
-                live = os.path.join(game, "red4ext", "plugins",
-                                    "CP2077UITranslator", "dict")
-        except Exception:
-            live = ""
-        if live and os.path.isdir(live):
-            # 游戏目录里那份是 Vortex 部署出来的，旁边有 __folder_managed_by_vortex
-            # 标记文件；拷进我们的包毫无意义，装回去还会在游戏目录里多留一个。
-            shutil.copytree(live, dict_dir,
-                            ignore=shutil.ignore_patterns(
-                                "__folder_managed_by_vortex"))
-        else:
-            os.makedirs(dict_dir, exist_ok=True)
+        os.makedirs(dict_dir, exist_ok=True)
+
+        # 上一版词典取**上一次导出的那个包**（也就是这次要覆盖的路径），不是
+        # 游戏目录。单模组导出是「对产物做增量更新」：产物还有一个旧包，就把
+        # 它的分片全带上再更新当前模组；没有旧包，只带当前模组的。
+        #
+        # 以前这里读的是游戏目录，那是装过包之后的部署结果 —— 可能是很早以前
+        # 某一轮的包，也可能是 Vortex 或别人手动放进去的；拿它当基准，等于把
+        # 来源不明的东西原样打包卖回去，还让「有没有」这个问题变得没法回答。
+        out_zip = self._pack_zip_path()
+        prev_tsv, prev_error = 0, ""
+        if os.path.isfile(out_zip):
+            prefix = "red4ext/plugins/CP2077UITranslator/dict/"
+            try:
+                import zipfile
+                with zipfile.ZipFile(out_zip) as z:
+                    for name in z.namelist():
+                        if not (name.startswith(prefix)
+                                and name.lower().endswith(".tsv")):
+                            continue
+                        rel = name[len(prefix):]
+                        dst = os.path.join(dict_dir, rel.replace("/", os.sep))
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        with z.open(name) as src, open(dst, "wb") as fh:
+                            shutil.copyfileobj(src, fh)
+                        prev_tsv += 1
+            except Exception as ex:      # noqa: BLE001 - 旧包坏了就只带当前模组
+                prev_tsv, prev_error = 0, str(ex)
+                for fn in os.listdir(dict_dir):
+                    if fn.lower().endswith(".tsv"):
+                        try:
+                            os.remove(os.path.join(dict_dir, fn))
+                        except OSError:
+                            pass
 
         stats = ui_dict.write_mod_full(dict_dir, frags, mem, translated)
         if extra_pairs:
@@ -3335,7 +3350,6 @@ class Api(object):
             stats["archived"] = int(arch.get("added") or 0)
 
         # 包名沿用输出目录那套写死的 PACK_ZIP_NAME，用户已经习惯这个名字
-        out_zip = self._pack_zip_path()
         try:
             os.makedirs(os.path.dirname(out_zip), exist_ok=True)
             ui_dict.pack(out_zip, work)
@@ -3358,6 +3372,8 @@ class Api(object):
             "missing": stats.get("missing", 0),
             "archived": int(stats.get("archived") or 0),
             "buckets": len(frags),
+            "prev": prev_tsv,
+            "warning": prev_error,
         }
 
     def export_all_dict(self):
