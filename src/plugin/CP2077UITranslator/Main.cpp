@@ -356,6 +356,104 @@ void NormalizeToSpace(const char* aIn, char* aOut, size_t aCap)
     aOut[n] = '\0';
 }
 
+// 找下一个「标签 / 值」分界，返回分隔符起点。
+// 只认两种：`<标签>: <值>` 和 `<标签>   |   <值>`。
+const char* NextLabelSep(const char* p)
+{
+    for (; *p != '\0'; ++p)
+    {
+        if (p[0] == ':' && p[1] == ' ')
+        {
+            return p;
+        }
+        if (p[0] == ' ' && p[1] == '|' && p[2] == ' ')
+        {
+            return p;                            // 留住竖线前面的空格，输出时错位不至于挤在一起
+        }
+    }
+    return nullptr;
+}
+
+// 整串查不到时的兜底：界面上一大批文本是「标签 + 运行时值」拼出来的
+// （`Frontal Cortex: 6/6`、`Holsters: melee large (blades): < 0 >`、
+// `Total installed: 40`、`Arms: 1/1`）。值在运行时才算出来，静态提取永远
+// 抓不到；但标签本身早就在词典里了（`Frontal Cortex` 额皮质、
+// `Holsters: ranged small (pistols)` 枪套：远程小型 (手枪)）。
+//
+// 所以按分隔符从左往右回溯：每个分界处切一刀，取前缀查表，第一个命中的
+// 就用「译文 + 原文余部」。`Holsters: ... (blades): < 0 >` 这种两层冒号的，
+// 第一刀切出 `Holsters` 查不到，第二刀切出整段标签就命中了。
+//
+// 风控四条，缺一不可：
+//   1. 只认 `: ` 和 ` | `，别的分隔形态一概不猜；
+//   2. 标签 3~48 字节，太短容易撞上 `HP` / `A` 这种，太长多半不是标签；
+//   3. 标签必须含英文字母（挡掉 `12: 34` 这种纯数字时间）；
+//   4. 标签必须是词典里真有的 key —— 不做任何二次猜测或机器翻译。
+const char* LookupByPrefix(Dict& aDict, const char* aText, char* aOut, size_t aCap)
+{
+    if (aText == nullptr || aOut == nullptr || aCap < 8)
+    {
+        return nullptr;
+    }
+    char key[64] = {};
+    const char* from = aText;
+    for (;;)
+    {
+        const char* sep = NextLabelSep(from);
+        if (sep == nullptr)
+        {
+            return nullptr;
+        }
+        const size_t n = static_cast<size_t>(sep - aText);
+        if (n >= 3 && n < 48 && n + 1 < sizeof(key))
+        {
+            memcpy(key, aText, n);
+            key[n] = '\0';
+            for (size_t i = n; i > 0 && key[i - 1] == ' '; --i)
+            {
+                key[i - 1] = '\0';
+            }
+            bool hasAlpha = false;
+            for (size_t i = 0; key[i] != '\0'; ++i)
+            {
+                if ((key[i] >= 'A' && key[i] <= 'Z') || (key[i] >= 'a' && key[i] <= 'z'))
+                {
+                    hasAlpha = true;
+                    break;
+                }
+            }
+            // 值部分的英文词数：超过 2 个说明后面跟的是一整句话
+            // （`LEGEND:  Precision rifle headshots deal +25% damage`、
+            // `BOSS  |  Killed by V`）。这种拼出来是半中半英，比完全不翻更糟，
+            // 而且会干扰判断 —— 留给整句词典，这里一律不动。
+            size_t words = 0;
+            for (const char* q = sep; *q != '\0'; ++q)
+            {
+                const bool alpha = (*q >= 'A' && *q <= 'Z') || (*q >= 'a' && *q <= 'z');
+                if (!alpha)
+                {
+                    continue;
+                }
+                const char prev = (q == sep) ? '\0' : q[-1];
+                const bool prevAlpha = (prev >= 'A' && prev <= 'Z') || (prev >= 'a' && prev <= 'z');
+                if (!prevAlpha)
+                {
+                    ++words;
+                }
+            }
+            if (hasAlpha && words <= 2)
+            {
+                const char* hit = Lookup(aDict, key);
+                if (hit != nullptr && snprintf(aOut, aCap, "%s%s", hit, sep) > 0)
+                {
+                    return aOut;
+                }
+            }
+        }
+        from = sep + 1;
+    }
+}
+
 const char* LookupText(Dict& aDict, const char* aText)
 {
     const char* hit = Lookup(aDict, aText);
@@ -806,7 +904,17 @@ void ApplyTranslation(void* aCtx)
 
     // 不再单独扫一遍 CJK：词典的 key 全是英文，中文串查表必然 miss，
     // 直接由 Lookup 的结果决定要不要写回，少扫一遍整串。
+    // joined 故意不初始化：只有整串查不到时才由 LookupByPrefix 写满，热路径
+    // 上不为它清一次 1 KB 的栈。它指向的串在这一层用完就丢，不逃逸。
+    char joined[1024];
+    const char* scope = "global";
     const char* hit = LookupText(g_global, src);
+    if (hit == nullptr)
+    {
+        // 整串没有，试「标签 + 运行时值」的拼法（`Frontal Cortex: 6/6`）。
+        hit = LookupByPrefix(g_global, src, joined, sizeof(joined));
+        scope = "prefix";
+    }
     if (hit == nullptr)
     {
         ReportMiss(src);                         // verbose<2 时立刻返回
@@ -822,7 +930,7 @@ void ApplyTranslation(void* aCtx)
         snprintf(srcCopy, sizeof(srcCopy), "%s", src);
         if (WriteWidgetText(aCtx, hit))
         {
-            ReportHit(srcCopy, hit, "global");
+            ReportHit(srcCopy, hit, scope);
         }
         return;
     }
