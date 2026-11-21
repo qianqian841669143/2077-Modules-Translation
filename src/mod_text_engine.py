@@ -649,6 +649,10 @@ _UI_LABEL_CALLS = {
     "slider", "sliderf", "slideri", "range",
     "checkbox", "toggle", "dropdown", "combo", "option", "radio",
     "tip", "note",
+    # DVRCF.Register(game, "MonowireE3", "Monowire Rework",
+    #                "Wire hack, grapple, yank and lasso for the Monowire.", provider)
+    # 第 3 个是设置面板上的模组名、第 4 个是它下面那行说明。
+    "register",
     # RedWindows / TFP 这类自绘窗口
     "window", "panel",
 }
@@ -662,8 +666,13 @@ _UI_WORD_SKIP = {
     "NULL", "NIL", "SDK", "FFI",
 }
 
-# 形状: 全大写(允许数字与少量标点), 2~28 字符, 不含小写。
-_UI_WORD_RE = re.compile(r"^[A-Z0-9][A-Z0-9'&/+:.\-]{1,27}$")
+# 形状: 全大写(允许数字与少量标点) 或 首字母大写的单词, 2~28 字符。
+# 后者是 DVRCF 那类构建器的页签/区块名（b.Tab("General")、b.Section("Features")、
+# b.Slider("range", "Range")）：以前只认全大写，这类首字母大写的单词一个都进不来，
+# Monowire Rework 的设置面板因此只有 34 条、缺 6 个页签标题。
+# 放行仍然要求 _ui_label_position 的位置证据（控件构造器参数位、case 分支、
+# 纯字面量数组、三元分支），所以不会把任意 Title Case 标识符卷进来。
+_UI_WORD_RE = re.compile(r"^(?:[A-Z0-9][A-Z0-9'&/+:.\-]{1,27}|[A-Z][a-z]{1,26})$")
 
 
 def _is_ui_word(s):
@@ -1605,6 +1614,13 @@ def text_evidence(text, pos, callee=""):
         return "internal", callee
     # 调用者本身就是「把这串推给界面」的方法（b.Tab / b.Slider / b.Label …）。
     # 这类字面量没有赋值目标，只看变量名会一律落到 plain，精确档全丢。
+    #
+    # 地图模组的街名：`layer.Add("Acorn St", 1932, 2, false)`。`add` 这个名字
+    # 本身太泛（ArrayPush / board.Add / inventory.Add 都在用），不能进
+    # _UI_LABEL_CALLS，只认「…Layer.Add」这个形状 —— MapSwitcher 的 200 条
+    # 街道标签（Acorn St / Adams St / Alexander St …）全挂在它上面。
+    if (callee or "").lower().endswith("layer.add"):
+        return "display", "layer.Add"
     last = (callee or "").split(".")[-1]
     if last and last.lower() in _UI_LABEL_CALLS:
         return "display", last.lower()
@@ -2526,7 +2542,6 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
     rp_re = re.compile(r"@runtimeProperty\(\s*\"([^\"]*)\"\s*,\s*\"((?:[^\"\\]|\\.)*)\"\s*\)")
     rp_types = {}
     rp_keys = set()          # 第二个参数是查表键的 (行, 值)
-    rp_mod_starts = set()    # ModSettings.mod 的页名 (行, 值)：一律不翻
     rp_soft = set()          # displayName / displayValues 的值：用 _rp_value_ok 放宽
     if ext != ".xml":
         for m in rp_re.finditer(text):
@@ -2544,14 +2559,10 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
             # 长句，也不需要。只给纯显示的两类开口子。
             if key.lower() in ("displayname", "display_name", "displayvalues", "displayvalue"):
                 rp_soft.add((line, m.group(2)))
-            # 页名（ModSettings.mod）是 MCM 的页签 ID：注册处写 "X"，读取处多半
-            # 是 ModSettings.GetVars(n"X", …) 或 SenSenTune.I(…, n"X", …)。
-            # 只翻注册处、不翻 n"X"，两边就脱钩 —— 页签裂成两个（一个中文空壳、
-            # 一个英文原页），设置项读不到存的值而回退默认，界面上却看不出异常。
-            # 光靠下面的 ident_texts 守卫救不了：它要求同一个串在别处以 n"…"
-            # 出现过；读取逻辑在 Lua 里、或用变量传页名时就抓不到。这里主动记下来。
-            if key.lower() == "mod":
-                rp_mod_starts.add((line, m.group(2)))
+            # 注：`ModSettings.mod` 的页名曾经单独收集起来整条不翻，怕注册处翻
+            # 中文、读取处 n"X" 还是英文会让页签裂成两个。那个风险只在**写回
+            # 源码**时存在；现在出口只有词典 + 渲染时替换，ID 一字不动，显示时
+            # 才换字。2026-11-21 起这条限制被删除，MCM 列表里的模组名照收。
             # "ModSettings.mod", "Nearby Auto Loot" 这种带空格的是真名字，
             # 保持可翻；无空格的连字符串才是查表键。
             if is_prop_loc_key(m.group(2)):
@@ -2588,9 +2599,15 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
         if table_keys and lit.inner in table_keys:
             drop(NOISE.FAMILY_TABLE)          # 双语表的查表 key, 翻它会把表打坏
             continue
-        if lit.inner in ident_texts:
+        if lit.inner in ident_texts and (lit.line, lit.inner) not in rp_types:
             # 这个串在别处被当成 CName / TweakDBID / ResRef / StringToName 用了。
             # 翻掉文本位就会让标识符位与它失配，所以整条放弃。
+            #
+            # @runtimeProperty 的值位例外：本工具只产词典，dll 在**渲染时**替换
+            # inkTextWidget 的文本，从不写回源码 —— 注册处进词典、读取处的
+            # n"…" 保持英文是安全的，页签 ID 不变，显示时才被替换掉。
+            # 不放行的话，MCM 列表里的模组名（Auto Drive Enhanced / Living
+            # Streets / Enemy Reinforcements …）永远进不了词典。
             drop(NOISE.FAMILY_IDENT)
             continue
         if is_loc_key(lit.inner):
@@ -2635,11 +2652,10 @@ def _extract_reds(text, ext, target_locale="", stats=None, loose=True,
                 drop(NOISE.FAMILY_LANG)
                 continue
         key = (lit.line, lit.inner)
-        if key in rp_mod_starts:
-            # MCM 页名：注册处的 "X" 与读取处的 n"X" 必须逐字一致，
-            # 翻了注册处就只剩一个空壳页签（见上面 rp_mod_starts 的说明）。
-            drop(NOISE.FAMILY_IDENT)
-            continue
+        # 注：MCM 页名（ModSettings.mod）以前在这里整条放弃，理由是「注册处翻
+        # 中文、读取处 n"X" 还是英文，页签会裂成两个」。那条理由只在**写回源码**
+        # 时成立；现在的出口只有词典 + 渲染时替换，ID 不动，显示时再换字，
+        # 所以这里不再拦。要恢复写回必须先把这个分支加回去。
         if lit.start in codeware_values:      # this.Text("key", "value") -> 只收 value
             if not lit.inner.strip():
                 continue
@@ -2726,6 +2742,13 @@ YAML_TEXT_KEYS = {
     "localizedname": TYPE_NAME,
     "localizedtitle": TYPE_NAME,
     "localizeddescription": TYPE_DESC,
+    # StatusEffectUIData_Record / UIData 用的是这一组短字段名，以前一个都不认。
+    # Monowire Rework 的状态栏上「Monowire Uplink / On Cooldown」就是这两条：
+    # 界面明晃晃显示着，提取器从来没碰过。
+    "displayname": TYPE_NAME,
+    "description": TYPE_DESC,
+    "flufftext": TYPE_DESC,
+    "localizedflufftext": TYPE_DESC,
 }
 
 # 全小写 + 下划线/点 = 查表键 (`murphys_web_desc`)，不是文案。
