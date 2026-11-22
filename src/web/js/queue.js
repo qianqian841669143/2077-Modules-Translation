@@ -32,7 +32,14 @@ function enterBatchMask() {
   const now = $("ov-now");
   if (now) { now.textContent = ""; delete now.dataset.name; }
   const st = $("btn-tr-stop");
-  if (st) { st.dataset.mode = "batch"; st.textContent = T("停止批量"); st.disabled = false; }
+  // display 必须显式还原：打包阶段 enterPackingMask 会把它藏起来，
+  // 万一上次流程没走到 exitBatchMask，下一轮开始就再也看不见停止按钮了。
+  if (st) {
+    st.dataset.mode = "batch";
+    st.textContent = T("停止批量");
+    st.disabled = false;
+    st.style.display = "";
+  }
   const app = document.querySelector("main.app");
   if (app) app.inert = true;
   state.busy = true;

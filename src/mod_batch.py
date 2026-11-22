@@ -590,6 +590,9 @@ def run(ctx, cands):
             ctx.on_event({"type": "mb-item", "phase": "start", "index": i,
                           "total": total, "key": cand.get("key"), "name": name})
             r = {"key": cand.get("key"), "name": name, "root": cand.get("root", ""),
+                 # 指纹一路带到 journal 里：续跑时只有「目录没变」才算已完成，
+                 # 模组更新了必须重跑（见 web_app._mb_journal / batch_start）
+                 "fp": str(cand.get("fp") or ""),
                  "ok": False, "error": "", "dst": "", "copied": 0, "bytes": 0,
                  "skipped": 0, "own": 0, "rows": 0, "todo": 0, "already": 0, "tm": 0,
                  "machine": 0, "applied": 0, "settled": 0, "failed": 0, "errors": [],

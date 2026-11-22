@@ -2034,6 +2034,10 @@ class Api(object):
             return
         try:
             rec = {"key": r.get("key"), "ok": bool(r.get("ok")),
+                   # 指纹：续跑时用来判断「这个模组还是上次那个版本吗」。
+                   # 老记录没有这个字段，读的时候按「已完成」处理（见
+                   # batch_start），不然升级后第一次会全量重跑 309 个模组。
+                   "fp": str(r.get("fp") or ""),
                    "dst": r.get("dst") or "", "rows": r.get("rows"),
                    "todo": r.get("todo"), "applied": r.get("applied"),
                    "failed": r.get("failed"), "error": r.get("error") or "",
@@ -2492,9 +2496,25 @@ class Api(object):
                            deploy=bool(self.settings.get("batch_deploy")),
                            deploy_dry=bool(self.settings.get("batch_deploy_dry", True)))
         done = self._mb_journal_open(sig, staging)
-        cached = [it for it in items if str(it.get("key")) in done]
+        # 「已完成」要连指纹一起看：journal 里的记录只说明「上次跑完了」，
+        # 但模组可能在这之后更新过（Vortex 覆盖安装、手动改文件）。只按 key
+        # 跳过的话，预扫描明明判了「要重跑」，执行时又会被整条滤掉 ——
+        # 2026-11-22 之前就是这样，指纹只加在预扫描那一层。
+        # fp 为空的老记录按「已完成」处理：升级后第一次不至于全量重跑 309 个。
+        cached, fresh = [], []
+        for it in items:
+            rec = done.get(str(it.get("key")))
+            if not rec:
+                fresh.append(it)
+                continue
+            old_fp = str(rec.get("fp") or "")
+            new_fp = str(it.get("fp") or "")
+            if old_fp and new_fp and old_fp != new_fp:
+                fresh.append(it)          # 模组变了：不算跑完，重跑
+            else:
+                cached.append(it)
         if cached:
-            items = [it for it in items if str(it.get("key")) not in done]
+            items = fresh
             self._batch_log("resume: skip %d done, %d left" % (len(cached), len(items)))
         if not items:
             return {"ok": True, "started": False, "cached": len(cached),
