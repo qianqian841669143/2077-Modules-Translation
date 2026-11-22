@@ -1423,6 +1423,7 @@ __declspec(noinline) uint32_t RewriteOnScreens(OnScreenEntries* aTable, bool aWr
     }
 
     uint32_t replaced = 0;
+    uint32_t byValue = 0;                        // 走 femaleVariant 兜底命中的条数
     for (uint32_t i = 0; i < count; ++i)
     {
         auto& entry = list[i];
@@ -1434,11 +1435,23 @@ __declspec(noinline) uint32_t RewriteOnScreens(OnScreenEntries* aTable, bool aWr
             Log("[onscreens] entry[%u] pk=%llu key='%s'", i,
                 static_cast<unsigned long long>(entry.primaryKey), key == nullptr ? "(null)" : key);
         }
-        if (key == nullptr || key[0] == '\0')
+        // 两级匹配。原生表和手写的 _onscreens.tsv 用 secondaryKey 当键（GP-Augur-…、
+        // Story-…），走第一级；Codeware / .xl 系的模组把逻辑名（GR_Phone_Contact、
+        // UI-RepeatableNcpdGigs-…）塞进 secondaryKey、英文原文塞进 femaleVariant，
+        // 只查 key 的话整个模组一条都中不了 —— 2026-11-22 之前一直是 replaced=0。
+        const char* zh = (key != nullptr && key[0] != '\0') ? Lookup(g_global, key) : nullptr;
+        if (zh == nullptr)
         {
-            continue;
+            const char* src = entry.femaleVariant.c_str();
+            if (src != nullptr && src[0] != '\0')
+            {
+                zh = LookupText(g_global, src);
+                if (zh != nullptr)
+                {
+                    ++byValue;
+                }
+            }
         }
-        const char* zh = Lookup(g_global, key);
         if (zh == nullptr)
         {
             continue;
@@ -1446,9 +1459,18 @@ __declspec(noinline) uint32_t RewriteOnScreens(OnScreenEntries* aTable, bool aWr
         ++replaced;
         if (aWrite)
         {
-            entry.femaleVariant = RED4ext::CString(zh);
-            entry.maleVariant = RED4ext::CString(zh);
+            // 词典是 TSV，一行一条，译文里的换行是反斜杠 + n 两个字符。写进
+            // 本地化表必须还原成真换行，否则界面原样显示 "\n"。zh 指向词典的
+            // 只读 blob，不能就地改 —— 先拷一份再反转义。
+            std::string tmp(zh);
+            UnescapeInPlace(tmp.data());
+            entry.femaleVariant = RED4ext::CString(tmp.c_str());
+            entry.maleVariant = RED4ext::CString(tmp.c_str());
         }
+    }
+    if (byValue > 0)
+    {
+        Log("[onscreens] byValue=%u", byValue);
     }
     return replaced;
 }
