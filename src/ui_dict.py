@@ -634,8 +634,15 @@ def dedupe_dir(out_dir):
     names = [n for n in sorted(os.listdir(out_dir)) if n.lower().endswith(".tsv")]
     if len(names) < 2:
         return {"removed": 0, "conflicts": 0}
-    order = [n for n in names if n != "_global.tsv"] + \
-            (["_global.tsv"] if "_global.tsv" in names else [])
+    # 优先级：普通分片 > _global > _archive
+    #
+    # `_archive.tsv` 排最后是故意的：它装的是模组归档里的对话和物品描述，
+    # 只走游戏原生 localization 表；`_global` / 模组分片装的是界面按钮。
+    # 同一个英文在两处语境不同（`Close` 界面上是「关闭」、对话里可能是
+    # 「靠近」），让归档的译文盖掉界面按钮就是事故 —— 而 `_archive.tsv`
+    # 因为下划线开头，按文件名序恰好排在最前面。
+    plain = [n for n in names if n not in ("_global.tsv", "_archive.tsv")]
+    order = plain + [n for n in ("_global.tsv", "_archive.tsv") if n in names]
 
     data, occ, conflicts = {}, {}, 0
     for n in order:
@@ -656,13 +663,16 @@ def dedupe_dir(out_dir):
         for k, v in rows:
             occ.setdefault(k, []).append((n, v))
 
-    # 定 winner：分片优先；分片之间按票数，平票按文件名序
+    # 定 winner：三级优先 + 票数。普通分片 > _global > _archive。
     owner = {}
     for k, lst in occ.items():
         if len({v for _, v in lst}) > 1:
             conflicts += 1
-        mods = [(n, v) for n, v in lst if n != "_global.tsv"]
-        pool = mods or lst          # 只有 _global 有的才用它兜底
+        plain_hits = [(n, v) for n, v in lst
+                      if n not in ("_global.tsv", "_archive.tsv")]
+        glob_hits = [(n, v) for n, v in lst if n == "_global.tsv"]
+        arch_hits = [(n, v) for n, v in lst if n == "_archive.tsv"]
+        pool = plain_hits or glob_hits or arch_hits
         cnt = {}
         for _n, v in pool:
             cnt[v] = cnt.get(v, 0) + 1
