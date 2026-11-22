@@ -3658,51 +3658,6 @@ class Api(object):
         except OSError:
             return 0
 
-    def _stamp_archive(self, work):
-        """把 ``pack\\archive`` 整棵合并进打包目录（ArchiveXL 的 onscreens 层）。
-
-        为什么需要这一层：Codeware 的 ModLocalizationPackage 走的是游戏原生的
-        ``localizationPersistenceOnScreenEntries`` 查表，那批文本在渲染时由 C++
-        解析，不经过 redscript 的 inkTextWidget 方法 —— 2026-11-21 的全路径探针
-        实测：义体页打开的情况下 inkTextWidget 的脚本调用一条都没有（探针编号
-        卡在 465 不动，其中 176 条还是手机短信的打字机特效），所以 DLL 抓不到
-        ``LocKey#GP_Herald_Mesh-Name`` 这类键。
-
-        ``pack\\archive`` 是按**游戏根目录**组织的树（``archive\\pc\\mod\\<名>.archive``
-        + 同名 ``.archive.xl``），整棵拷进 work 就等于在 zip 里原样落到游戏的
-        ``archive\\pc\\mod`` 下，解压即生效。归档里放的是 zh-cn 的
-        ``localizationPersistenceOnScreenEntries``，secondaryKey 与模组用的键
-        完全相同，用译文覆盖掉模组注册的英文。
-
-        产物本身由 ``localization.builder`` 生成（与 main 分支同一套策略：
-        doc → convert deserialize → pack，``.xl`` 用 standard 命名与归档同名）。
-        """
-        import shutil
-
-        # relpath 的基准必须是 pack 根而不是 pack\archive —— 少算一层，zip 里
-        # 就变成 pc\mod\…，游戏不认（要求 archive\pc\mod\…）。
-        base = bundle_dir("pack")
-        tpl = os.path.join(base, "archive")
-        if not os.path.isdir(tpl):
-            return 0
-        n = 0
-        for root, dirs, files in os.walk(tpl):
-            dirs.sort()
-            files.sort()
-            for fn in files:
-                full = os.path.join(root, fn)
-                rel = os.path.relpath(full, base)
-                dst = os.path.join(work, rel)
-                parent = os.path.dirname(dst)
-                if parent:
-                    os.makedirs(parent, exist_ok=True)
-                try:
-                    shutil.copyfile(full, dst)
-                    n += 1
-                except OSError:
-                    continue
-        return n
-
     def _cet_miss_strings(self):
         """读 CET 入口收集的 miss.tsv —— 跑过游戏之后，这里是 ImGui 上真实显示过、
         但词典里没有的文案。
@@ -3840,8 +3795,10 @@ class Api(object):
         # 热键名那层要排在所有 mod 之前，见 _stamp_cet_hotkeys
         self._stamp_cet_hotkeys(work)
 
-        # 归档层（ArchiveXL onscreens）：Codeware 管的那批键只能走这里
-        self._stamp_archive(work)
+        # 归档层（ArchiveXL onscreens）已经去掉：2026-11-22 打通
+        # Localization_LoadOnScreens 之后，RewriteOnScreens 直接用
+        # secondaryKey 查 g_global（`_onscreens.tsv` 那 372 条本来就在里面），
+        # 不需要再用 .archive 覆盖游戏原生表。实测 entries=70911 replaced=768。
 
         # 包名沿用输出目录那套写死的 PACK_ZIP_NAME，用户已经习惯这个名字
         try:
@@ -4154,8 +4111,7 @@ class Api(object):
         # 热键名那层要排在所有 mod 之前，见 _stamp_cet_hotkeys
         self._stamp_cet_hotkeys(work)
 
-        # 归档层（ArchiveXL onscreens）：Codeware 管的那批键只能走这里
-        self._stamp_archive(work)
+        # 归档层已经去掉，理由见 export_ui_dict 里那段注释。
 
         # 包名沿用输出目录那套写死的 PACK_ZIP_NAME
         out_zip = self._pack_zip_path()
