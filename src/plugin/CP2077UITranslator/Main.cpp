@@ -93,6 +93,7 @@ std::atomic<uint64_t> g_textCalls{0};    // 其中 reg 命中文本函数的
 uint32_t g_verbose = 0;
 uint32_t g_stat = 0;                     // 1 = 每 5 秒写一行频率统计
 uint32_t g_onscreens = 0;                // 0=只打印地址不挂 hook；1=只调原函数；2=遍历不写；3=改写
+bool g_checkVersion = true;              // config 里 version_check=0 可强行跳过版本检查
 uint64_t g_lastStat = 0;
 
 // 每一份词典由一段连续内存 + 一个索引构成；string_view 指向这段内存，
@@ -1151,6 +1152,7 @@ void ReadConfig(const std::wstring& aDir)
 {
     g_verbose = 0;
     g_stat = 0;
+    g_checkVersion = true;
     const std::wstring path = aDir + L"config.ini";
     std::vector<char> blob;
     uint64_t bytes = 0;
@@ -1158,12 +1160,17 @@ void ReadConfig(const std::wstring& aDir)
     {
         return;
     }
-    // 逐行读 key=value：verbose（替换明细）/ stat（每 5 秒一次频率统计）。
+    // 逐行读 key=value：verbose（替换明细）/ stat（每 5 秒一次频率统计）/
+    // version_check（启动时的游戏版本校验）。
     const char* p = blob.data();
     while (p != nullptr && *p != '\0')
     {
         const char* eol = strchr(p, '\n');
-        if (strncmp(p, "verbose", 7) == 0 || strncmp(p, "stat", 4) == 0 || strncmp(p, "onscreens", 9) == 0)
+        // version_check 必须排在 verbose 前面判：两个都以 'v' 开头，
+        // 只靠首字母分会把 version_check 当成 verbose 吃掉。
+        const bool isVerCheck = strncmp(p, "version_check", 13) == 0;
+        if (strncmp(p, "verbose", 7) == 0 || strncmp(p, "stat", 4) == 0
+            || strncmp(p, "onscreens", 9) == 0 || isVerCheck)
         {
             const char* eq = strchr(p, '=');
             if (eq != nullptr)
@@ -1172,7 +1179,11 @@ void ReadConfig(const std::wstring& aDir)
                 // 上限必须跟着 kProbeVerbose 走：加 verbose=3 时忘了放宽这里，
                 // 2026-11-21 15:35 那次整场日志只有 3 行，探针一个都没开起来
                 // ——配置写的是 3，被 v <= 2 挡掉后回落成 0。
-                if (p[0] == 'v' && v >= 0 && v <= 3)
+                if (isVerCheck && v >= 0 && v <= 1)
+                {
+                    g_checkVersion = (v != 0);
+                }
+                else if (p[0] == 'v' && v >= 0 && v <= 3)
                 {
                     g_verbose = static_cast<uint32_t>(v);
                 }
@@ -1193,6 +1204,79 @@ void ReadConfig(const std::wstring& aDir)
         p = eol + 1;
     }
     g_lastStat = GetTickCount64();
+}
+
+// ---------------------------------------------------------------- 游戏版本
+//
+// 插件 hook 的是游戏原生函数 Localization_LoadOnScreens，还按反推出来的结构
+// 偏移读写 localizationPersistenceOnScreenEntry（每条 0x68、femaleVariant@0x28、
+// maleVariant@0x48）。这些跟游戏版本绑死：游戏一升级，地址和布局都可能变，
+// 继续跑就是按旧偏移读野内存 —— 16:52 那次全量改写闪退就是布局猜错。
+//
+// 为什么不用 RED4ext / CET 的版本代替：它们是加载器。游戏没变、RED4ext 更新，
+// 我们的 hook 依然有效；反过来游戏变了而 RED4ext 没变，插件连加载都加载不上。
+// 真正决定偏移对不对的只有游戏本身，所以直接读 exe 的文件版本。
+// 取前三段（3.0.88），第四段是 build 号 —— hotfix 常变但不改内部结构。
+#pragma comment(lib, "version.lib")
+
+constexpr int kVerifiedGameVer[3] = { 3, 0, 88 };
+constexpr const char* kVerifiedGameVerText = "3.0.88";
+
+bool ReadGameVersion(int aOut[4])
+{
+    wchar_t path[MAX_PATH] = {};
+    if (GetModuleFileNameW(nullptr, path, MAX_PATH) == 0)
+    {
+        return false;
+    }
+    DWORD dummy = 0;
+    const DWORD size = GetFileVersionInfoSizeW(path, &dummy);
+    if (size == 0)
+    {
+        return false;
+    }
+    std::vector<BYTE> buf(size);
+    if (!GetFileVersionInfoW(path, 0, size, buf.data()))
+    {
+        return false;
+    }
+    VS_FIXEDFILEINFO* fi = nullptr;
+    UINT len = 0;
+    if (!VerQueryValueW(buf.data(), L"\\", reinterpret_cast<void**>(&fi), &len)
+        || fi == nullptr)
+    {
+        return false;
+    }
+    aOut[0] = static_cast<int>(HIWORD(fi->dwFileVersionMS));
+    aOut[1] = static_cast<int>(LOWORD(fi->dwFileVersionMS));
+    aOut[2] = static_cast<int>(HIWORD(fi->dwFileVersionLS));
+    aOut[3] = static_cast<int>(LOWORD(fi->dwFileVersionLS));
+    return true;
+}
+
+bool GameVersionMatches()
+{
+    int ver[4] = { 0, 0, 0, 0 };
+    if (!ReadGameVersion(ver))
+    {
+        Log("[init] 读不到游戏 exe 的文件版本，按「不一致」处理");
+        return false;
+    }
+    const bool same = ver[0] == kVerifiedGameVer[0]
+                   && ver[1] == kVerifiedGameVer[1]
+                   && ver[2] == kVerifiedGameVer[2];
+    if (same)
+    {
+        Log("[init] 游戏版本 %d.%d.%d.%d（验证过 %s），继续",
+            ver[0], ver[1], ver[2], ver[3], kVerifiedGameVerText);
+    }
+    else
+    {
+        Log("[init] 游戏版本 %d.%d.%d.%d 与本插件验证过的 %s 不一致"
+            "（hook 地址与结构偏移可能已变）",
+            ver[0], ver[1], ver[2], ver[3], kVerifiedGameVerText);
+    }
+    return same;
 }
 
 void LoadDictFile(const std::wstring& aPath)
@@ -1545,6 +1629,17 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle, RED4e
 
         const std::wstring dir = PluginDir();
         ReadConfig(dir);
+
+        // 版本对不上就整个停用：不装 hook、不读词典。宁可全英文，也不要按
+        // 旧偏移去读新版本的野内存。判断依据是游戏 exe 的文件版本 ——
+        // RED4ext / CET 的版本只能说明加载器新不新，说明不了偏移对不对。
+        if (g_checkVersion && !GameVersionMatches())
+        {
+            Log("[init] 版本检查未通过，本插件已停用"
+                "（config.ini 里 version_check=0 可强行启用，自负风险）");
+            return true;     // 让 RED4ext 认为加载成功，只是什么都不做
+        }
+
         Install();
         LoadDictionary(dir);
         InstallOnScreensHook();
